@@ -1,0 +1,589 @@
+/* ======================================================================
+   Hagen — темы и плотность интерфейса
+   Подключать ПЕРЕД app.css:
+     <link rel="stylesheet" href="/static/themes.css">
+     <link rel="stylesheet" href="/static/app.css">
+
+   Тема:      <html data-theme="light|dark|warm|bright">
+   Плотность: <html data-density="compact|normal|large">
+   Оба атрибута необязательны: без них работают light + normal.
+
+   Смысл цветов одинаков во всех темах:
+     --rec / --rec-ink   красный  — идёт запись, ошибка, опасное действие
+     --warn / --warn-ink янтарный — вопрос, требует внимания
+     --ok / --ok-ink     зелёный  — готово
+   Пары «фон + текст на нём» проверены на контраст ≥ 4.5:1
+   (для текста ≥ 19px и жирного — ≥ 3:1).
+   ====================================================================== */
+
+/* ---------------------------------------------------------------- СВЕТЛАЯ */
+:root,
+[data-theme="light"]{
+  color-scheme: light;
+
+  --bg:#f1efe9;            /* фон рабочей области */
+  --panel:#fbfaf6;         /* карточки, окна, боковая панель */
+  --panel-2:#f0ede6;       /* вложенная плашка внутри карточки */
+  --line:#dcd8ce;          /* рамки */
+  --line-soft:#e9e6de;     /* заливка «почти фон»: hover, полосы, плашки */
+  --text:#1f1d19;
+  --muted:#625d53;         /* подписи, второстепенный текст: 5.9:1 */
+  --muted-strong:#45413a;  /* иконки в спокойном состоянии */
+
+  --accent:#0e6b6e;        /* главное действие, активная вкладка: 4.7:1 на белом */
+  --accent-hover:#0c5c5f;
+  --accent-soft:#dff0ee;
+  --select:#9cc1c0;          /* выделение мышью: плотнее плашек */
+  --accent-line:#a1c4c2;
+  --accent-disabled:#a7cbc8;
+  --on-accent:#ffffff;           /* текст на --accent: 4.7:1 */
+  --on-accent-disabled:#ffffff;  /* подпись на заблокированной кнопке */
+
+  --rec:#a52a21;           /* фон кнопки записи и значка «идёт запись» */
+  --rec-hover:#8a2019;
+  --rec-disabled:#9e5148;  /* бордовый: «сейчас нельзя», а не бледно-розовый */
+  --rec-ink:#a62519;       /* красный ТЕКСТ на светлом фоне: 5.6:1 */
+  --rec-soft:#fbeeeb;
+  --rec-soft-hover:#fee4e2;
+  --rec-line:#efc6bf;
+  --on-rec:#ffffff;        /* текст на --rec: 5.5:1 */
+
+  --ok:#1d6e4a;            /* фон уведомления «готово» */
+  --ok-ink:#1b6443;        /* зелёный текст: 5.1:1 */
+  --ok-soft:#e8f3ec;
+  --ok-line:#aee3c6;
+  --on-ok:#ffffff;
+
+  --warn:#9a6a12;          /* янтарный фон не нужен, значение = ink */
+  --warn-ink:#7d4f08;      /* 5.3:1 на --warn-soft */
+  --warn-soft:#fbf3df;
+  --warn-soft-hover:#fef0c7;
+  --warn-line:#ead6a4;
+
+  --me:#0e6b6e;            /* мой голос */
+  --them:#6a3c9c;          /* собеседник с именем, цвет по умолчанию */
+  --speaker-neutral:#5c6573;  /* безымянный голос — нейтральный */
+  --speaker-1:#6a3c9c;
+  --speaker-2:#2f5d9a;
+  --speaker-3:#9c4526;
+  --speaker-4:#7a4a8c;
+  --speaker-5:#75530a;
+  --speaker-6:#8a2f62;
+  --speaker-7:#3a6a22;
+  --speaker-8:#4a43a6;
+
+  --meter-1:#12b76a;       /* шкала уровня: тише → громче */
+  --meter-2:#84cc16;
+  --meter-3:#e08c00;
+  --meter-far-1:#7a3fb8;
+  --meter-far-2:#a855f7;
+
+  --draft-bg:#fffdf5;      /* черновик фразы */
+  --draft-ink:#57534e;
+  --notice-bg:#101828;     /* всплывающая строка сверху */
+  --notice-ink:#ffffff;
+  --overlay:rgba(16,24,40,.45);
+
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 4px 12px rgba(16,24,40,.06);
+  --shadow-pop:0 10px 26px rgba(16,24,40,.16);
+  --shadow-toast:0 12px 32px rgba(16,24,40,.18);
+  --shadow-dialog:0 20px 50px rgba(16,24,40,.22);
+  --shadow-notice:0 8px 24px rgba(16,24,40,.24);
+  --focus-ring:0 0 0 3px rgba(14,107,110,.4);
+  --accent-2:#0e6b6e;
+  --accent-mark:#0e6b6e;
+  --accent-fill:#1f7f7c;
+  --accent-fill-hover:#1b6d6b;
+}
+
+/* ----------------------------------------------------------------- ТЁМНАЯ */
+[data-theme="dark"]{
+  color-scheme: dark;
+
+  --bg:#202225;
+  --panel:#292c30;
+  --panel-2:#31353a;
+  --line:#454a51;
+  --line-soft:#373b41;
+  --text:#e7e8ea;
+  --muted:#a6abb3;         /* 6.4:1 на --panel */
+  --muted-strong:#c8ccd2;
+
+  --accent:#d5d8dd;        /* 6.9:1 на --panel */
+  --accent-hover:#dbdde2;
+  --accent-soft:#383c42;
+  --select:#606367;          /* выделение мышью: плотнее плашек */
+  --accent-line:#6a6d72;
+  --accent-disabled:#6a6d72;
+  --on-accent:#16181b;           /* тёмный текст на светло-синей кнопке: 9.4:1 */
+  --on-accent-disabled:#c2c9d4;  /* 5.6:1 — тёмная подпись на глухой кнопке исчезала */
+
+  --rec:#a83a33;
+  --rec-hover:#c1483f;
+  --rec-disabled:#5e2a26;
+  --rec-ink:#ff8a80;       /* 6.1:1 на --panel */
+  --rec-soft:#3a2523;
+  --rec-soft-hover:#3a1d1a;
+  --rec-line:#663530;
+  --on-rec:#ffffff;        /* 5.1:1 */
+
+  --ok:#2a8a5e;
+  --ok-ink:#5fd6a0;        /* 9.8:1 */
+  --ok-soft:#22352c;
+  --ok-line:#1f4a36;
+  --on-ok:#ffffff;
+
+  --warn:#e3b341;
+  --warn-ink:#e8bd55;      /* 8.7:1 на --warn-soft */
+  --warn-soft:#393019;
+  --warn-soft-hover:#352b16;
+  --warn-line:#5a4a1f;
+
+  --me:#8fb8f5;
+  --them:#c9a0f0;
+  --speaker-neutral:#9aa4b2;
+  --speaker-1:#c9a0f0;
+  --speaker-2:#62cfc3;
+  --speaker-3:#f7a07e;
+  --speaker-4:#9ad0e6;
+  --speaker-5:#e3c46a;
+  --speaker-6:#f191c0;
+  --speaker-7:#a2d47e;
+  --speaker-8:#b3abfa;
+
+  --meter-1:#22c55e;
+  --meter-2:#a3e635;
+  --meter-3:#f59e0b;
+  --meter-far-1:#a855f7;
+  --meter-far-2:#d8b4fe;
+
+  --draft-bg:#241f14;
+  --draft-ink:#cfc6b4;
+  --notice-bg:#2b323c;
+  --notice-ink:#e8ebf0;
+  --overlay:rgba(0,0,0,.62);
+
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 4px 12px rgba(0,0,0,.42);
+  --shadow-pop:0 10px 26px rgba(0,0,0,.55);
+  --shadow-toast:0 12px 32px rgba(0,0,0,.6);
+  --shadow-dialog:0 20px 50px rgba(0,0,0,.66);
+  --shadow-notice:0 8px 24px rgba(0,0,0,.6);
+  --focus-ring:0 0 0 3px rgba(213,216,221,.4);
+  --accent-2:#d5d8dd;
+  --accent-mark:#d5d8dd;
+  --accent-fill:#d5d8dd;
+  --accent-fill-hover:#dbdde2;
+}
+
+/* ----------------------------------------------------------------- ТЁПЛАЯ */
+[data-theme="warm"]{
+  color-scheme: light;
+
+  --bg:#f6f1e8;
+  --panel:#fffdf8;
+  --panel-2:#f4ede2;
+  --line:#e0d5c3;
+  --line-soft:#f0e8da;
+  --text:#241c13;
+  --muted:#6b5f50;         /* 6.0:1 */
+  --muted-strong:#4b4234;
+
+  --accent:#75482a;        /* терракота: 5.4:1 на белом */
+  --accent-hover:#653e24;
+  --accent-soft:#f3e8dc;
+  --select:#c8b5a6;          /* выделение мышью: плотнее плашек */
+  --accent-line:#cbb8aa;
+  --accent-disabled:#cebbac;
+  --on-accent:#fffdf8;
+  --on-accent-disabled:#4b4234;  /* 5.9:1 */
+
+  --rec:#9a2c1c;
+  --rec-hover:#7d2416;
+  --rec-disabled:#96544a;
+  --rec-ink:#a52818;       /* 6.2:1 */
+  --rec-soft:#fdeee9;
+  --rec-soft-hover:#f9ddd3;
+  --rec-line:#f0c4b6;
+  --on-rec:#fffdf8;
+
+  --ok:#1f6b4a;
+  --ok-ink:#1f6b4a;        /* 5.5:1 */
+  --ok-soft:#e9f3ea;
+  --ok-line:#b8ddc2;
+  --on-ok:#fffdf8;
+
+  --warn:#9a6a12;
+  --warn-ink:#7a5200;      /* 5.2:1 на --warn-soft */
+  --warn-soft:#fdf0d5;
+  --warn-soft-hover:#f9e7bd;
+  --warn-line:#ecd9a6;
+
+  --me:#1b6e7a;            /* бирюза: не спорит с терракотой */
+  --them:#6b3fa0;
+  --speaker-neutral:#6b5f50;
+  --speaker-1:#6b3fa0;
+  --speaker-2:#2c5f9e;
+  --speaker-3:#66661a;
+  --speaker-4:#8c2f63;
+  --speaker-5:#3a6a22;
+  --speaker-6:#4b3fb0;
+  --speaker-7:#75530a;
+  --speaker-8:#0f6c75;
+
+  --meter-1:#2f9e5f;
+  --meter-2:#a3b716;
+  --meter-3:#d98218;
+  --meter-far-1:#7a3b9c;
+  --meter-far-2:#b070d8;
+
+  --draft-bg:#fdf6e4;
+  --draft-ink:#5d5140;
+  --notice-bg:#2a2118;
+  --notice-ink:#fdf8f0;
+  --overlay:rgba(42,33,24,.45);
+
+  --shadow:0 1px 2px rgba(66,48,30,.08),0 4px 12px rgba(66,48,30,.08);
+  --shadow-pop:0 10px 26px rgba(66,48,30,.18);
+  --shadow-toast:0 12px 32px rgba(66,48,30,.2);
+  --shadow-dialog:0 20px 50px rgba(66,48,30,.26);
+  --shadow-notice:0 8px 24px rgba(66,48,30,.28);
+  --focus-ring:0 0 0 3px rgba(117,72,42,.4);
+  --accent-2:#75482a;
+  --accent-mark:#75482a;
+  --accent-fill:#7d4f30;
+  --accent-fill-hover:#6c4429;
+}
+
+/* ------------------------------------------------ ЯРКАЯ (на тёмной базе) */
+[data-theme="bright"]{
+  color-scheme: dark;
+
+  --bg:#2a2e3a;
+  --panel:#343948;
+  --panel-2:#3e4457;
+  --line:#565e79;
+  --line-soft:#474e64;
+  --text:#eef0f7;
+  --muted:#b4b9d0;         /* 6.5:1 */
+  --muted-strong:#cdd1e4;
+
+  --accent:#a6e05a;
+  --accent-hover:#b2e471;
+  --accent-soft:#33401f;
+  --select:#586e4e;          /* выделение мышью: плотнее плашек */
+  --accent-line:#5f784f;
+  --accent-disabled:#5f784f;
+  --on-accent:#131c06;           /* 8.7:1 */
+  --on-accent-disabled:#c9cfeb;  /* 6.0:1 */
+
+  --rec:#b53b34;
+  --rec-hover:#cc4c44;
+  --rec-disabled:#5c221f;
+  --rec-ink:#ff8f86;       /* 6.4:1 */
+  --rec-soft:#4a3140;
+  --rec-soft-hover:#3a1a26;
+  --rec-line:#6e3540;
+  --on-rec:#ffffff;        /* 4.6:1 */
+
+  --ok:#2f9a68;
+  --ok-ink:#5ee0a4;        /* 10.2:1 */
+  --ok-soft:#2b4643;
+  --ok-line:#1d5237;
+  --on-ok:#04180d;
+
+  --warn:#f4c34f;
+  --warn-ink:#f4c34f;      /* 9.6:1 на --warn-soft */
+  --warn-soft:#474029;
+  --warn-soft-hover:#3a2d14;
+  --warn-line:#75683a;
+
+  --me:#7dbcff;
+  --them:#c79bff;
+  --speaker-neutral:#a4acd6;
+  --speaker-1:#c79bff;
+  --speaker-2:#4fd6c4;
+  --speaker-3:#ff9b73;
+  --speaker-4:#ffd166;
+  --speaker-5:#dcc9a3;
+  --speaker-6:#ff8cc6;
+  --speaker-7:#9db4ff;
+  --speaker-8:#f0a35e;
+
+  --meter-1:#22d38f;
+  --meter-2:#a3e635;
+  --meter-3:#ffb020;
+  --meter-far-1:#a855f7;
+  --meter-far-2:#e0aaff;
+
+  --draft-bg:#221c3d;
+  --draft-ink:#cbc6e8;
+  --notice-bg:#2a3157;
+  --notice-ink:#eef1ff;
+  --overlay:rgba(6,9,22,.66);
+
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.45);
+  --shadow-pop:0 10px 26px rgba(0,0,0,.6);
+  --shadow-toast:0 12px 32px rgba(0,0,0,.62);
+  --shadow-dialog:0 20px 50px rgba(0,0,0,.7);
+  --shadow-notice:0 8px 24px rgba(0,0,0,.62);
+  --focus-ring:0 0 0 3px rgba(166,224,90,.4);
+  --accent-2:#7dbcff;
+  --accent-mark:#a6e05a;
+  --accent-fill:#a6e05a;
+  --accent-fill-hover:#b2e471;
+}
+
+/* ------------------------------------------------------------- НЕЙТРАЛЬНАЯ
+   Пятая тема (решение 17.09): только оттенки серого, чуть темнее и
+   холоднее системных серых Windows. Цвет в интерфейсе один — --accent-mark:
+   полоска у выбранной записи, черта активной вкладки, кольцо фокуса и заливка
+   основной кнопки при наведении. Цвета говорящих, статусов и записи остаются:
+   они несут смысл, а не украшают. */
+[data-theme="neutral"]{
+  color-scheme: light;
+
+  --bg:#e4e6e9;
+  --panel:#f0f1f3;
+  --panel-2:#e6e8eb;
+  --line:#cdd0d5;
+  --line-soft:#dcdfe3;
+  --text:#1c1e21;          /* к панели 14.8:1 */
+  --muted:#565b63;         /* 6.0:1 */
+  --muted-strong:#3c4047;
+
+  --accent:#1b1b1b;
+  --accent-hover:#000000;
+  --accent-2:#1b1b1b;
+  --accent-mark:#2a5fa8;
+  --accent-fill:#33373d;   /* текст на кнопке 12.0:1, при наведении 6.4:1 */
+  --accent-fill-hover:#2a5fa8;
+  --accent-soft:#dcdfe4;
+  --accent-line:#bfc3ca;
+  --select:#c3d4ea;
+  --accent-disabled:#aeb2b9;
+  --on-accent:#ffffff;
+  --on-accent-disabled:#ffffff;
+
+  --rec:#a52a21;
+  --rec-hover:#8a2019;
+  --rec-disabled:#9e5148;
+  --rec-ink:#a62519;
+  --rec-soft:#f0e2df;
+  --rec-soft-hover:#e6cfca;
+  --rec-line:#e6c6c1;
+  --on-rec:#ffffff;
+
+  --ok:#1d6e4a;
+  --ok-ink:#1b6443;
+  --ok-soft:#dfeae3;
+  --ok-line:#b6cdbf;
+  --on-ok:#ffffff;
+
+  --warn:#9a6a12;
+  --warn-ink:#7d4f08;
+  --warn-soft:#efe8d3;
+  --warn-soft-hover:#e6dcbd;
+  --warn-line:#d8c89a;
+
+  --me:#1b1b1b;
+  --them:#64369a;
+  --speaker-neutral:#565b63;
+  --speaker-1:#64369a;
+  --speaker-2:#0c636c;
+  --speaker-3:#94401f;
+  --speaker-4:#8a2f62;
+  --speaker-5:#6b4b06;
+  --speaker-6:#36631e;
+  --speaker-7:#453ea0;
+  --speaker-8:#7a3f2a;
+
+  --meter-1:#2a8a5e;
+  --meter-2:#6f9c2a;
+  --meter-3:#9a6a12;
+  --meter-far-1:#5a4a8c;
+  --meter-far-2:#7a6ab0;
+
+  --draft-bg:#eceef1;
+  --draft-ink:#565b63;
+  --notice-bg:#1c1e21;
+  --notice-ink:#ffffff;
+  --overlay:rgba(28,30,33,.45);
+
+  --shadow:0 1px 2px rgba(28,30,33,.06),0 4px 12px rgba(28,30,33,.06);
+  --shadow-pop:0 10px 26px rgba(28,30,33,.16);
+  --shadow-toast:0 12px 32px rgba(28,30,33,.18);
+  --shadow-dialog:0 20px 50px rgba(28,30,33,.22);
+  --shadow-notice:0 8px 24px rgba(28,30,33,.24);
+  --focus-ring:0 0 0 3px rgba(42,95,168,.4);
+}
+
+
+/* ======================================================================
+   ФОРМА: одна для всех тем и всех размеров интерфейса (этап 8.1 задания).
+   Радиус, зависевший от размера интерфейса, давал шаг в 1 px — неразличимо,
+   а вложенные скругления (окно → карточка → плашка → поле → пилюля) и были
+   тем самым «всё в карточках». Размер интерфейса меняет шрифт и отступы;
+   форму — нет.
+   ====================================================================== */
+:root{
+  --radius-ctl:4px;   /* кнопки, поля, select, textarea, пункты меню */
+  --radius-box:0;     /* области страницы: колонки, панели, списки, баннеры */
+  --radius-pop:6px;   /* только всплывающее: меню, окна, подсказки, тосты */
+  --shadow-pop:0 6px 24px rgba(0,0,0,.14);
+}
+
+/* ======================================================================
+   ПЛОТНОСТЬ: шрифты, кнопки, отступы. Цвета сюда не входят.
+   tiny — «мелко»: максимум строк на экране, кнопки 24px
+   compact — плотно
+   normal — нынешний вид, выровненный по шкале (кнопки на 10% ниже прежних)
+   large — крупно
+   ====================================================================== */
+:root,
+[data-density="normal"]{
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --font-mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+
+  --fs-base:14px;   --lh-base:1.5;
+  --fs-sm:13px;
+  --fs-xs:11.5px;
+  --fs-title:19px;      /* название записи */
+  --fs-h2:17px;         /* заголовок раздела */
+  --fs-line:14px;       /* реплика стенограммы */
+  --lh-line:1.55;
+
+  --btn-py:7px;  --btn-px:14px;   --btn-h:32px;
+  --btn-sm-py:5px; --btn-sm-px:11px; --btn-sm-h:27px;
+  --btn-fw:600;
+  --icon-btn:28px;  --icon:21px;
+
+  --pad-card:12px 16px;
+  --pad-side:14px;
+  --pad-main:24px;      /* отступ правой колонки */
+  --row-gap:10px;
+  --line-py:4px;
+  --line-ts:62px; --line-who:150px;
+  --side-w:300px;
+  --field-py:5px;
+}
+
+/* «Мелко»: для больших стенограмм и маленького окна. Кнопки 24 px —
+   это мышиный интерфейс на рабочем столе, не палец на экране. */
+[data-density="tiny"]{
+  --fs-base:12px;   --lh-base:1.35;
+  --fs-sm:11.5px;
+  --fs-xs:10.5px;
+  --fs-title:15px;
+  --fs-h2:13.5px;
+  --fs-line:12px;
+  --lh-line:1.36;
+
+  --btn-py:3px;  --btn-px:9px;    --btn-h:24px;
+  --btn-sm-py:2px; --btn-sm-px:7px; --btn-sm-h:21px;
+  --btn-fw:600;
+  --icon-btn:22px; --icon:16px;
+
+  --pad-card:7px 9px;
+  --pad-side:9px;
+  --pad-main:19px;
+  --row-gap:5px;
+  --line-py:0px;
+  --line-ts:46px; --line-who:118px;
+  --side-w:240px;
+  --field-py:2px;
+}
+
+[data-density="compact"]{
+  --fs-base:12.5px; --lh-base:1.42;
+  --fs-sm:12px;
+  --fs-xs:11px;
+  --fs-title:16.5px;
+  --fs-h2:14.5px;
+  --fs-line:12.5px;
+  --lh-line:1.42;
+
+  --btn-py:4px;  --btn-px:10px;   --btn-h:26px;
+  --btn-sm-py:3px; --btn-sm-px:8px; --btn-sm-h:23px;
+  --btn-fw:600;
+  --icon-btn:25px; --icon:18px;
+
+  --pad-card:8px 11px;
+  --pad-side:10px;
+  --pad-main:20px;
+  --row-gap:6px;
+  --line-py:1px;
+  --line-ts:52px; --line-who:128px;
+  --side-w:256px;
+  --field-py:3px;
+}
+
+[data-density="large"]{
+  --fs-base:15.5px; --lh-base:1.55;
+  --fs-sm:14px;
+  --fs-xs:12.5px;
+  --fs-title:22px;
+  --fs-h2:19px;
+  --fs-line:15.5px;
+  --lh-line:1.62;
+
+  --btn-py:9px;  --btn-px:18px;   --btn-h:38px;
+  --btn-sm-py:7px; --btn-sm-px:14px; --btn-sm-h:32px;
+  --btn-fw:650;
+  --icon-btn:34px; --icon:23px;
+
+  --pad-card:15px 20px;
+  --pad-side:16px;
+  --pad-main:26px;
+  --row-gap:12px;
+  --line-py:6px;
+  --line-ts:70px; --line-who:168px;
+  --side-w:324px;
+  --field-py:7px;
+}
+
+/* Системная настройка «поменьше движения» — гасим только украшения */
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important}
+}
+
+/* ------------------------------------------------ мини-превью тем в «Настройки → Вид»
+   Каждая карточка показывает СВОЮ тему, а не текущую, поэтому цвета здесь
+   прописаны прямо — это единственное такое место. Взято из preview.css пакета. */
+.theme-mini[data-mini] .tm-line{background:#dfe3ea}
+.theme-mini[data-mini] .tm-line.short{width:60%}
+.theme-mini[data-mini="light"]{background:#f1efe9;border-color:#dcd8ce}
+.theme-mini[data-mini="light"] .tm-bar{background:#fbfaf6;border-bottom:1px solid #dcd8ce}
+.theme-mini[data-mini="light"] .tm-bar i{background:#0e6b6e}
+.theme-mini[data-mini="light"] .tm-line{background:#dcd8ce}
+.theme-mini[data-mini="dark"]{background:#202225;border-color:#454a51}
+.theme-mini[data-mini="dark"] .tm-bar{background:#292c30;border-bottom:1px solid #454a51}
+.theme-mini[data-mini="dark"] .tm-bar i{background:#d5d8dd}
+.theme-mini[data-mini="dark"] .tm-line{background:#454a51}
+.theme-mini[data-mini="warm"]{background:#f6f1e8;border-color:#e0d5c3}
+.theme-mini[data-mini="warm"] .tm-bar{background:#fffdf8;border-bottom:1px solid #e0d5c3}
+.theme-mini[data-mini="warm"] .tm-bar i{background:#75482a}
+.theme-mini[data-mini="warm"] .tm-line{background:#e0d5c3}
+.theme-mini[data-mini="bright"]{background:#2a2e3a;border-color:#565e79}
+.theme-mini[data-mini="bright"] .tm-bar{background:#343948;border-bottom:1px solid #565e79}
+.theme-mini[data-mini="bright"] .tm-bar i{background:#a6e05a}
+.theme-mini[data-mini="bright"] .tm-line{background:#565e79}
+.theme-mini[data-mini="neutral"]{background:#f0f1f3;border-color:#cdd0d5}
+.theme-mini[data-mini="neutral"] .tm-bar{background:#e6e8eb;border-bottom:1px solid #cdd0d5}
+.theme-mini[data-mini="neutral"] .tm-bar i{background:#2a5fa8}
+.theme-mini[data-mini="neutral"] .tm-line{background:#cdd0d5}
+.theme-mini[data-mini="neutral"] .tm-dot.rec{background:#a62519}
+.theme-mini[data-mini="neutral"] .tm-dot.warn{background:#7d4f08}
+.theme-mini[data-mini="neutral"] .tm-dot.ok{background:#1b6443}
+.theme-mini[data-mini="light"] .tm-dot.rec{background:#c4271b}
+.theme-mini[data-mini="light"] .tm-dot.warn{background:#8f4708}
+.theme-mini[data-mini="light"] .tm-dot.ok{background:#0b7a4b}
+.theme-mini[data-mini="dark"] .tm-dot.rec{background:#ff8178}
+.theme-mini[data-mini="dark"] .tm-dot.warn{background:#f0b429}
+.theme-mini[data-mini="dark"] .tm-dot.ok{background:#4ede9f}
+.theme-mini[data-mini="warm"] .tm-dot.rec{background:#a52818}
+.theme-mini[data-mini="warm"] .tm-dot.warn{background:#84500a}
+.theme-mini[data-mini="warm"] .tm-dot.ok{background:#16653f}
+.theme-mini[data-mini="bright"] .tm-dot.rec{background:#ff7b73}
+.theme-mini[data-mini="bright"] .tm-dot.warn{background:#ffc14d}
+.theme-mini[data-mini="bright"] .tm-dot.ok{background:#37e08a}

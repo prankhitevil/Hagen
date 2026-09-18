@@ -1,0 +1,75 @@
+name: Ошибка
+description: Что-то работает не так — запись, распознавание, документы, окно
+title: "[Ошибка] "
+labels: ["ошибка"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что пишете. Проект личный, отвечаю по возможности.
+        Перед отправкой просмотрите строки журнала: в них попадают названия
+        записей и пути к файлам.
+
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      description: "Win+R → winver. Например: Windows 11 Pro 24H2 (26100.1742)"
+      placeholder: Windows 11 Pro 24H2
+    validations:
+      required: true
+
+  - type: input
+    id: mic
+    attributes:
+      label: Микрофон или гарнитура
+      description: Модель и как подключены — USB, Bluetooth, встроенный
+      placeholder: Jabra Evolve2 65, USB-приёмник
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Что делали
+      description: По шагам, чтобы можно было повторить
+      placeholder: |
+        1. Нажал «Старт», записал три минуты разговора в Teams
+        2. Нажал «Стоп»
+        3. Открыл вкладку «Стенограмма»
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидали
+      placeholder: Что реплики собеседника попадут в стенограмму
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что получилось
+      placeholder: В стенограмме только мои реплики, у собеседника пусто
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Последние строки logs\hagen.log
+      description: 30–50 последних строк. Вставятся как код, форматировать не нужно.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия программы
+      description: Из «Настройки → О программе» либо дата установки
+      placeholder: 18.09.2026
+    validations:
+      required: false

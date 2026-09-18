@@ -1,0 +1,421 @@
+/* ======================================================================
+   Hagen — темы и плотность интерфейса
+   Подключать ПЕРЕД app.css:
+     <link rel="stylesheet" href="/static/themes.css">
+     <link rel="stylesheet" href="/static/app.css">
+
+   Тема:      <html data-theme="light|dark|warm|bright">
+   Плотность: <html data-density="compact|normal|large">
+   Оба атрибута необязательны: без них работают light + normal.
+
+   Смысл цветов одинаков во всех темах:
+     --rec / --rec-ink   красный  — идёт запись, ошибка, опасное действие
+     --warn / --warn-ink янтарный — вопрос, требует внимания
+     --ok / --ok-ink     зелёный  — готово
+   Пары «фон + текст на нём» проверены на контраст ≥ 4.5:1
+   (для текста ≥ 19px и жирного — ≥ 3:1).
+   ====================================================================== */
+
+/* ---------------------------------------------------------------- СВЕТЛАЯ */
+:root,
+[data-theme="light"]{
+  color-scheme: light;
+
+  --bg:#f4f6f9;            /* фон рабочей области */
+  --panel:#ffffff;         /* карточки, окна, боковая панель */
+  --panel-2:#f8fafc;       /* вложенная плашка внутри карточки */
+  --line:#dfe3ea;          /* рамки */
+  --line-soft:#eef1f6;     /* заливка «почти фон»: hover, полосы, плашки */
+  --text:#14181f;
+  --muted:#5c6573;         /* подписи, второстепенный текст: 5.9:1 */
+  --muted-strong:#3f4754;  /* иконки в спокойном состоянии */
+
+  --accent:#2f6feb;        /* главное действие, активная вкладка: 4.7:1 на белом */
+  --accent-hover:#1d54c4;
+  --accent-soft:#e8f0fe;
+  --accent-line:#c3d7fb;
+  --accent-disabled:#b9c7e4;
+  --on-accent:#ffffff;           /* текст на --accent: 4.7:1 */
+  --on-accent-disabled:#ffffff;  /* подпись на заблокированной кнопке */
+
+  --rec:#c4271b;           /* фон кнопки записи и значка «идёт запись» */
+  --rec-hover:#9f1e14;
+  --rec-disabled:#9e5148;  /* бордовый: «сейчас нельзя», а не бледно-розовый */
+  --rec-ink:#b02318;       /* красный ТЕКСТ на светлом фоне: 5.6:1 */
+  --rec-soft:#fef3f2;
+  --rec-soft-hover:#fee4e2;
+  --rec-line:#f6c9c3;
+  --on-rec:#ffffff;        /* текст на --rec: 5.5:1 */
+
+  --ok:#0b7a4b;            /* фон уведомления «готово» */
+  --ok-ink:#0a6b42;        /* зелёный текст: 5.1:1 */
+  --ok-soft:#ecfdf3;
+  --ok-line:#aee3c6;
+  --on-ok:#ffffff;
+
+  --warn:#8f4708;          /* янтарный фон не нужен, значение = ink */
+  --warn-ink:#8f4708;      /* 5.3:1 на --warn-soft */
+  --warn-soft:#fffaeb;
+  --warn-soft-hover:#fef0c7;
+  --warn-line:#f0cf8c;
+
+  --me:#1b5fd9;            /* мой голос */
+  --them:#6b32a8;          /* собеседник с именем, цвет по умолчанию */
+  --speaker-neutral:#5c6573;  /* безымянный голос — нейтральный */
+  --speaker-1:#6b32a8;
+  --speaker-2:#0f6f7a;
+  --speaker-3:#a1452b;
+  --speaker-4:#2c5f9e;
+  --speaker-5:#7a5200;
+  --speaker-6:#8c2f63;
+
+  --meter-1:#12b76a;       /* шкала уровня: тише → громче */
+  --meter-2:#84cc16;
+  --meter-3:#e08c00;
+  --meter-far-1:#7a3fb8;
+  --meter-far-2:#a855f7;
+
+  --draft-bg:#fffdf5;      /* черновик фразы */
+  --draft-ink:#57534e;
+  --notice-bg:#101828;     /* всплывающая строка сверху */
+  --notice-ink:#ffffff;
+  --overlay:rgba(16,24,40,.45);
+
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 4px 12px rgba(16,24,40,.06);
+  --shadow-pop:0 10px 26px rgba(16,24,40,.16);
+  --shadow-toast:0 12px 32px rgba(16,24,40,.18);
+  --shadow-dialog:0 20px 50px rgba(16,24,40,.22);
+  --shadow-notice:0 8px 24px rgba(16,24,40,.24);
+  --focus-ring:0 0 0 3px rgba(47,111,235,.35);
+}
+
+/* ----------------------------------------------------------------- ТЁМНАЯ */
+[data-theme="dark"]{
+  color-scheme: dark;
+
+  --bg:#14171c;
+  --panel:#1b1f26;
+  --panel-2:#22272f;
+  --line:#323a46;
+  --line-soft:#262c34;
+  --text:#e8ebf0;
+  --muted:#9aa4b2;         /* 6.4:1 на --panel */
+  --muted-strong:#c2c9d4;
+
+  --accent:#6aa1ff;        /* 6.9:1 на --panel */
+  --accent-hover:#8ab6ff;
+  --accent-soft:#1d2c48;
+  --accent-line:#31507f;
+  --accent-disabled:#3a4459;
+  --on-accent:#0d1117;           /* тёмный текст на светло-синей кнопке: 9.4:1 */
+  --on-accent-disabled:#c2c9d4;  /* 5.6:1 — тёмная подпись на глухой кнопке исчезала */
+
+  --rec:#c8332b;
+  --rec-hover:#e04a41;
+  --rec-disabled:#5e2a26;
+  --rec-ink:#ff8178;       /* 6.1:1 на --panel */
+  --rec-soft:#2c1715;
+  --rec-soft-hover:#3a1d1a;
+  --rec-line:#5a2a25;
+  --on-rec:#ffffff;        /* 5.1:1 */
+
+  --ok:#1f7a52;
+  --ok-ink:#4ede9f;        /* 9.8:1 */
+  --ok-soft:#12291f;
+  --ok-line:#1f4a36;
+  --on-ok:#ffffff;
+
+  --warn:#f0b429;
+  --warn-ink:#f0b429;      /* 8.7:1 на --warn-soft */
+  --warn-soft:#2b2313;
+  --warn-soft-hover:#352b16;
+  --warn-line:#4d3d17;
+
+  --me:#7fb0ff;
+  --them:#c99bf5;
+  --speaker-neutral:#9aa4b2;
+  --speaker-1:#c99bf5;
+  --speaker-2:#5fd3c6;
+  --speaker-3:#ff9e7a;
+  --speaker-4:#8ab6ff;
+  --speaker-5:#e7c565;
+  --speaker-6:#f58fc2;
+
+  --meter-1:#22c55e;
+  --meter-2:#a3e635;
+  --meter-3:#f59e0b;
+  --meter-far-1:#a855f7;
+  --meter-far-2:#d8b4fe;
+
+  --draft-bg:#241f14;
+  --draft-ink:#cfc6b4;
+  --notice-bg:#2b323c;
+  --notice-ink:#e8ebf0;
+  --overlay:rgba(0,0,0,.62);
+
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 4px 12px rgba(0,0,0,.42);
+  --shadow-pop:0 10px 26px rgba(0,0,0,.55);
+  --shadow-toast:0 12px 32px rgba(0,0,0,.6);
+  --shadow-dialog:0 20px 50px rgba(0,0,0,.66);
+  --shadow-notice:0 8px 24px rgba(0,0,0,.6);
+  --focus-ring:0 0 0 3px rgba(106,161,255,.45);
+}
+
+/* ----------------------------------------------------------------- ТЁПЛАЯ */
+[data-theme="warm"]{
+  color-scheme: light;
+
+  --bg:#f6f1e8;
+  --panel:#fffdf8;
+  --panel-2:#f4ede2;
+  --line:#e0d5c3;
+  --line-soft:#f0e8da;
+  --text:#241c13;
+  --muted:#6b5f50;         /* 6.0:1 */
+  --muted-strong:#4b4234;
+
+  --accent:#a84b18;        /* терракота: 5.4:1 на белом */
+  --accent-hover:#87390f;
+  --accent-soft:#fbebdd;
+  --accent-line:#e6c3a2;
+  --accent-disabled:#dcc5ad;
+  --on-accent:#fffdf8;
+  --on-accent-disabled:#4b4234;  /* 5.9:1 */
+
+  --rec:#b32a18;
+  --rec-hover:#8e2012;
+  --rec-disabled:#96544a;
+  --rec-ink:#a52818;       /* 6.2:1 */
+  --rec-soft:#fdeee9;
+  --rec-soft-hover:#f9ddd3;
+  --rec-line:#f0c4b6;
+  --on-rec:#fffdf8;
+
+  --ok:#1a6f46;
+  --ok-ink:#16653f;        /* 5.5:1 */
+  --ok-soft:#eaf5ec;
+  --ok-line:#b8ddc2;
+  --on-ok:#fffdf8;
+
+  --warn:#84500a;
+  --warn-ink:#84500a;      /* 5.2:1 на --warn-soft */
+  --warn-soft:#fdf3dc;
+  --warn-soft-hover:#f9e7bd;
+  --warn-line:#e3c893;
+
+  --me:#1d6675;            /* бирюза: не спорит с терракотой */
+  --them:#7a3b9c;
+  --speaker-neutral:#6b5f50;
+  --speaker-1:#7a3b9c;
+  --speaker-2:#1d6675;
+  --speaker-3:#8c4a12;
+  --speaker-4:#2f5aa0;
+  --speaker-5:#6d5300;
+  --speaker-6:#8f2f57;
+
+  --meter-1:#2f9e5f;
+  --meter-2:#a3b716;
+  --meter-3:#d98218;
+  --meter-far-1:#7a3b9c;
+  --meter-far-2:#b070d8;
+
+  --draft-bg:#fdf6e4;
+  --draft-ink:#5d5140;
+  --notice-bg:#2a2118;
+  --notice-ink:#fdf8f0;
+  --overlay:rgba(42,33,24,.45);
+
+  --shadow:0 1px 2px rgba(66,48,30,.08),0 4px 12px rgba(66,48,30,.08);
+  --shadow-pop:0 10px 26px rgba(66,48,30,.18);
+  --shadow-toast:0 12px 32px rgba(66,48,30,.2);
+  --shadow-dialog:0 20px 50px rgba(66,48,30,.26);
+  --shadow-notice:0 8px 24px rgba(66,48,30,.28);
+  --focus-ring:0 0 0 3px rgba(168,75,24,.32);
+}
+
+/* ------------------------------------------------ ЯРКАЯ (на тёмной базе) */
+[data-theme="bright"]{
+  color-scheme: dark;
+
+  --bg:#0f1324;
+  --panel:#181d33;
+  --panel-2:#1f2540;
+  --line:#2f3760;
+  --line-soft:#232a49;
+  --text:#eef1ff;
+  --muted:#a4acd6;         /* 6.5:1 */
+  --muted-strong:#c9cfeb;
+
+  --accent:#5b8cff;
+  --accent-hover:#83a8ff;
+  --accent-soft:#1e2850;
+  --accent-line:#3c4d91;
+  --accent-disabled:#3a4260;
+  --on-accent:#0a0e1c;           /* 8.7:1 */
+  --on-accent-disabled:#c9cfeb;  /* 6.0:1 */
+
+  --rec:#e0342d;
+  --rec-hover:#f2534b;
+  --rec-disabled:#5c221f;
+  --rec-ink:#ff7b73;       /* 6.4:1 */
+  --rec-soft:#2c1520;
+  --rec-soft-hover:#3a1a26;
+  --rec-line:#5b2431;
+  --on-rec:#ffffff;        /* 4.6:1 */
+
+  --ok:#12a05a;
+  --ok-ink:#37e08a;        /* 10.2:1 */
+  --ok-soft:#0e2b1e;
+  --ok-line:#1d5237;
+  --on-ok:#04180d;
+
+  --warn:#ffc14d;
+  --warn-ink:#ffc14d;      /* 9.6:1 на --warn-soft */
+  --warn-soft:#2e2410;
+  --warn-soft-hover:#3a2d14;
+  --warn-line:#574020;
+
+  --me:#59b0ff;
+  --them:#c78bff;
+  --speaker-neutral:#a4acd6;
+  --speaker-1:#c78bff;
+  --speaker-2:#2fd4c4;
+  --speaker-3:#ff9770;
+  --speaker-4:#7aa7ff;
+  --speaker-5:#ffd166;
+  --speaker-6:#ff87c3;
+
+  --meter-1:#22d38f;
+  --meter-2:#a3e635;
+  --meter-3:#ffb020;
+  --meter-far-1:#a855f7;
+  --meter-far-2:#e0aaff;
+
+  --draft-bg:#221c3d;
+  --draft-ink:#cbc6e8;
+  --notice-bg:#2a3157;
+  --notice-ink:#eef1ff;
+  --overlay:rgba(6,9,22,.66);
+
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.45);
+  --shadow-pop:0 10px 26px rgba(0,0,0,.6);
+  --shadow-toast:0 12px 32px rgba(0,0,0,.62);
+  --shadow-dialog:0 20px 50px rgba(0,0,0,.7);
+  --shadow-notice:0 8px 24px rgba(0,0,0,.62);
+  --focus-ring:0 0 0 3px rgba(91,140,255,.5);
+}
+
+/* ======================================================================
+   ПЛОТНОСТЬ: шрифты, кнопки, отступы. Цвета сюда не входят.
+   tiny — «мелко»: максимум строк на экране, кнопки 24px
+   compact — плотно
+   normal — нынешний вид, выровненный по шкале (кнопки на 10% ниже прежних)
+   large — крупно
+   ====================================================================== */
+:root,
+[data-density="normal"]{
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --font-mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+
+  --fs-base:14px;   --lh-base:1.5;
+  --fs-sm:13px;
+  --fs-xs:11.5px;
+  --fs-title:19px;      /* название записи */
+  --fs-h2:17px;         /* заголовок раздела */
+  --fs-line:14px;       /* реплика стенограммы */
+  --lh-line:1.55;
+
+  --btn-py:7px;  --btn-px:14px;   --btn-h:32px;
+  --btn-sm-py:5px; --btn-sm-px:11px; --btn-sm-h:27px;
+  --btn-fw:600;
+  --icon-btn:28px;  --icon:21px;
+  --radius:10px; --radius-sm:8px; --radius-xs:7px;
+
+  --pad-card:12px 16px;
+  --pad-side:14px;
+  --row-gap:10px;
+  --line-py:4px;
+  --line-ts:62px; --line-who:150px;
+  --side-w:300px;
+  --field-py:5px;
+}
+
+/* «Мелко»: для больших стенограмм и маленького окна. Кнопки 24 px —
+   это мышиный интерфейс на рабочем столе, не палец на экране. */
+[data-density="tiny"]{
+  --fs-base:12px;   --lh-base:1.35;
+  --fs-sm:11.5px;
+  --fs-xs:10.5px;
+  --fs-title:15px;
+  --fs-h2:13.5px;
+  --fs-line:12px;
+  --lh-line:1.36;
+
+  --btn-py:3px;  --btn-px:9px;    --btn-h:24px;
+  --btn-sm-py:2px; --btn-sm-px:7px; --btn-sm-h:21px;
+  --btn-fw:600;
+  --icon-btn:22px; --icon:16px;
+  --radius:6px; --radius-sm:5px; --radius-xs:4px;
+
+  --pad-card:7px 9px;
+  --pad-side:9px;
+  --row-gap:5px;
+  --line-py:0px;
+  --line-ts:46px; --line-who:118px;
+  --side-w:240px;
+  --field-py:2px;
+}
+
+[data-density="compact"]{
+  --fs-base:12.5px; --lh-base:1.42;
+  --fs-sm:12px;
+  --fs-xs:11px;
+  --fs-title:16.5px;
+  --fs-h2:14.5px;
+  --fs-line:12.5px;
+  --lh-line:1.42;
+
+  --btn-py:4px;  --btn-px:10px;   --btn-h:26px;
+  --btn-sm-py:3px; --btn-sm-px:8px; --btn-sm-h:23px;
+  --btn-fw:600;
+  --icon-btn:25px; --icon:18px;
+  --radius:8px; --radius-sm:7px; --radius-xs:6px;
+
+  --pad-card:8px 11px;
+  --pad-side:10px;
+  --row-gap:6px;
+  --line-py:1px;
+  --line-ts:52px; --line-who:128px;
+  --side-w:256px;
+  --field-py:3px;
+}
+
+[data-density="large"]{
+  --fs-base:15.5px; --lh-base:1.55;
+  --fs-sm:14px;
+  --fs-xs:12.5px;
+  --fs-title:22px;
+  --fs-h2:19px;
+  --fs-line:15.5px;
+  --lh-line:1.62;
+
+  --btn-py:9px;  --btn-px:18px;   --btn-h:38px;
+  --btn-sm-py:7px; --btn-sm-px:14px; --btn-sm-h:32px;
+  --btn-fw:650;
+  --icon-btn:34px; --icon:23px;
+  --radius:12px; --radius-sm:10px; --radius-xs:9px;
+
+  --pad-card:15px 20px;
+  --pad-side:16px;
+  --row-gap:12px;
+  --line-py:6px;
+  --line-ts:70px; --line-who:168px;
+  --side-w:324px;
+  --field-py:7px;
+}
+
+/* Системная настройка «поменьше движения» — гасим только украшения */
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important}
+}

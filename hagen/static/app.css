@@ -1,0 +1,843 @@
+/* ======================================================================
+   Hagen — оформление. Цвета и размеры берутся из themes.css.
+   Подключать ПОСЛЕ themes.css. Своих шестнадцатеричных цветов в этом
+   файле нет: всё через переменные, иначе тёмная тема не собирается.
+   ====================================================================== */
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:var(--fs-base)/var(--lh-base) var(--font);
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--accent-2);text-decoration:underline;text-decoration-style:dotted;
+  text-underline-offset:2px}
+a:hover{color:var(--accent-hover);text-decoration:underline}
+::selection{background:var(--select,var(--accent-soft));color:var(--text)}
+.hidden{display:none !important}
+.tiny{font-size:var(--fs-xs)}
+.muted{color:var(--muted)}
+
+/* Видимый фокус с клавиатуры — одинаковый на всех кликабельных местах */
+:focus{outline:none}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,
+a:focus-visible,.rec-item:focus-visible,.tpl:focus-visible,.sp-item:focus-visible,
+.ac-item:focus-visible,.theme-card:focus-visible{
+  outline:2px solid transparent;box-shadow:var(--focus-ring);border-radius:var(--radius-ctl)}
+
+/* Полосы прокрутки: в тёмных темах светлые по умолчанию слишком заметны */
+*{scrollbar-color:var(--line) transparent;scrollbar-width:thin}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:var(--radius-ctl);
+  border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--muted);background-clip:content-box}
+
+#app{display:grid;grid-template-columns:var(--side-w) 1fr;height:100vh;overflow:hidden}
+
+/* ---------------- список записей ---------------- */
+#sidebar{
+  background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;
+}
+.side-head{display:flex;align-items:center;justify-content:space-between;
+  padding:var(--pad-side) var(--pad-side) 8px}
+.side-title{font-size:var(--fs-xs);letter-spacing:.09em;font-weight:700;color:var(--muted)}
+.icon-btn{background:none;border:0;cursor:pointer;color:var(--muted);
+  min-width:var(--icon-btn);min-height:var(--icon-btn);
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:var(--radius-ctl);padding:0}
+.icon-btn svg{width:var(--icon);height:var(--icon);display:block}
+.icon-btn:hover{background:var(--line-soft);color:var(--text)}
+.icon-btn:active{background:var(--line)}
+.gear-btn{color:var(--muted-strong)}
+
+/* Выключатель микрофона Windows — значок в шапке боковой панели (п. 6.9).
+   Заливкой --rec на экране помечены только «Старт» и «Стоп»: выключатель
+   красный цветом значка, выключенный — серый с перечёркиванием. */
+.mic-btn{position:relative;color:var(--rec-ink)}
+.mic-btn.off{color:var(--muted)}
+.mic-btn:hover{background:var(--line-soft)}
+.mic-btn .mic-slash{position:absolute;left:50%;top:50%;width:calc(var(--icon) + 2px);
+  height:2px;margin-left:calc(var(--icon) / -2 - 1px);border-radius:1px;
+  background:currentColor;transform:rotate(-45deg);display:none}
+.mic-btn.off .mic-slash{display:block}
+.mic-btn:disabled{opacity:.6;cursor:default}
+.gear-btn:hover svg{transform:rotate(30deg);transition:transform .25s}
+.doc-tabs{display:flex;gap:2px;align-items:flex-end}
+/* Вкладка документа — такая же, как «Стенограмма» и «Свойства»: один вид
+   вкладок на всю программу (этап 8.2). Пилюли с заливкой больше нет. */
+.doc-tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;
+  padding:8px 12px;cursor:pointer;font-weight:600;color:var(--muted);margin-bottom:-1px}
+.doc-tab:hover{color:var(--text);background:none}
+.doc-tab.active{color:var(--accent);border-bottom-color:var(--accent-mark)}
+.minutes-text.folded,.transcript.folded{display:none}
+.prompt-box textarea{width:100%;font-size:var(--fs-sm);line-height:1.4;margin:6px 0}
+.prompt-box .row{display:flex;align-items:center;gap:8px}
+
+/* ---------------- кнопки: три уровня (этап 8.2 задания) ----------------
+   Раньше почти каждая кнопка была «обводка со скруглением», и ряд из семи
+   таких кнопок читался как семь равно важных действий. Теперь:
+     primary — главное действие, заливка акцентом, одно на экран;
+     ghost / action / small — обычное: без рамки и фона, фон только при
+       наведении, группы разделены вертикальной чертой (.fb-sep);
+     danger  — то же, но текст красный;
+     rec-btn / stop-btn — единственные с заливкой --rec.
+   Недоступная кнопка — прозрачностью и подсказкой с причиной.            */
+button.primary{background:var(--accent-fill);color:var(--on-accent);
+  border:1px solid var(--accent-fill);
+  white-space:nowrap;
+  border-radius:var(--radius-ctl);padding:var(--btn-py) var(--btn-px);min-height:var(--btn-h);
+  cursor:pointer;font-weight:var(--btn-fw);display:inline-flex;align-items:center;gap:7px}
+button.primary:hover{background:var(--accent-fill-hover);border-color:var(--accent-fill-hover)}
+button.primary:active{background:var(--accent-fill-hover)}
+button.primary:disabled{background:var(--accent-disabled);border-color:var(--accent-disabled);
+  color:var(--on-accent-disabled);cursor:default}
+button.wide{margin:0 var(--pad-side) 10px;width:calc(100% - var(--pad-side) * 2)}
+
+button.ghost,button.action{background:none;border:0;color:var(--text);cursor:pointer;
+  white-space:nowrap;
+  border-radius:var(--radius-ctl);padding:var(--btn-py) var(--btn-px);min-height:var(--btn-h);
+  font-weight:var(--btn-fw);display:inline-flex;align-items:center;gap:7px}
+button.small{padding:var(--btn-sm-py) var(--btn-sm-px);min-height:var(--btn-sm-h);
+  font-size:var(--fs-sm)}
+button.ghost:hover,button.action:hover{background:var(--panel-2,var(--line-soft));color:var(--text)}
+button.ghost:active,button.action:active{background:var(--line-soft)}
+button.ghost:disabled,button.action:disabled{opacity:.4;cursor:default;background:none}
+
+button.danger{background:none;border:0;color:var(--rec-ink);cursor:pointer;
+  white-space:nowrap;
+  border-radius:var(--radius-ctl);padding:var(--btn-sm-py) var(--btn-sm-px);
+  min-height:var(--btn-sm-h);font-weight:var(--btn-fw);
+  display:inline-flex;align-items:center;gap:7px}
+button.danger:hover{background:var(--rec-soft)}
+button.danger:disabled{opacity:.4;cursor:default;background:none}
+
+/* Вертикальная черта между группами кнопок и распорка до правого края. */
+.fb-sep{width:1px;align-self:stretch;background:var(--line);margin:3px 6px}
+.fb-spacer{flex:1}
+
+/* Иконка в любой кнопке: размер по тексту. Правила .icon-btn svg и
+   button.icon-only svg сильнее по специфичности и перебивают это. */
+button svg{width:1.15em;height:1.15em;flex:none}
+/* Кнопка только с иконкой: подпись остаётся в title */
+button.icon-only{display:inline-flex;align-items:center;justify-content:center;
+  width:var(--icon-btn);min-width:var(--icon-btn);height:var(--icon-btn);padding:0;
+  min-height:var(--icon-btn)}
+button.icon-only svg{width:calc(var(--icon) - 4px);height:calc(var(--icon) - 4px)}
+
+/* Список записей (п. 6.7): строки во всю ширину панели, разделённые линиями.
+   Выбранная — заливка и черта слева, наведение — слабый фон без черты.
+   Карточек с рамками и отступами между ними больше нет. */
+.rec-list{flex:1;overflow-y:auto;padding:0;min-height:0}
+.rec-item{padding:7px var(--pad-side) 7px calc(var(--pad-side) + 3px);cursor:pointer;
+  border-top:1px solid var(--line-soft)}
+.rec-item:first-child{border-top:0}
+.rec-item:hover{background:var(--line-soft)}
+.rec-item.active{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent-mark)}
+.rec-item-title{font-weight:650;display:flex;gap:6px;align-items:baseline}
+.rec-item-title .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec-item-sub{font-size:var(--fs-xs);color:var(--muted);margin-top:1px;
+  display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-variant-numeric:tabular-nums}
+.rec-item-note{font-size:var(--fs-xs);color:var(--muted);margin-top:1px;
+  display:flex;gap:6px;align-items:center}
+.pill{font-size:var(--fs-xs);padding:1px 7px;border-radius:var(--radius-ctl);white-space:nowrap;
+  background:var(--line-soft);color:var(--muted)}
+.pill.rec{background:var(--rec-soft);color:var(--rec-ink);font-weight:600}
+.pill.ok{background:var(--ok-soft);color:var(--ok-ink)}
+.pill.work{background:var(--warn-soft);color:var(--warn-ink)}
+.blink{animation:blink 1.4s ease-in-out infinite}
+@keyframes blink{50%{opacity:.35}}
+
+.jobs-panel{border-top:1px solid var(--line);padding:10px var(--pad-side);
+  max-height:30vh;overflow:auto}
+.jobs-title{font-size:var(--fs-xs);letter-spacing:.08em;color:var(--muted);font-weight:700;
+  margin-bottom:6px}
+.job{margin-bottom:8px}
+.job-title{font-size:var(--fs-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:flex;align-items:center;gap:6px}
+.job-title>span:first-child{overflow:hidden;text-overflow:ellipsis}
+.job-stop{margin-left:auto;flex:none}
+.job-title .icon-btn{min-width:24px;min-height:24px}
+.job-title .icon-btn:hover{color:var(--rec-ink);background:var(--rec-soft)}
+.job-note{font-size:var(--fs-xs);color:var(--muted)}
+.bar{height:5px;background:var(--line);border-radius:var(--radius-box);overflow:hidden;margin:3px 0}
+.bar-fill{height:100%;background:var(--accent-mark);width:0;transition:width .3s}
+.side-foot{border-top:1px solid var(--line);padding:9px var(--pad-side)}
+/* Состояние программы: ошибка видна цветом, «повторить» — ссылкой, не кнопкой:
+   в строке состояния кнопке не место (17.09). */
+.side-foot .bad{color:var(--rec-ink)}
+.linky{background:none;border:0;padding:0;cursor:pointer;color:var(--accent-2);
+  font:inherit;text-decoration:underline}
+.linky:hover{color:var(--accent-hover)}
+
+/* ---------------- основная область ---------------- */
+/* боковые поля шире на 50 %: 22 → 33 px (замечено 15.09) */
+/* Правая колонка. Раньше она прокручивалась
+   целиком, и под стенограммой карточками рисовались документы — отсюда внешняя
+   прокрутка страницы. Теперь колонка — столбец на высоту окна: шапка, вкладки,
+   панель действий и строка состояния закреплены, ездит только содержимое. */
+#main{overflow:hidden;min-width:0;padding:0;position:relative;display:flex;
+  flex-direction:column;min-height:0}
+#main > div{min-height:0}
+
+.rec-shell{display:flex;flex-direction:column;height:100%;min-height:0}
+.rec-shell > .rec-head,.rec-shell > .controls,.rec-shell > .rec-tabs,
+.rec-shell > .rec-actions,.rec-shell > .rec-status{flex:none}
+
+
+/* Ряд вкладок: один вид на все вкладки программы (этап 8) — текст приглушён,
+   активная подчёркнута чертой снизу. */
+.rec-tabs{display:flex;gap:2px;align-items:flex-end;flex-wrap:wrap;
+  padding:0 var(--pad-main);border-bottom:1px solid var(--line)}
+.rtab{background:none;border:0;border-bottom:2px solid transparent;cursor:pointer;
+  padding:8px 12px;font-weight:600;color:var(--muted);margin-bottom:-1px}
+.rtab:hover{color:var(--text)}
+.rtab.active{color:var(--accent);border-bottom-color:var(--accent-mark)}
+.rtab-add{color:var(--muted)}
+.rtab-add:hover{color:var(--accent)}
+
+/* Прокручивается только содержимое активной вкладки. */
+.rec-body{flex:1;min-height:0;overflow-y:auto;padding:12px var(--pad-main) 16px}
+.rec-pane{display:block}
+
+/* Панель действий вкладки и строка состояния прижаты к низу колонки. */
+.rec-actions{border-top:1px solid var(--line);padding:8px var(--pad-main)}
+/* Панель действий — одна строка (п. 6.3): кнопки идут вплотную, группы
+   разделены чертой, «Сохранить» и «Удалить» уходят вправо распоркой. */
+.act-group{display:flex;gap:2px;align-items:stretch;flex-wrap:nowrap;overflow:hidden}
+.act-group > *{align-self:center}
+/* Кнопки не ужимаются: иначе подпись режется, а расчёт «что не влезло»
+   перестаёт работать — ряд всегда «помещается», просто обрезанный. */
+.act-group > button{flex:none}
+.act-group > .fb-sep{align-self:stretch}
+.act-hidden{display:none !important}
+.rec-status{border-top:1px solid var(--line);padding:6px var(--pad-main);
+  min-height:30px;display:flex;gap:10px;align-items:center;
+  font-size:var(--fs-sm);color:var(--muted)}
+
+/* «Скрыть → Имена»: имя закрашено плашкой своего же цвета — снимок экрана
+   можно показать и отправить, не раскрывая, кто говорил (просьба 17.09).
+   Текст реплик остаётся, цвет говорящего читается, имя — нет. */
+
+/* Кнопка, у которой что-то включено: подсветка вместо смены подписи. */
+button.ghost.on,button.action.on{color:var(--accent);background:var(--accent-soft)}
+
+/* Меню записи «⋯» в шапке (п. 6.2): редкое, но про запись целиком. */
+.rec-menu{position:absolute;z-index:40;min-width:250px;padding:4px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-pop);
+  box-shadow:var(--shadow-pop);display:flex;flex-direction:column;gap:1px}
+.rec-menu button{background:none;border:0;text-align:left;cursor:pointer;
+  padding:7px 10px;border-radius:var(--radius-ctl);color:var(--text);font:inherit}
+.rec-menu button:hover{background:var(--line-soft)}
+.rec-menu button.danger{color:var(--rec-ink)}
+.rec-menu button:disabled{opacity:.4;cursor:default;background:none}
+
+/* Статусы (этап 8.2.8): цветная точка и приглушённый текст. Зелёная — норма,
+   янтарная — идёт процесс, красная — ошибка, серая — сведение. */
+.stat{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.stat:empty{display:none}
+.dot-st{width:7px;height:7px;border-radius:50%;flex:none;background:var(--muted)}
+.dot-st.ok{background:var(--ok-ink)}
+.dot-st.go{background:var(--warn-ink)}
+.dot-st.bad{background:var(--rec-ink)}
+.dot-st.none{background:var(--line)}
+
+/* Блоки на вкладке «Свойства»: подзаголовок и линия, без карточек (этап 8). */
+.props-block{padding:10px 0;border-top:1px solid var(--line)}
+.props-block:first-child{border-top:0;padding-top:0}
+.props-title{font-size:var(--fs-xs);letter-spacing:.08em;font-weight:700;
+  color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+.empty{max-width:520px;margin:16vh auto;text-align:center;color:var(--muted)}
+.empty-icon{color:var(--muted-strong)}
+.empty-icon svg{width:46px;height:46px}
+.empty h2{margin:10px 0 6px;color:var(--text);font-size:var(--fs-title)}
+/* Блок готовности — не карточка: линии сверху и снизу (этап 8.2). */
+.caps{margin-top:18px;text-align:left;font-size:var(--fs-sm);
+  border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+  padding:12px 0}
+.caps div{margin:3px 0}
+.caps b{color:var(--text)}
+
+/* Шапка — часть сплошной поверхности колонки, без рамки и тени, но со своими
+   полями: они одни и у экрана записи, и у раздела «Видео» (там шапка прижималась
+   к краю окна — замечено 18.09). */
+.rec-head{padding:14px var(--pad-main) 10px}
+/* Блок устройств у записи и форма раздела «Видео» — те же поля. */
+.controls{padding:0 var(--pad-main) 12px}
+#video-view{display:flex;flex-direction:column;min-height:0;overflow-y:auto}
+.rec-head-line{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+/* Название правится на месте: рамка появляется при наведении и в фокусе
+   (п. 6.2). Селектор с типом нужен, чтобы перебить общее правило полей. */
+input.title-input{flex:1;min-width:220px;border:1px solid transparent;
+  border-radius:var(--radius-ctl);
+  font-size:var(--fs-title);font-weight:650;padding:3px 6px;background:none;outline:none}
+input.title-input:hover{border-color:var(--line)}
+input.title-input:focus{border-color:var(--accent);box-shadow:none}
+.rec-meta{color:var(--muted);font-size:var(--fs-sm);white-space:nowrap;
+  font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+#rec-duration{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.dot{margin:0 5px}
+.rec-head-line2{display:flex;align-items:center;gap:14px;margin-top:10px;flex-wrap:wrap}
+.inline{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--muted)}
+.inline select,.inline input[type=text]{color:var(--text)}
+.inline input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);flex:none}
+select,input[type=text],input[type=password],input[type=number],input[type=url],textarea{
+  border:1px solid var(--line);border-radius:var(--radius-ctl);
+  padding:var(--field-py) 8px;background:var(--panel);color:var(--text);outline:none}
+select{min-height:var(--btn-sm-h)}
+select:hover,input:hover,textarea:hover{border-color:var(--muted)}
+select:focus,input:focus,textarea:focus{border-color:var(--accent)}
+input::placeholder,textarea::placeholder{color:var(--muted)}
+.badge-rec{background:var(--rec);color:var(--on-rec);font-weight:700;font-size:var(--fs-sm);
+  padding:4px 11px;border-radius:var(--radius-ctl);letter-spacing:.03em}
+.badge{background:var(--line-soft);color:var(--muted);font-size:var(--fs-sm);
+  padding:3px 9px;border-radius:var(--radius-ctl)}
+
+.controls{background:var(--panel);border:1px solid var(--line);border-top:0;
+  padding:var(--pad-card)}
+.ctl-row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.rec-btn{background:var(--rec);color:var(--on-rec);border:1px solid var(--rec);
+  border-radius:var(--radius-ctl);padding:var(--btn-py) calc(var(--btn-px) + 4px);
+  min-height:var(--btn-h);font-weight:700;cursor:pointer}
+.rec-btn:hover{background:var(--rec-hover);border-color:var(--rec-hover)}
+.rec-btn:active{transform:translateY(1px)}
+.rec-btn:disabled{background:var(--rec-disabled);border-color:var(--rec-disabled);
+  cursor:default;transform:none}
+.stop-btn{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-ctl);
+  padding:var(--btn-py) var(--btn-px);min-height:var(--btn-h);font-weight:600;cursor:pointer}
+.stop-btn:hover:not(:disabled){background:var(--line-soft)}
+.stop-btn:disabled{opacity:.45;cursor:default}
+
+/* Старт и Стоп — одно место на экране: видна та кнопка, что сейчас работает.
+   Состояние берётся из disabled, который app.js уже расставляет сам. */
+.rec-toggle{display:flex;align-items:center;gap:8px}
+.rec-toggle #btn-stop:disabled{display:none}
+.rec-toggle:has(#btn-stop:not(:disabled)) #btn-start{display:none}
+
+.meters{flex:1;min-width:320px;display:flex;flex-direction:column;gap:7px}
+.meter-row{display:flex;align-items:center;gap:9px}
+.meter-label{width:96px;font-size:var(--fs-sm);color:var(--muted);flex:none}
+.dev-select{flex:1;min-width:120px;max-width:260px;font-size:var(--fs-sm)}
+.dev-static{flex:1;min-width:120px;max-width:260px;font-size:var(--fs-xs);color:var(--muted);
+  background:var(--line-soft);border-radius:var(--radius-ctl);padding:5px 8px}
+.meter{width:84px;height:9px;background:var(--line);border-radius:var(--radius-box);overflow:hidden;flex:none}
+.meter-fill{height:100%;width:0;
+  background:linear-gradient(90deg,var(--meter-1),var(--meter-2),var(--meter-3));
+  transition:width .1s linear}
+.meter-fill.far{background:linear-gradient(90deg,var(--meter-far-1),var(--meter-far-2),var(--meter-3))}
+.meter-hint{font-size:var(--fs-xs);color:var(--warn-ink);width:120px}
+.ctl-row2{display:flex;align-items:center;gap:14px;margin-top:11px;flex-wrap:wrap}
+.warn{font-size:var(--fs-sm);color:var(--warn-ink);background:var(--warn-soft);
+  border-radius:var(--radius-box);padding:4px 9px}
+/* Предупреждения — полосами во всю ширину, каждое своей строкой (п. 6.1):
+   в общем ряду с галочкой и кнопкой они рвали его на три строки. */
+.ctl-warn{display:flex;flex-direction:column;gap:6px;margin-top:11px}
+/* Оба спрятаны — полосы нет совсем, вместе с отступом. */
+.ctl-warn:not(:has(> .warn:not(.hidden))){display:none}
+
+/* Блок устройств после старта сворачивается: во время разговора он не нужен,
+   а стенограмма поднимается выше. Класс folded ставит app.js. */
+.ctl-summary{display:none}
+#live-controls.folded .meters,#live-controls.folded .ctl-row2,
+#live-controls.folded .ctl-warn{display:none}
+#live-controls.folded .ctl-summary{display:flex;align-items:center;gap:10px;
+  font-size:var(--fs-sm);color:var(--muted);flex-wrap:wrap}
+#live-controls.folded .ctl-summary .meter{width:56px}
+.fold-btn{margin-left:auto}
+
+.draft{background:var(--draft-bg);border:1px solid var(--warn-line);border-top:0;
+  padding:9px 16px;display:flex;gap:10px;align-items:baseline}
+.draft-label{font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--warn-ink);flex:none}
+.draft-text{color:var(--draft-ink);font-style:italic}
+
+/* Своя полоса прокрутки у стенограммы: длинная расшифровка иначе растягивает
+   страницу и кнопки под ней уезжают вниз. */
+/* Стенограмма — часть поверхности вкладки: ни рамки, ни своей прокрутки
+   (этап 8.2.1). Раньше это была карточка со своим скроллером внутри
+   прокручивающейся страницы — два скроллбара рядом. */
+.transcript{padding:0;min-height:120px}
+.line{display:grid;grid-template-columns:var(--line-ts) var(--line-who) 1fr;gap:10px;
+  padding:var(--line-py) 0;align-items:baseline;font-size:var(--fs-line);line-height:var(--lh-line)}
+/* «Скрыть → Имена»: имя закрашено плашкой своего же цвета. Правило стоит
+   после правил цвета говорящего — иначе они его перебивают. */
+.transcript.masked .line .who{background:currentColor;
+  -webkit-text-fill-color:transparent;border-radius:var(--radius-ctl)}
+.transcript.masked .line .who .ask{display:none}
+
+/* Продолжение реплики того же человека: имени нет, а таймкод показывается
+   только при наведении и в режиме правки (п. 6.6). Склеенные куски идут
+   плотнее — читаются как один абзац. */
+.line.glued{padding-top:0}
+.line.glued .ts{visibility:hidden}
+.line.glued:hover .ts,.editing .line.glued .ts{visibility:visible}
+.line.cont + .line:not(.cont){margin-top:6px}
+.line:hover{background:var(--line-soft);border-radius:var(--radius-box)}
+.line .ts{font-size:var(--fs-xs);color:var(--muted);font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums}
+.line .who{font-weight:650;cursor:pointer;border-radius:var(--radius-ctl);padding:0 4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--speaker-neutral)}
+.line .who:hover{background:var(--accent-soft)}
+.line.me .who{color:var(--me)}
+.line.them .who{color:var(--speaker-neutral)}
+/* Именованные голоса получают свой цвет (класс c1…c6 ставит app.js),
+   безымянные остаются нейтральными — цвет значит «этого человека знаем». */
+.line .who.c1{color:var(--speaker-1)}
+.line .who.c2{color:var(--speaker-2)}
+.line .who.c3{color:var(--speaker-3)}
+.line .who.c4{color:var(--speaker-4)}
+.line .who.c5{color:var(--speaker-5)}
+.line .who.c6{color:var(--speaker-6)}
+.line .who.c7{color:var(--speaker-7)}
+.line .who.c8{color:var(--speaker-8)}
+.line .txt{white-space:pre-wrap;word-break:break-word;text-wrap:pretty}
+/* Правка стенограммы: слово — место разреза. Слева от слова, на которое
+   наведён курсор, показываем ножницы-подсказку — линию. */
+.editing .line .txt .w{border-radius:var(--radius-ctl);padding:0 1px;cursor:text}
+.editing .line .txt .w:hover{background:var(--accent-soft);box-shadow:-2px 0 0 0 var(--accent)}
+.editing .line .txt .w-first{cursor:default}
+.editing .line .txt .w-first:hover{background:none;box-shadow:none}
+/* Части, которые качаются отдельно: строка «что это — сколько весит — кнопка». */
+.needs{margin:6px 0 12px}
+.need-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+.need-row:last-child{border-bottom:0}
+.need-row .need-main{flex:1;min-width:0}
+/* Вкладка «Сочетания»: сочетание слева, что делает — справа. */
+table.keys{width:100%;border-collapse:collapse;margin:6px 0 10px}
+table.keys th{text-align:left;font-size:var(--fs-xs);color:var(--muted);font-weight:600;
+  padding:4px 8px;border-bottom:1px solid var(--line)}
+table.keys td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+table.keys td:first-child{white-space:nowrap;width:1%;color:var(--text)}
+/* Значок «?» у поля настроек: длинное пояснение не влезает в само поле, а
+   сокращать его нельзя — всплывает при наведении (замечено 16.09). */
+.q{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+  flex:0 0 18px;border-radius:50%;border:1px solid var(--line);color:var(--muted);
+  font-size:11px;line-height:1;cursor:help;user-select:none}
+.q:hover,.q:focus{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent);
+  outline:none}
+/* Правка текста реплики: строка ввода на месте самого текста. */
+.line .txt-edit{grid-column:3;width:100%;min-height:28px;resize:vertical;font:inherit;
+  color:var(--text);background:var(--panel-2);border:1px solid var(--accent-line);
+  border-radius:var(--radius-ctl);padding:3px 6px}
+.line .txt.edited{border-bottom:1px dotted var(--line)}
+/* Кому отдать выделенные слова — список говорящих у самого выделения. */
+.give-menu{position:fixed;z-index:60;min-width:180px;max-width:280px;padding:6px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-pop);box-shadow:var(--shadow-pop)}
+.give-menu .gm-head{font-size:var(--fs-xs);color:var(--muted);padding:2px 6px 6px}
+.give-menu .gm-item{display:block;width:100%;text-align:left;background:none;border:0;
+  padding:5px 6px;border-radius:var(--radius-ctl);cursor:pointer;color:var(--text)}
+.give-menu .gm-item:hover{background:var(--accent-soft);color:var(--accent)}
+#btn-edit-transcript.on{background:var(--accent-soft);color:var(--accent)}
+.edit-hint{padding:2px 0 6px}
+.tr-empty{color:var(--muted);padding:22px 0;text-align:center}
+.tr-empty h3{color:var(--text)}
+.line .ask{font-size:var(--fs-xs);color:var(--warn-ink);background:var(--warn-soft);
+  border:1px solid var(--warn-line);border-radius:var(--radius-ctl);padding:1px 6px;cursor:pointer;margin-left:6px}
+.line .ask:hover{background:var(--warn-soft-hover)}
+.sugg-inline{grid-column:3;font-size:var(--fs-sm);color:var(--warn-ink);margin:-2px 0 4px}
+.sugg-inline button{margin-left:6px}
+
+.fb-row{display:flex;gap:var(--row-gap);align-items:center;flex-wrap:wrap;margin-bottom:9px}
+.fb-row:last-child{margin-bottom:0}
+.diar{display:flex;gap:10px;align-items:center;margin-top:4px}
+.diar .bar{flex:1;max-width:260px}
+
+/* Документ — отрисованный текст (п. 6.4): своей прокрутки и карточки нет,
+   ездит вкладка целиком. Ширина строки ограничена: читать сплошную строку
+   через весь экран неудобно. */
+.minutes-text{padding:0;line-height:1.62;max-width:820px;text-wrap:pretty}
+.minutes-text h2,.minutes-text h3,.minutes-text h4{margin:16px 0 6px;line-height:1.3}
+.minutes-text h2{font-size:var(--fs-h2)}
+.minutes-text h3{font-size:calc(var(--fs-base) * 1.12)}
+.minutes-text h4{font-size:var(--fs-base);color:var(--muted-strong)}
+.minutes-text > :first-child{margin-top:0}
+.minutes-text p{margin:0 0 8px}
+.minutes-text ul,.minutes-text ol{margin:0 0 10px;padding-left:22px}
+.minutes-text li{margin:2px 0}
+.minutes-text hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+.minutes-text code{font-family:var(--font-mono);font-size:.92em;
+  background:var(--line-soft);padding:1px 4px;border-radius:var(--radius-ctl)}
+.minutes-text table{border-collapse:collapse;margin:4px 0 12px;font-size:var(--fs-sm)}
+.minutes-text th,.minutes-text td{border:1px solid var(--line);padding:4px 8px;
+  text-align:left;vertical-align:top}
+.minutes-text th{background:var(--panel-2,var(--line-soft));font-weight:650}
+.minutes-text .wikilink{color:var(--accent-2)}
+/* Таймкод в документе — ссылка на реплику: моноширинный, как в стенограмме. */
+.ts-link{background:none;border:0;padding:0;cursor:pointer;color:var(--accent-2);
+  text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;
+  font-family:var(--font-mono);font-size:.92em}
+.ts-link:hover{text-decoration:underline}
+/* Куда перешли по таймкоду — видно секунду-другую. */
+.line.flash{background:var(--accent-soft);transition:background .4s}
+
+/* Зона перетаскивания — пунктир без радиуса (этап 8.2.4). */
+.dropzone{margin-top:16px;border:2px dashed var(--line);border-radius:var(--radius-box);
+  padding:22px;text-align:center;color:var(--muted);background:var(--panel-2)}
+.dropzone.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.dropzone.disabled{opacity:.5;pointer-events:none}
+
+/* поле «видео по ссылке» — сразу под зоной перетаскивания */
+.linkbox{margin-top:10px;padding:14px 16px;border:1px solid var(--line);
+  border-radius:var(--radius-box);background:var(--panel)}
+.linkbox label{display:block;margin-bottom:7px;color:var(--muted);font-size:var(--fs-sm)}
+.linkrow{display:flex;gap:9px;align-items:center}
+.linkrow input{flex:1;min-width:0;padding:9px 11px;border:1px solid var(--line);
+  border-radius:var(--radius-ctl);font:inherit;background:var(--panel-2);color:inherit}
+.linkrow input:focus{outline:none;border-color:var(--accent)}
+.linkrow button{white-space:nowrap}
+#link-hint{margin-top:7px;min-height:16px}
+
+/* ---------------- окна ---------------- */
+.overlay{position:fixed;inset:0;background:var(--overlay);z-index:50}
+.dialog{position:fixed;z-index:60;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(660px,94vw);max-height:90vh;background:var(--panel);color:var(--text);
+  border:1px solid var(--line);border-radius:var(--radius-pop);box-shadow:var(--shadow-dialog);
+  display:flex;flex-direction:column}
+.dialog.small{width:min(470px,94vw)}
+.dlg-head{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dlg-head b{flex:1;font-size:var(--fs-h2)}
+.dlg-body{padding:16px 18px;overflow-y:auto}
+/* Окно настроек держим одного размера: вкладки разной высоты иначе заставляют
+   окно прыгать, и кнопки внизу уезжают. */
+#dlg-settings{height:min(720px,92vh);width:min(980px,96vw)}
+/* Разделы слева, содержимое справа: прокручивается только содержимое (п. 9.1).
+   Раньше окно было узким, и внутри прокручивались ещё два уровня. */
+#dlg-settings .dlg-body{display:grid;grid-template-columns:200px minmax(0,1fr);
+  gap:0;padding:0;overflow:hidden;min-height:0}
+/* Выключенная возможность исчезает с экрана целиком — не серая, её нет
+   (п. 9.2). Одно правило на всю программу. */
+.feature-off{display:none !important}
+.features{display:flex;flex-direction:column}
+.feature-row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
+  border-top:1px solid var(--line-soft);cursor:pointer}
+.feature-row:first-child{border-top:0}
+.feature-row input{margin-top:2px;flex:none}
+.feature-row span{display:flex;flex-direction:column;gap:2px}
+/* Подзаголовок внутри раздела настроек: линия сверху и приглушённая
+   подпись — вместо серых скруглённых подложек (этап 8.2.2). */
+.set-group{font-size:var(--fs-xs);letter-spacing:.08em;font-weight:700;
+  color:var(--muted);text-transform:uppercase;
+  border-top:1px solid var(--line-soft);padding-top:12px;margin:16px 0 8px}
+.set-panes .tabpane > .set-group:first-child{border-top:0;padding-top:0;margin-top:0}
+.set-nav{display:flex;flex-direction:column;gap:1px;padding:12px 8px;
+  border-right:1px solid var(--line);overflow-y:auto;min-height:0}
+.set-nav .tab{text-align:left;border-bottom:0;border-left:2px solid transparent;
+  margin-bottom:0;padding:7px 10px;border-radius:var(--radius-ctl)}
+.set-nav .tab:hover{background:var(--line-soft);color:var(--text)}
+.set-nav .tab.active{color:var(--accent);background:var(--accent-soft);
+  border-left-color:var(--accent-mark)}
+.set-panes{padding:16px 20px;overflow-y:auto;min-height:0}
+/* Отметка «сохранено» у поля: без неё непонятно, приняли ли правку. */
+.saved-mark{color:var(--ok-ink);opacity:0;transition:opacity .2s;margin-left:8px}
+.saved-mark.on{opacity:1}
+
+.dlg-foot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:9px;
+  justify-content:flex-end}
+.field{display:block;margin-bottom:13px;font-size:var(--fs-sm);color:var(--muted)}
+.field input,.field textarea,.field select{display:block;width:100%;margin-top:4px;color:var(--text)}
+.field .tiny{display:block;margin-top:3px}
+/* Серое пояснение отдельной строкой относится к полю НАД ним. */
+.field + .tiny{display:block;margin-top:-9px;margin-bottom:16px;line-height:1.35}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+/* «Продвинутые»: короткое число и кнопка «по умолчанию» в одну строку */
+.field .dt-row{display:flex;gap:8px;align-items:center;margin-top:4px}
+.field .dt-row input{display:inline-block;width:150px;margin-top:0}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;align-items:center}
+
+/* ---------------- раздел «Видео» ---------------- */
+/* «Запись │ Видео» — такие же вкладки, как у записи и в настройках
+   (этап 8.2.7): один вид вкладок на всю программу. Раньше это была пара
+   кнопок с заливкой и рамкой — третий вид вкладок на экране. */
+.mode-row{display:flex;padding:0 var(--pad-side);
+  border-bottom:1px solid var(--line);margin-bottom:8px}
+.mode-btn{flex:1;background:none;border:0;border-bottom:2px solid transparent;
+  border-radius:0;padding:6px 8px;margin-bottom:-1px;
+  cursor:pointer;color:var(--muted);font-weight:600;font-size:var(--fs-sm);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.mode-btn:hover{color:var(--text)}
+.mode-btn svg{width:1.15em;height:1.15em}
+.mode-btn.active{color:var(--accent);border-bottom-color:var(--accent-mark)}
+.video-title{margin:0;font-size:var(--fs-h2)}
+.src-row{display:flex;gap:2px;flex-wrap:wrap;margin-bottom:12px;
+  border-bottom:1px solid var(--line)}
+.src-btn{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;
+  padding:6px 12px;cursor:pointer;color:var(--muted);font-weight:600;
+  font-size:var(--fs-sm);margin-bottom:-1px}
+.src-btn:hover{color:var(--text)}
+.src-btn.active{color:var(--accent);border-bottom-color:var(--accent-mark)}
+.src-pane{margin-bottom:4px}
+.video-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.video-checks{display:flex;flex-direction:column;gap:7px;margin:10px 0}
+.video-log{max-height:220px;overflow-y:auto}
+.vlog{font-size:var(--fs-sm);padding:3px 0;color:var(--muted)}
+.vlog.ok{color:var(--text)}
+.vlog.err{color:var(--rec-ink)}
+.sp-results{display:flex;flex-direction:column;gap:6px;margin-top:10px;
+  max-height:320px;overflow-y:auto}
+.sp-item{display:flex;align-items:center;gap:10px;
+  border:1px solid var(--line);border-radius:var(--radius-box);padding:7px 10px;cursor:pointer}
+.sp-item:hover{background:var(--line-soft)}
+.sp-item.done{background:var(--line-soft);color:var(--muted)}
+.sp-marks{flex:none;width:44px;text-align:center}
+.sp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-filters{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:8px 0}
+.sp-filters label{font-size:var(--fs-sm);color:var(--muted);display:flex;align-items:center;gap:5px}
+.sp-filters input[type=number]{width:80px}
+.sp-head{display:flex;align-items:center;gap:8px;margin-top:8px}
+.sp-head .tiny{flex:1}
+.sp-foot{margin-top:10px;align-items:center}
+.sp-code-row{margin:6px 0;display:flex;align-items:center;gap:8px}
+/* Код входа: моноширинный и чуть крупнее подписи кнопки рядом — его надо
+   переписать, но он не заголовок. Растёт вместе с плотностью. */
+.sp-code{font-size:calc(var(--fs-sm) + 2px);letter-spacing:1.5px;font-family:var(--font-mono);
+  font-weight:600}
+.dropzone.off{opacity:.5;cursor:not-allowed}
+.box{border:1px solid var(--line);border-radius:var(--radius-box);padding:12px;margin-bottom:14px;
+  background:var(--panel-2)}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);margin-bottom:15px}
+.tab{background:none;border:0;border-bottom:2px solid transparent;
+  padding:var(--btn-sm-py) 12px;min-height:var(--btn-h);cursor:pointer;color:var(--muted);
+  font-weight:600}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent-mark)}
+.tpl-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.num-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.num-row button{min-width:40px}
+.num-row button.sel{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.tpl{border:1px solid var(--line);border-radius:var(--radius-ctl);padding:10px 12px;cursor:pointer}
+.tpl:hover{background:var(--line-soft)}
+.tpl.sel{border-color:var(--accent);background:var(--accent-soft)}
+.tpl.off{opacity:.45;cursor:default}
+.tpl.off:hover{background:none}
+.tpl b{display:block}
+
+/* Где что лежит у открытой записи */
+.paths{margin-top:10px;display:flex;flex-direction:column;gap:4px}
+.path-row{display:flex;align-items:center;gap:9px;font-size:var(--fs-xs);color:var(--muted)}
+.path-title{flex:none;min-width:150px}
+.path-val{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;direction:rtl;text-align:left;font-family:var(--font-mono)}
+
+/* Выбранные файлы ждут кнопки «Обработать» */
+.file-list{margin-top:10px;display:flex;flex-direction:column;gap:5px}
+.file-item{display:flex;align-items:center;gap:9px;padding:7px 10px;
+  border:1px solid var(--line);border-radius:var(--radius-box);background:var(--panel)}
+.file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-row{margin-top:10px;display:flex;align-items:center;gap:9px}
+.cloud-warn{background:var(--warn-soft);border:1px solid var(--warn-line);
+  border-radius:var(--radius-box);padding:10px 12px;font-size:var(--fs-sm);color:var(--warn-ink)}
+.doc-alert{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.doc-alert .btn-row{margin:0}
+.voices{display:flex;flex-direction:column;gap:7px}
+.voice{display:flex;align-items:center;gap:10px;border:1px solid var(--line);
+  border-radius:var(--radius-box);padding:8px 11px;background:var(--panel)}
+.voice .vn{flex:1;font-weight:600}
+.sugg-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.sugg{border:1px solid var(--warn-line);background:var(--warn-soft);
+  border-radius:var(--radius-box);padding:8px 10px;font-size:var(--fs-sm);cursor:pointer;
+  color:var(--warn-ink)}
+.sugg:hover{background:var(--warn-soft-hover)}
+
+.toast{position:fixed;right:20px;bottom:20px;z-index:70;background:var(--panel);
+  color:var(--text);border:1px solid var(--line);border-radius:var(--radius-pop);
+  box-shadow:var(--shadow-toast);padding:14px 16px;max-width:380px;display:flex;gap:14px;
+  align-items:center}
+/* Звонок — это запись: узкая красная кромка слева, тот же смысл цвета */
+#call-toast{border-left:4px solid var(--rec)}
+.toast-body{flex:1}
+.toast-actions{display:flex;flex-direction:column;gap:6px}
+
+.notices{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:80;
+  display:flex;flex-direction:column;gap:7px;align-items:center;pointer-events:none}
+.notice{background:var(--notice-bg);color:var(--notice-ink);border-radius:var(--radius-box);
+  padding:9px 16px;font-size:var(--fs-sm);box-shadow:var(--shadow-notice);opacity:.8;
+  animation:drop .25s ease}
+.notice.ok{background:var(--ok);color:var(--on-ok)}
+.notice.err{background:var(--rec);color:var(--on-rec)}
+@keyframes drop{from{opacity:0;transform:translateY(-8px)}to{opacity:.8;transform:none}}
+
+/* ---------------- капсула диктовки ----------------
+   Видна, пока идёт диктовка. Живёт внутри окна программы: держать её поверх
+   чужих окон умеет только отдельное окно Windows, это отложено. */
+.dictate-pill{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:85;
+  display:flex;align-items:center;gap:8px;cursor:pointer;
+  background:var(--notice-bg);color:var(--notice-ink);border-radius:var(--radius-pop);
+  padding:8px 16px;font-size:var(--fs-sm);box-shadow:var(--shadow-notice);
+  animation:drop .2s ease}
+.dictate-pill .dp-dot{width:9px;height:9px;border-radius:50%;background:var(--rec);
+  animation:blink 1s ease-in-out infinite}
+.dictate-pill.thinking .dp-dot{background:var(--warn);animation:blink .6s ease-in-out infinite}
+.dictate-pill.sleep .dp-dot{background:var(--warn);animation:none}
+
+/* строка замен в «Настройки → Набор текста» */
+.dict-rule{display:flex;gap:6px;align-items:center;margin-top:5px}
+.dict-rule input{flex:1;min-width:0}
+
+/* словарь из правок: готовые замены и предложения */
+.fix-from,.fix-to{padding:2px 8px;border-radius:var(--radius-ctl);background:var(--line-soft)}
+.fix-to{font-weight:600}
+.fix-sugg{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;
+  padding:7px 10px;border-radius:var(--radius-box);
+  background:var(--ok-soft);color:var(--ok-ink)}
+.fix-sugg span{flex:1;min-width:220px}
+
+/* история диктовок */
+.dict-hist{max-height:220px;overflow-y:auto;margin-top:8px}
+.dict-item{border-top:1px solid var(--line);padding:7px 0;display:flex;gap:8px;align-items:flex-start}
+.dict-item .dh-body{flex:1;min-width:0}
+.dict-item .dh-when{font-size:var(--fs-xs);color:var(--muted)}
+.dict-item .dh-text{white-space:pre-wrap;word-break:break-word}
+
+/* ---------------- окно «Кто это говорит?» ---------------- */
+.ac{position:relative;display:block;margin-top:4px}
+.ac input{width:100%;box-sizing:border-box}
+.ac-list{position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:3px;
+  max-height:260px;overflow:auto;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius-box);box-shadow:var(--shadow-pop)}
+.ac-item{display:flex;flex-direction:column;gap:1px;padding:7px 10px;cursor:pointer;
+  color:var(--text)}
+.ac-item:hover,.ac-item.active{background:var(--accent-soft)}
+.ac-item.ac-new b{color:var(--accent)}
+#speaker-picked{margin:-6px 0 10px}
+.conflict{background:var(--warn-soft);border:1px solid var(--warn-line);
+  border-radius:var(--radius-box);padding:10px 12px;margin:10px 0;font-size:var(--fs-sm);
+  color:var(--warn-ink)}
+.conflict .c-text{font-weight:600}
+.conflict .c-choices{display:flex;flex-direction:column;align-items:flex-start;gap:6px;
+  margin-top:8px}
+.speaker-split-row{margin-top:10px}
+/* над стенограммой: несколько голосов под одним именем, итоги разделения */
+.speaker-alerts{background:var(--panel);border:1px solid var(--line);border-top:0;
+  padding:8px 14px;display:flex;flex-direction:column;gap:6px}
+.sa-row{font-size:var(--fs-sm);color:var(--warn-ink);background:var(--warn-soft);
+  border-radius:var(--radius-box);padding:7px 10px}
+.sa-row.sa-done{color:var(--text);background:var(--line-soft)}
+.sa-row button{margin-left:6px}
+/* «✓ ваш голос узнан» — заметно, чтобы было видно: запоминать больше нечего */
+.sa-row .sa-ok{display:inline-block;margin-left:4px;padding:1px 8px;border-radius:var(--radius-ctl);
+  background:var(--ok-soft);color:var(--ok-ink);font-weight:600}
+#room-field{cursor:pointer}
+
+/* ---------------- «Настройки → Голоса» ---------------- */
+.voice-card{display:flex;flex-direction:column}
+.voice-card .voice{border-radius:var(--radius-box)}
+.voice-more{border:1px solid var(--line);border-top:0;border-radius:var(--radius-box);
+  padding:8px 10px;display:flex;flex-direction:column;gap:7px;font-size:var(--fs-sm);
+  background:var(--panel-2)}
+.vbadge{font-size:var(--fs-xs);background:var(--accent-soft);color:var(--accent);
+  border-radius:var(--radius-ctl);padding:1px 8px}
+.vbadge.warn{background:var(--warn-soft);color:var(--warn-ink)}
+.alias{background:var(--line-soft);border-radius:var(--radius-ctl);padding:1px 7px;margin-right:4px}
+.alias a,.voice-more a{text-decoration:none;color:var(--accent)}
+.vsamples{display:flex;flex-direction:column;gap:3px}
+.vsample{font-size:var(--fs-xs);color:var(--muted)}
+.vsample.odd{color:var(--warn-ink)}
+.dupes{background:var(--warn-soft);border-color:var(--warn-line)}
+.dupe{font-size:var(--fs-sm);margin-top:6px}
+.dupe button{margin-left:4px}
+
+/* ---------------- переключатель темы и плотности (Настройки → Вид) ------- */
+.theme-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;
+  margin:6px 0 16px}
+.theme-card{border:1px solid var(--line);border-radius:var(--radius-ctl);padding:9px;
+  cursor:pointer;background:var(--panel);text-align:left;display:flex;flex-direction:column;gap:8px}
+.theme-card:hover{border-color:var(--accent-line);background:var(--line-soft)}
+.theme-card.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.theme-name{font-weight:600;font-size:var(--fs-sm);display:flex;align-items:center;gap:6px}
+.theme-name .tick{color:var(--accent);visibility:hidden}
+.theme-card.sel .theme-name .tick{visibility:visible}
+/* Мини-макет темы: полоска-заголовок, две строки, три точки-состояния */
+.theme-mini{border-radius:var(--radius-ctl);overflow:hidden;border:1px solid var(--line)}
+.theme-mini .tm-bar{height:14px;display:flex;align-items:center;gap:3px;padding:0 5px}
+.theme-mini .tm-body{padding:6px 5px;display:flex;flex-direction:column;gap:4px}
+.theme-mini .tm-line{height:5px;border-radius:var(--radius-box)}
+.theme-mini .tm-dots{display:flex;gap:3px;margin-top:2px}
+.theme-mini .tm-dot{width:7px;height:7px;border-radius:50%}
+.density-seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius-ctl);
+  overflow:hidden}
+.density-seg button{background:var(--panel);border:0;border-right:1px solid var(--line);
+  padding:var(--btn-sm-py) 14px;min-height:var(--btn-sm-h);cursor:pointer;color:var(--muted);
+  font-weight:600;font-size:var(--fs-sm)}
+.density-seg button:last-child{border-right:0}
+.density-seg button:hover{background:var(--line-soft);color:var(--text)}
+.density-seg button.sel{background:var(--accent-soft);color:var(--accent)}
+
+@media (max-width:880px){
+  #app{grid-template-columns:1fr}
+  #sidebar{position:fixed;left:0;top:0;bottom:0;width:280px;z-index:40;
+    transform:translateX(-100%);transition:transform .2s}
+  #sidebar.open{transform:none}
+  .line{grid-template-columns:var(--line-ts) 1fr;gap:6px}
+  .line .who{grid-column:2}
+  .line .txt{grid-column:2}
+}
+
+/* окно «Кто это говорит?» выше на 50 %, список подсказок тоже; пока список
+   открыт, край окна его не обрезает (замечено 13.09) */
+#dlg-speaker{min-height:min(520px,90vh)}
+#dlg-speaker .dlg-body{flex:1}
+#dlg-speaker.ac-open .dlg-body{overflow:visible}
+.ac-list{max-height:min(390px,50vh)}
+.voices-tools{display:flex;flex-wrap:wrap;margin-bottom:10px;gap:8px;align-items:center}
+
+/* иконки внутри текста, не в кнопках (предупреждение о петле, пилюли, плашки):
+   высота строки, иначе значок растягивается на весь блок */
+:is(.warn, .pill, .sa-row, .vbadge, .notice, .cloud-warn) > svg{width:1.1em;height:1.1em;vertical-align:-.18em;flex:none}
+
+/* Столбец имени по самому длинному имени записи (в пределах 260 px): имена из
+   Teams вида «Фамилия Имя» не обрезаются (замечено 13.09). */
+@media (min-width:881px){
+  .transcript .line{grid-template-columns:var(--line-ts) var(--line-who-fit, var(--line-who)) 1fr}
+}
+/* Разделы «Настроек» не уезжают вместе с содержимым: прокручивается только
+   содержимое раздела. Раскладка колонками задана выше, у #dlg-settings. */
+#dlg-settings .tabpane{padding-right:4px}
+
+/* «Настройки → Основное»: звук и видео на диске, срок хранения звука */
+.storage-box{display:flex;flex-direction:column;gap:6px}
+.storage-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.storage-row span{flex:1;min-width:200px;word-break:break-all}
+
+/* Проект и теги записи (17.09): признаки для Obsidian в подвале карточки.
+   Чипсы — уже введённые теги: щелчок дописывает тег в поле. */
+.meta-input{color:var(--text);min-width:170px}
+.tag-chips{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center}
+/* --border такого признака в темах нет: было var(--line), и рамка бралась
+   браузерная (17.09). */
+.tag-chip{border:1px solid var(--line);background:transparent;color:var(--muted);
+  border-radius:var(--radius-ctl);padding:1px 9px;font-size:var(--fs-xs);cursor:pointer;line-height:1.7}
+.tag-chip:hover{color:var(--text);border-color:var(--accent)}
+
+/* «Связать с» (17.09): окно множественного выбора заметок сейфа */
+.link-chip{border-style:dashed}
+.links-list{margin-top:6px;max-height:320px;overflow-y:auto;border:1px solid var(--line);
+  border-radius:var(--radius-box);padding:4px;display:flex;flex-direction:column;gap:1px}
+.link-row{display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:var(--radius-ctl);
+  font-size:var(--fs-sm);cursor:pointer}
+.link-row:hover{background:var(--line-soft)}
+.link-row input{flex:none;align-self:center}
+.link-title{flex:none;font-weight:500}
+.link-row .muted{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Вычёркивание пунктов документа (17.09): щелчок по строке убирает её из заметки */
+.minutes-text .doc-line{display:block;border-radius:var(--radius-ctl);padding:0 3px;margin:0 -3px}
+.minutes-text .doc-line[data-i]{cursor:pointer}
+.minutes-text .doc-line[data-i]:hover{background:var(--line-soft)}
+.minutes-text .doc-line.dropped{text-decoration:line-through;opacity:.45}
+.minutes-text .doc-line.fixed{cursor:default}
+.minutes-foot{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+
+/* Отправка задач в Todoist (17.09): список с галочками перед отправкой */
+.tasks-panel{margin-top:10px;border:1px solid var(--line);border-radius:var(--radius-box);
+  padding:10px;background:var(--panel-2);display:flex;flex-direction:column;gap:8px}
+.tasks-list{max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.task-row{display:flex;align-items:flex-start;gap:8px;padding:3px 4px;border-radius:var(--radius-ctl);
+  font-size:var(--fs-sm);cursor:pointer}
+.task-row:hover{background:var(--line-soft)}
+.task-row.sent{opacity:.55;cursor:default}
+.task-row input{margin-top:3px;flex:none}
+.task-text{flex:1}
+.warn-line{color:var(--warn,#b45309)}
+.err-line{color:var(--rec,#b42318)}

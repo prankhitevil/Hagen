@@ -1,0 +1,41 @@
+# Журнал версий хранит только КОД и документы.
+# Тяжёлое и личное сюда не попадает: модели, записи, окружение, секреты.
+
+# окружение и встроенные программы — ставятся установщиком
+.venv/
+python/
+ffmpeg/
+
+# модели — гигабайты, качаются заново
+models/
+
+# записи совещаний, журнал и копии — личные данные
+data/
+logs/
+_backup/
+
+# секреты: токен HuggingFace и ключи сервисов
+settings.json
+hf_token.txt
+*.env
+
+__pycache__/
+*.pyc
+
+# тесты: код и образцы звука, без результатов прогонов и сырых проб
+tests/*
+!tests/*.py
+!tests/example.wav
+!tests/meeting.wav
+!tests/multi.wav
+!tests/english.wav
+!tests/mic_test.wav
+!tests/meeting_video.mp4
+!tests/meeting_plan.json
+!tests/mic_test_plan.json
+
+# Локальные заметки, черновики и проверочные списки — только на этой машине
+CLAUDE.local.md
+Claude outputs/
+КАК УСТАНОВИТЬ.txt
+tools/mirror_check.local.txt

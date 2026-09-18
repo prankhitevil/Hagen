@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="themes.css">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="preview.css">
+  <style>
+    body{margin:0;background:#e9edf3;font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:#14181f}
+    a{color:#2f6feb;text-decoration:none}
+    a:hover{color:#1d54c4;text-decoration:underline}
+  </style>
+</helmet>
+
+<div style="max-width:1180px;margin:0 auto;padding:22px 20px 60px">
+
+  <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+    <h1 style="margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em">Hagen — темы и плотность</h1>
+    <span style="font-size:13px;color:#5c6573">превью собрано на тех самых themes.css и app.css, что лежат в этой папке</span>
+  </div>
+  <p style="margin:0 0 20px;font-size:13px;color:#5c6573;max-width:760px;text-wrap:pretty">
+    Красный — идёт запись, янтарный — вопрос, зелёный — готово: смысл одинаков во всех четырёх темах.
+    Окно ниже — 900×600, минимальный размер.</p>
+
+  <!-- ------------------------------------------------ четыре темы рядом -->
+  <h2 style="margin:0 0 10px;font-size:15px;font-weight:700">Четыре темы</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(564px,1fr));gap:16px;margin-bottom:34px">
+    <sc-for list="{{ themes }}" as="t" hint-placeholder-count="4">
+      <div>
+        <div style="width:564px;max-width:100%;height:352px;overflow:hidden;border-radius:12px">
+          <div class="p-frame" data-theme="{{ t.id }}" data-density="compact"
+               style="width:900px;height:560px;transform:scale(.627);transform-origin:top left">
+            <div class="p-title"><span class="p-dots"><i></i><i></i><i></i></span> Hagen — запись и расшифровка совещаний</div>
+            <div class="p-app" style="height:526px">
+              <div class="p-sidebar">
+                <div class="side-head">
+                  <div class="side-title">ЗАПИСИ</div>
+                  <button class="icon-btn gear-btn" type="button" aria-label="Настройки">
+                    <svg aria-hidden="true"><use href="icons.svg#ic-gear"></use></svg></button>
+                </div>
+                <div class="mode-row">
+                  <button class="mode-btn active" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-mic"></use></svg> Запись</button>
+                  <button class="mode-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-video"></use></svg> Видео</button>
+                </div>
+                <button class="primary wide" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-plus"></use></svg> Новая заметка</button>
+                <div class="rec-list">
+                  <div class="rec-item active">
+                    <div class="rec-item-title"><span class="nm">Запись 13.09 09:09</span></div>
+                    <div class="rec-item-sub"><span>Встречи · сегодня, 09:09</span><span>00:01:23</span>
+                      <span class="pill rec">пишется</span></div>
+                  </div>
+                  <div class="rec-item">
+                    <div class="rec-item-title"><span class="nm">Запись 13.09 08:56</span></div>
+                    <div class="rec-item-sub"><span>Встречи · сегодня, 08:56</span><span>00:04:23</span>
+                      <span class="pill ok">говорящие</span></div>
+                  </div>
+                  <div class="rec-item">
+                    <div class="rec-item-title"><span class="nm">Подпроцессы 1С — Meeting Recording</span></div>
+                    <div class="rec-item-sub"><span>Встречи · вчера, 21:49</span>
+                      <span class="pill work">размечаю ~4 мин</span></div>
+                  </div>
+                </div>
+                <div class="side-foot">
+                  <div class="tiny muted">модель загружается…</div>
+                  <div class="tiny muted">Всё распознаётся на этом компьютере</div>
+                </div>
+              </div>
+              <div class="p-main">
+                <div class="rec-head">
+                  <div class="rec-head-line">
+                    <input class="title-input" type="text" value="Запись 13.09 09:09" readonly>
+                    <div class="rec-meta">сегодня, 09:09 <span class="dot">·</span> 00:01:23</div>
+                  </div>
+                  <div class="rec-head-line2">
+                    <label class="inline">Режим <select><option>Микрофон + звук звонка</option></select></label>
+                    <span class="badge-rec">● ИДЁТ ЗАПИСЬ РАЗГОВОРА</span>
+                  </div>
+                </div>
+                <div class="controls">
+                  <div class="ctl-row">
+                    <div class="rec-toggle">
+                      <button class="stop-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-stop"></use></svg> Стоп</button>
+                    </div>
+                    <div class="meters">
+                      <div class="meter-row"><span class="meter-label">Микрофон</span>
+                        <select class="dev-select"><option>Динамик телефона (Brio 500)</option></select>
+                        <div class="meter"><div class="meter-fill" style="width:46%"></div></div></div>
+                      <div class="meter-row"><span class="meter-label">Собеседники</span>
+                        <select class="dev-select"><option>рекомендованное</option></select>
+                        <div class="meter"><div class="meter-fill far" style="width:22%"></div></div></div>
+                    </div>
+                  </div>
+                  <div class="ctl-row2">
+                    <label class="inline"><input type="checkbox" checked="{{ yes }}"> писать собеседников</label>
+                    <span class="warn"><svg aria-hidden="true" style="width:1em;height:1em;vertical-align:-.1em"><use href="icons.svg#ic-warn"></use></svg>
+                      В петлю попадает <b>весь</b> звук выбранного устройства</span>
+                  </div>
+                </div>
+                <div class="draft"><span class="draft-label">ЧЕРНОВИК</span>
+                  <span class="draft-text">…и тогда спецификация приходит уже согласованной</span></div>
+                <div class="transcript" style="max-height:none;min-height:150px">
+                  <div class="line me"><span class="ts">00:00</span><span class="who">Иван Петров</span>
+                    <span class="txt">Давайте начнём с закупочных подпроцессов.</span></div>
+                  <div class="line them"><span class="ts">00:12</span><span class="who c2">Алексей Одинцов</span>
+                    <span class="txt">Спецификация формируется в документообороте как первоисточник.</span></div>
+                  <div class="line them"><span class="ts">00:31</span><span class="who">Участник<span class="ask">имя?</span></span>
+                    <span class="txt">А вложения тогда где лежат?</span></div>
+                  <div class="line them"><span class="ts">00:44</span><span class="who c1">Anton Kozin</span>
+                    <span class="txt">В ДО, вебсервис конвертирует превью на лету.</span></div>
+                </div>
+                <div class="footer-bar">
+                  <div class="fb-row">
+                    <label class="inline">Категория <select><option>Встречи</option></select></label>
+                    <button class="ghost small" type="button">Сохранить стенограмму</button>
+                    <span class="fb-spacer"></span>
+                    <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-copy"></use></svg> Копировать</button>
+                  </div>
+                  <div class="fb-row">
+                    <div class="fb-group">
+                      <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+                      <span class="tiny muted ok-note" style="padding:2px 7px;border-radius:12px">авторазметка ✓</span>
+                    </div>
+                    <span class="fb-sep"></span>
+                    <div class="fb-group">
+                      <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-doc"></use></svg> Сделать документ</button>
+                    </div>
+                    <button class="danger small p-del" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px">
+          <b style="font-size:14px">{{ t.name }}</b>
+          <span style="font-size:12px;color:#5c6573">{{ t.note }}</span>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- ------------------------------------------------ большое окно 900×600 -->
+  <h2 style="margin:0 0 10px;font-size:15px;font-weight:700">Экраны</h2>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+    <div>
+      <div style="font-size:12px;color:#5c6573;margin-bottom:5px">Тема</div>
+      <div style="display:flex;gap:6px">
+        <sc-for list="{{ themes }}" as="t" hint-placeholder-count="4">
+          <button type="button" onClick="{{ pickTheme }}" data-id="{{ t.id }}"
+            style="border:1px solid #cfd6e0;background:#fff;border-radius:8px;padding:7px 13px;font:600 13px/1 inherit;cursor:pointer;color:#14181f"
+            style-hover="background:#f1f4f9">{{ t.name }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#5c6573;margin-bottom:5px">Плотность</div>
+      <div style="display:flex;gap:6px">
+        <sc-for list="{{ densities }}" as="d" hint-placeholder-count="3">
+          <button type="button" onClick="{{ pickDensity }}" data-id="{{ d.id }}"
+            style="border:1px solid #cfd6e0;background:#fff;border-radius:8px;padding:7px 13px;font:600 13px/1 inherit;cursor:pointer;color:#14181f"
+            style-hover="background:#f1f4f9">{{ d.name }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <div style="flex:1;min-width:260px">
+      <div style="font-size:12px;color:#5c6573;margin-bottom:5px">Экран</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <sc-for list="{{ screens }}" as="s" hint-placeholder-count="8">
+          <button type="button" onClick="{{ pickScreen }}" data-id="{{ s.id }}"
+            style="border:1px solid #cfd6e0;background:#fff;border-radius:8px;padding:7px 11px;font:500 12.5px/1 inherit;cursor:pointer;color:#14181f"
+            style-hover="background:#f1f4f9">{{ s.name }}</button>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  <div style="font-size:12.5px;color:#5c6573;margin-bottom:10px">
+    Сейчас: <b>{{ themeName }}</b> · <b>{{ densityName }}</b> · {{ screenName }}</div>
+
+  <div style="overflow:auto;padding-bottom:6px">
+    <div class="p-frame" data-theme="{{ theme }}" data-density="{{ density }}" data-screen-label="Окно 900×600"
+         style="width:900px;height:600px">
+      <div class="p-title"><span class="p-dots"><i></i><i></i><i></i></span> Hagen — запись и расшифровка совещаний</div>
+      <div class="p-app" style="height:566px">
+
+        <div class="p-sidebar">
+          <div class="side-head">
+            <div class="side-title">{{ sideTitle }}</div>
+            <button class="icon-btn gear-btn" type="button" aria-label="Настройки">
+              <svg aria-hidden="true"><use href="icons.svg#ic-gear"></use></svg></button>
+          </div>
+          <div class="mode-row">
+            <button class="mode-btn" type="button" data-mode-active="{{ recActive }}"><svg aria-hidden="true"><use href="icons.svg#ic-mic"></use></svg> Запись</button>
+            <button class="mode-btn" type="button" data-mode-active="{{ videoActive }}"><svg aria-hidden="true"><use href="icons.svg#ic-video"></use></svg> Видео</button>
+          </div>
+          <sc-if value="{{ isRecMode }}" hint-placeholder-val="{{ true }}">
+            <button class="primary wide" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-plus"></use></svg> Новая заметка</button>
+          </sc-if>
+          <div class="rec-list">
+            <sc-for list="{{ recs }}" as="r" hint-placeholder-count="3">
+              <div class="rec-item" data-active="{{ r.active }}">
+                <div class="rec-item-title"><span class="nm">{{ r.title }}</span></div>
+                <div class="rec-item-sub"><span>{{ r.sub }}</span><span>{{ r.dur }}</span></div>
+                <div class="rec-item-sub"><span class="pill" data-pill="{{ r.pillKind }}">{{ r.pill }}</span></div>
+              </div>
+            </sc-for>
+          </div>
+          <div class="jobs-panel">
+            <div class="jobs-title">В РАБОТЕ</div>
+            <div class="job">
+              <div class="job-title"><span>Разметка говорящих — Запись 13.09 08:56</span>
+                <button class="icon-btn job-stop" type="button" aria-label="Остановить">
+                  <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+              <div class="bar"><div class="bar-fill" style="width:62%"></div></div>
+              <div class="job-note">62%, осталось ~3 мин — сравниваю голоса</div>
+            </div>
+          </div>
+          <div class="side-foot">
+            <div class="tiny muted">GigaAM готова · Claude CLI найден</div>
+            <div class="tiny muted">Всё распознаётся на этом компьютере</div>
+          </div>
+        </div>
+
+        <div class="p-main">
+
+          <!-- готов к записи -->
+          <sc-if value="{{ isIdle }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line">
+                  <input class="title-input" type="text" placeholder="Нажмите «Старт», чтобы начать запись" readonly>
+                  <div class="rec-meta"><span class="dot">·</span> 00:00:00</div>
+                </div>
+                <div class="rec-head-line2">
+                  <label class="inline">Режим <select><option>Микрофон + звук звонка</option><option>Только микрофон</option></select></label>
+                </div>
+              </div>
+              <div class="controls">
+                <div class="ctl-row">
+                  <div class="rec-toggle">
+                    <button class="rec-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-dot-rec"></use></svg> Старт</button>
+                  </div>
+                  <div class="meters">
+                    <div class="meter-row"><span class="meter-label">Микрофон</span>
+                      <select class="dev-select"><option>Динамик телефона (Brio 500) — устройство по умолчанию</option></select>
+                      <div class="meter"><div class="meter-fill" style="width:0"></div></div></div>
+                    <div class="meter-row"><span class="meter-label">Собеседники</span>
+                      <select class="dev-select"><option>рекомендованное</option></select>
+                      <div class="meter"><div class="meter-fill far" style="width:0"></div></div></div>
+                  </div>
+                </div>
+                <div class="ctl-row2">
+                  <label class="inline"><input type="checkbox" checked="{{ yes }}"> писать собеседников</label>
+                  <span class="warn"><svg aria-hidden="true" style="width:1em;height:1em;vertical-align:-.1em"><use href="icons.svg#ic-warn"></use></svg>
+                    В петлю попадает <b>весь</b> звук выбранного устройства: вместе с голосами запишутся уведомления и музыка.</span>
+                  <button class="ghost small" type="button">Проверить устройства</button>
+                </div>
+              </div>
+              <div class="transcript">
+                <div class="tr-empty">
+                  <div class="empty-icon"><svg aria-hidden="true"><use href="icons.svg#ic-mic"></use></svg></div>
+                  <h3 style="margin:8px 0 4px">Готов к записи</h3>
+                  <p>Нажмите <b>«Старт»</b>, чтобы начать, или перетащите видео- либо аудиофайл.</p>
+                  <div class="caps" style="max-width:560px;margin:16px auto 0">
+                    <div>Распознавание речи: <b>локально, GigaAM</b></div>
+                    <div>Разметка говорящих: <b>готова</b></div>
+                    <div>Протокол: <b>Claude CLI найден</b></div>
+                    <div>Замечать звонки: <b>включено</b></div>
+                    <div>Хранилище: <span class="path-val" style="display:inline-block;max-width:340px;vertical-align:bottom">C:\Users\Иван\Documents\Obsidian\Meetings</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="footer-bar">
+                <div class="fb-row">
+                  <label class="inline">Категория <select><option>Встречи</option></select></label>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-plus"></use></svg> новая</button>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-minus"></use></svg> убрать</button>
+                  <button class="primary" type="button" disabled="{{ yes }}">Сохранить стенограмму</button>
+                  <span class="fb-spacer"></span>
+                  <button class="ghost small" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-copy"></use></svg> Копировать</button>
+                  <button class="ghost small" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-fold"></use></svg> Свернуть</button>
+                </div>
+                <div class="fb-row">
+                  <div class="fb-group">
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+                    <span class="tiny muted" style="padding:2px 7px;border-radius:12px;background:var(--line-soft)">авторазметка выключена</span>
+                  </div>
+                  <span class="fb-sep"></span>
+                  <div class="fb-group">
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-doc"></use></svg> Сделать документ</button>
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-refine"></use></svg> Перечитать точнее</button>
+                  </div>
+                  <button class="danger small p-del" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- идёт запись: блок устройств свёрнут -->
+          <sc-if value="{{ isLive }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line">
+                  <input class="title-input" type="text" value="Запись 13.09 09:09" readonly>
+                  <div class="rec-meta">сегодня, 09:09 <span class="dot">·</span> <span id="rec-duration">00:01:23</span></div>
+                </div>
+                <div class="rec-head-line2">
+                  <label class="inline">Режим <select disabled="{{ yes }}"><option>Микрофон + звук звонка</option></select></label>
+                  <span class="badge-rec">● ИДЁТ ЗАПИСЬ РАЗГОВОРА</span>
+                  <span class="badge">говорящие размечаются после «Стоп»</span>
+                </div>
+              </div>
+              <div class="controls p-folded">
+                <div class="ctl-summary">
+                  <div class="rec-toggle">
+                    <button class="stop-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-stop"></use></svg> Стоп</button>
+                  </div>
+                  <span>Микрофон</span><div class="meter"><div class="meter-fill" style="width:52%"></div></div>
+                  <span>Собеседники</span><div class="meter"><div class="meter-fill far" style="width:28%"></div></div>
+                  <span class="tiny muted">Brio 500 · петля вывода</span>
+                  <button class="icon-btn fold-btn" type="button" aria-label="Показать выбор устройств">
+                    <svg aria-hidden="true"><use href="icons.svg#ic-unfold"></use></svg></button>
+                </div>
+                <div class="ctl-row"></div>
+                <div class="ctl-row2"></div>
+              </div>
+              <div class="draft">
+                <span class="draft-label">ЧЕРНОВИК</span>
+                <span class="draft-text">…то есть маппинг реквизитов мы отдадим со своей стороны</span>
+              </div>
+              <div class="transcript" style="max-height:236px">
+                <div class="line me"><span class="ts">00:00</span><span class="who">Иван Петров</span>
+                  <span class="txt">Давайте начнём с закупочных подпроцессов.</span></div>
+                <div class="line them"><span class="ts">00:12</span><span class="who c2">Алексей Одинцов</span>
+                  <span class="txt">Спецификация формируется в документообороте как первоисточник, там же согласование.</span></div>
+                <div class="line them"><span class="ts">00:31</span><span class="who">Участник<span class="ask">имя?</span></span>
+                  <span class="txt">А вложения тогда где лежат?</span></div>
+                <div class="line them"><span class="ts">00:44</span><span class="who c1">Anton Kozin</span>
+                  <span class="txt">В ДО. Вебсервис конвертирует превью на лету — на больших объёмах бывает таймаут.</span></div>
+                <div class="line me"><span class="ts">01:02</span><span class="who">Иван Петров</span>
+                  <span class="txt">Значит, переходим на спецификации с тремя-четырьмя файлами.</span></div>
+              </div>
+              <div class="footer-bar">
+                <div class="fb-row">
+                  <label class="inline">Категория <select><option>Встречи</option></select></label>
+                  <button class="primary" type="button">Сохранить стенограмму</button>
+                  <span class="tiny muted">сохранится после «Стоп»</span>
+                  <span class="fb-spacer"></span>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-copy"></use></svg> Копировать</button>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-fold"></use></svg> Свернуть</button>
+                </div>
+                <div class="fb-row">
+                  <div class="fb-group">
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+                    <span class="tiny muted ok-note" id="auto-diarize-note">авторазметка ✓</span>
+                  </div>
+                  <span class="fb-sep"></span>
+                  <div class="fb-group">
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-doc"></use></svg> Сделать документ</button>
+                    <button class="action" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-refine"></use></svg> Перечитать точнее</button>
+                  </div>
+                  <button class="danger small p-del" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- готовая запись: стенограмма, пути, документ -->
+          <sc-if value="{{ isDone }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line">
+                  <input class="title-input" type="text" value="Подпроцессы 1С — Meeting Recording" readonly>
+                  <div class="rec-meta">сегодня, 11:27 <span class="dot">·</span> <span id="rec-duration">01:36:59</span></div>
+                </div>
+                <div class="rec-head-line2">
+                  <span class="badge">говорящие размечены</span>
+                  <span class="pill ok">✓ протокол собран</span>
+                </div>
+              </div>
+              <div class="speaker-alerts">
+                <div class="sa-row"><svg aria-hidden="true" style="width:1em;height:1em;vertical-align:-.15em"><use href="icons.svg#ic-people"></use></svg>
+                  Под именем «Переговорка 4» говорили 3 разных голоса — похоже на переговорку. Голос этой учётки не запоминаю.
+                  <button class="primary small" type="button">Разделить голоса</button></div>
+                <div class="sa-row sa-done">Ваша дорожка разделена на 2 голоса — щёлкните по имени в стенограмме, чтобы подписать.
+                  <button class="ghost small" type="button">Отменить разделение</button></div>
+              </div>
+              <div class="transcript" style="max-height:206px">
+                <div class="line them"><span class="ts">00:36</span><span class="who c2">Алексей Одинцов</span>
+                  <span class="txt">Спецификация — это документ, договор является её реквизитом.</span></div>
+                <div class="line them"><span class="ts">00:39</span><span class="who">Голос 3<span class="ask">имя?</span></span>
+                  <span class="txt">А ПКО тогда отдельным процессом?</span></div>
+                <div class="sugg-inline">Похоже на «Куренков Сергей» (совпадение 62%) — это он?
+                  <button class="ghost small" type="button">Да</button>
+                  <button class="ghost small" type="button">Нет, другой</button></div>
+                <div class="line me"><span class="ts">00:41</span><span class="who">Иван Петров</span>
+                  <span class="txt">Да, отдельным. И к нему BidZaar подвязан.</span></div>
+                <div class="line them"><span class="ts">00:48</span><span class="who c1">Anton Kozin</span>
+                  <span class="txt">При бесшовной интеграции хранилищем является ДО.</span></div>
+              </div>
+              <div class="footer-bar">
+                <div class="fb-row">
+                  <label class="inline">Категория <select><option>Встречи</option></select></label>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-plus"></use></svg> новая</button>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-minus"></use></svg> убрать</button>
+                  <button class="primary" type="button">Сохранить стенограмму</button>
+                  <span class="tiny muted">сохранено</span>
+                  <span class="fb-spacer"></span>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-copy"></use></svg> Копировать</button>
+                  <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-fold"></use></svg> Свернуть</button>
+                </div>
+                <div class="fb-row">
+                  <div class="fb-group">
+                    <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+                    <span class="tiny muted ok-note" id="auto-diarize-note">авторазметка ✓</span>
+                    <label class="inline tiny" id="room-field"><input type="checkbox"> со мной в комнате были ещё люди</label>
+                  </div>
+                  <span class="fb-sep"></span>
+                  <div class="fb-group">
+                    <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-doc"></use></svg> Сделать документ</button>
+                    <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-refine"></use></svg> Перечитать точнее</button>
+                  </div>
+                  <button class="danger small p-del" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+                </div>
+                <div class="paths">
+                  <div class="path-row"><span class="path-title">Видео</span>
+                    <span class="path-val">C:\Users\Иван\Videos\Hagen\Планёрка 13.09\video.mp4</span>
+                    <button class="ghost icon-only" type="button" title="Открыть папку" aria-label="Открыть папку">
+                      <svg aria-hidden="true"><use href="icons.svg#ic-folder"></use></svg></button></div>
+                  <div class="path-row"><span class="path-title">Текстовая копия</span>
+                    <span class="path-val">C:\Users\Иван\Videos\Hagen\Планёрка 13.09\transcript.txt</span>
+                    <button class="ghost icon-only" type="button" title="Открыть папку" aria-label="Открыть папку">
+                      <svg aria-hidden="true"><use href="icons.svg#ic-folder"></use></svg></button></div>
+                  <div class="path-row"><span class="path-title">Заметка в хранилище</span>
+                    <span class="path-val">…\Obsidian\Meetings\Встречи\2026-09-13 Планёрка.md</span>
+                    <button class="ghost icon-only" type="button" title="Открыть папку" aria-label="Открыть папку">
+                      <svg aria-hidden="true"><use href="icons.svg#ic-folder"></use></svg></button></div>
+                </div>
+              </div>
+              <div class="minutes">
+                <div class="minutes-head">
+                  <span class="doc-tabs">
+                    <button class="doc-tab active" type="button">Саммари встречи</button>
+                    <button class="doc-tab" type="button">Протокол</button>
+                    <button class="doc-tab" type="button">Вопросы и ответы</button>
+                  </span>
+                  <button class="ghost small" type="button">Копировать</button>
+                  <button class="ghost small" type="button">Свернуть</button>
+                </div>
+                <div class="minutes-text" style="max-height:120px">Рабочее обсуждение архитектуры закупочных подпроцессов при переводе их в 1С:Документооборот с бесшовной интеграцией. Участники разбирают, где хранятся и обрабатываются спецификации, как устроены ЗКП и ПКО.</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- Видео: файлы с диска -->
+          <sc-if value="{{ isVideo }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line"><h2 class="video-title">Обработка готовых видео и аудио</h2></div>
+                <div class="tiny muted">Файл или ссылка превращается в такую же запись, как с микрофона: с текстом,
+                  говорящими и выгрузкой в Obsidian. Если у видео есть готовые субтитры, распознавание не запускается вовсе.</div>
+              </div>
+              <div class="controls">
+                <div class="src-row">
+                  <button class="src-btn active" type="button">Файлы с диска</button>
+                  <button class="src-btn" type="button">Ссылка на видео</button>
+                  <button class="src-btn" type="button">GetCourse</button>
+                  <button class="src-btn" type="button">SharePoint и Teams</button>
+                  <button class="src-btn" type="button">Сайт по паролю</button>
+                </div>
+                <div class="dropzone">Перетащите сюда видео, аудио или готовые субтитры (.vtt, .srt)</div>
+                <div class="file-list">
+                  <div class="file-item"><span class="file-name">Подпроцессы 1С-20260819_132941UTC-Meeting Recording.mp4</span>
+                    <span class="tiny muted">1,4 ГБ</span>
+                    <button class="icon-btn" type="button" aria-label="Убрать из списка">
+                      <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+                  <div class="file-item"><span class="file-name">GPT-6 Astra разбор 35+ функций.vtt</span>
+                    <span class="tiny muted">субтитры, распознавание не нужно</span>
+                    <button class="icon-btn" type="button" aria-label="Убрать из списка">
+                      <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+                </div>
+                <div class="file-row">
+                  <button class="primary" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-play"></use></svg> Обработать</button>
+                  <button class="ghost small" type="button">Очистить список</button>
+                  <span class="tiny muted">2 файла · с диска ничего не удаляется</span>
+                </div>
+              </div>
+              <div class="controls">
+                <div class="video-opts">
+                  <label class="field">Тип записи <select><option>Встреча — несколько участников</option></select></label>
+                  <label class="field">Что сохранить <select><option>Видео со звуком</option></select></label>
+                  <label class="field">Язык записи <select><option>Русский</option></select></label>
+                  <label class="field">Где распознавать <select><option>На этом компьютере (бесплатно)</option></select></label>
+                </div>
+                <div class="tiny muted">Размечу говорящих, сделаю саммари встречи.</div>
+                <div class="video-checks">
+                  <label class="inline"><input type="checkbox" checked="{{ yes }}"> брать готовые субтитры, если есть</label>
+                  <label class="inline"><input type="checkbox" checked="{{ yes }}"> и автоматические субтитры YouTube тоже</label>
+                  <label class="inline"><input type="checkbox"> только скачать, не распознавать</label>
+                  <label class="inline"><input type="checkbox"> сразу сделать документ</label>
+                </div>
+                <div class="tiny muted">Видео и текстовые копии складываются в
+                  <span class="path-val" style="display:inline-block;max-width:320px;vertical-align:bottom">C:\Users\Иван\Videos\Hagen</span></div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- Видео: SharePoint -->
+          <sc-if value="{{ isSp }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line"><h2 class="video-title">Обработка готовых видео и аудио</h2></div>
+                <div class="tiny muted">Записи встреч Teams из SharePoint и OneDrive — поиск по месяцам.</div>
+              </div>
+              <div class="controls">
+                <div class="src-row">
+                  <button class="src-btn" type="button">Файлы с диска</button>
+                  <button class="src-btn" type="button">Ссылка на видео</button>
+                  <button class="src-btn" type="button">GetCourse</button>
+                  <button class="src-btn active" type="button">SharePoint и Teams</button>
+                  <button class="src-btn" type="button">Сайт по паролю</button>
+                </div>
+                <div class="tiny muted">Вход в Microsoft не выполнен. Поиск записей без него не работает.</div>
+                <div class="box">
+                  <div class="tiny">1. Откройте ссылку: <a href="#">microsoft.com/devicelogin</a></div>
+                  <div class="sp-code-row">2. Введите код: <b class="sp-code">F7K2-9QLD</b>
+                    <button class="ghost small" type="button">Копировать</button></div>
+                  <div class="tiny muted">Код живёт 15 минут. Токены остаются только в памяти программы.</div>
+                </div>
+                <div class="btn-row">
+                  <button class="ghost small" type="button">Войти в Microsoft</button>
+                </div>
+                <div class="linkrow"><input type="text" placeholder="ключевые слова: часть названия встречи"></div>
+                <div class="sp-filters">
+                  <label>Год <input type="number" value="2026"></label>
+                  <label>месяц с <select><option>январь</option></select></label>
+                  <label>по <select><option>сентябрь</option></select></label>
+                  <label class="inline"><input type="checkbox" checked="{{ yes }}"> только записи встреч</label>
+                  <button class="primary" type="button">Найти</button>
+                </div>
+                <div class="sp-head">
+                  <span class="tiny">найдено 14 · новых 6</span>
+                  <button class="ghost small" type="button">Выбрать все новые</button>
+                  <button class="ghost small" type="button">Снять все</button>
+                </div>
+                <div class="sp-results">
+                  <div class="sp-item"><input type="checkbox" checked="{{ yes }}"><span class="sp-marks">🎬 📝</span>
+                    <span class="sp-name">Подпроцессы 1С — 19.08, 01:36</span><span class="tiny muted">1,4 ГБ</span></div>
+                  <div class="sp-item done"><input type="checkbox"><span class="sp-marks">🎬 ✓</span>
+                    <span class="sp-name">ИТАН-АКП (Закупки, договоры, УБИ) — 12.08, 01:24</span><span class="tiny muted">обработана</span></div>
+                  <div class="sp-item"><input type="checkbox" checked="{{ yes }}"><span class="sp-marks">📝</span>
+                    <span class="sp-name">Приём УПД в ДО — 05.08, 00:52</span><span class="tiny muted">есть расшифровка Teams</span></div>
+                </div>
+                <div class="btn-row sp-foot">
+                  <button class="primary" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-play"></use></svg> Обработать выбранные</button>
+                  <button class="danger small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-stop"></use></svg> Остановить</button>
+                  <span class="tiny muted">2 из 2 · по одной, друг за другом</span>
+                </div>
+                <div class="tiny muted">🎬 — есть видео · 📝 — есть расшифровка Teams · ✓ — уже обрабатывалась.</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- фон под окнами -->
+          <sc-if value="{{ isDialog }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div class="rec-head">
+                <div class="rec-head-line">
+                  <input class="title-input" type="text" value="Подпроцессы 1С — Meeting Recording" readonly>
+                  <div class="rec-meta">сегодня, 11:27 <span class="dot">·</span> 01:36:59</div>
+                </div>
+                <div class="rec-head-line2"><span class="badge">говорящие размечены</span></div>
+              </div>
+              <div class="transcript" style="max-height:340px">
+                <div class="line them"><span class="ts">00:36</span><span class="who c2">Алексей Одинцов</span>
+                  <span class="txt">Спецификация — это документ, договор является её реквизитом.</span></div>
+                <div class="line them"><span class="ts">00:39</span><span class="who">Голос 3<span class="ask">имя?</span></span>
+                  <span class="txt">А ПКО тогда отдельным процессом?</span></div>
+                <div class="line me"><span class="ts">00:41</span><span class="who">Иван Петров</span>
+                  <span class="txt">Да, отдельным.</span></div>
+              </div>
+            </div>
+          </sc-if>
+
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------------- окна -->
+      <sc-if value="{{ isView }}" hint-placeholder-val="{{ false }}">
+        <div class="p-dlgwrap">
+          <div class="overlay"></div>
+          <div class="dialog" style="left:50%;top:20px;transform:translateX(-50%);width:660px">
+            <div class="dlg-head"><b>Настройки</b>
+              <button class="icon-btn" type="button" aria-label="Закрыть">
+                <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+            <div class="dlg-body">
+              <div class="tabs">
+                <button class="tab" type="button">Основное</button>
+                <button class="tab" type="button">Голоса</button>
+                <button class="tab" type="button">Звонки</button>
+                <button class="tab" type="button">Обработка</button>
+                <button class="tab active" type="button">Вид</button>
+                <button class="tab" type="button">Модели</button>
+              </div>
+              <div class="field">Тема</div>
+              <div class="theme-grid">
+                <sc-for list="{{ themes }}" as="t" hint-placeholder-count="4">
+                  <button class="theme-card" type="button" onClick="{{ pickTheme }}" data-id="{{ t.id }}" data-sel="{{ t.sel }}">
+                    <span class="theme-mini" data-mini="{{ t.id }}">
+                      <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+                      <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                        <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+                      </span>
+                    </span>
+                    <span class="theme-name">{{ t.name }}
+                      <svg class="tick" aria-hidden="true" style="width:14px;height:14px"><use href="icons.svg#ic-check"></use></svg></span>
+                  </button>
+                </sc-for>
+              </div>
+              <div class="field">Размер интерфейса</div>
+              <div class="density-seg">
+                <sc-for list="{{ densities }}" as="d" hint-placeholder-count="3">
+                  <button type="button" onClick="{{ pickDensity }}" data-id="{{ d.id }}" data-sel="{{ d.sel }}">{{ d.name }}</button>
+                </sc-for>
+              </div>
+              <div class="tiny muted" style="margin-top:8px">Меняются шрифты, кнопки и отступы. Цвета и функции — нет.</div>
+              <div class="tiny muted" style="margin-top:14px">Красный всегда значит «идёт запись», янтарный — «нужен ответ»,
+                зелёный — «готово»: в любой теме.</div>
+            </div>
+            <div class="dlg-foot">
+              <button class="primary" type="button">Сохранить</button>
+              <button class="ghost" type="button">Отмена</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSpeaker }}" hint-placeholder-val="{{ false }}">
+        <div class="p-dlgwrap">
+          <div class="overlay"></div>
+          <div class="dialog small" style="left:50%;top:40px;transform:translateX(-50%);width:470px">
+            <div class="dlg-head"><b>Кто это говорит?</b>
+              <button class="icon-btn" type="button" aria-label="Закрыть">
+                <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+            <div class="dlg-body">
+              <div class="tiny muted">00:39 · «А ПКО тогда отдельным процессом?» · дорожка собеседников, 14 реплик</div>
+              <label class="field">Имя
+                <span class="ac">
+                  <input type="text" value="Курен" autocomplete="off">
+                  <span class="ac-list">
+                    <span class="ac-item active"><b>Куренков Сергей</b><span class="tiny muted">похож на 62% · 3 образца голоса</span></span>
+                    <span class="ac-item"><b>Куренкова Ольга</b><span class="tiny muted">1 образец голоса</span></span>
+                    <span class="ac-item ac-new"><b>Добавить «Курен»</b><span class="tiny muted">новый человек в базе голосов</span></span>
+                  </span>
+                </span>
+              </label>
+              <div class="tiny muted" id="speaker-picked">Выбран: Куренков Сергей</div>
+              <label class="inline"><input type="checkbox" checked="{{ yes }}"> запомнить голос, чтобы подписывался сам</label>
+              <div class="conflict">
+                <div class="c-text">В этой записи «Куренков Сергей» уже стоит у другого голоса (00:14, 6 реплик).</div>
+                <div class="c-choices">
+                  <label class="inline"><input type="radio" name="c" checked="{{ yes }}"> Это один человек — объединить оба голоса</label>
+                  <label class="inline"><input type="radio" name="c"> Это разные люди — переименовать прежнего</label>
+                  <label class="inline"><input type="radio" name="c"> Оставить как есть, голос не запоминать</label>
+                </div>
+              </div>
+              <div class="tiny muted">Образец голоса уйдёт в базу на этом компьютере и никуда не отправляется.</div>
+              <div class="speaker-split-row">
+                <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-split"></use></svg>
+                  Здесь несколько человек — разделить голоса</button>
+              </div>
+            </div>
+            <div class="dlg-foot">
+              <button class="primary" type="button">Сохранить</button>
+              <button class="ghost" type="button">Отмена</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isVoices }}" hint-placeholder-val="{{ false }}">
+        <div class="p-dlgwrap">
+          <div class="overlay"></div>
+          <div class="dialog" style="left:50%;top:20px;transform:translateX(-50%);width:660px">
+            <div class="dlg-head"><b>Настройки</b>
+              <button class="icon-btn" type="button" aria-label="Закрыть">
+                <svg aria-hidden="true"><use href="icons.svg#ic-x"></use></svg></button></div>
+            <div class="dlg-body">
+              <div class="tabs">
+                <button class="tab" type="button">Основное</button>
+                <button class="tab active" type="button">Голоса</button>
+                <button class="tab" type="button">Звонки</button>
+                <button class="tab" type="button">Обработка</button>
+                <button class="tab" type="button">Вид</button>
+                <button class="tab" type="button">Модели</button>
+              </div>
+              <p class="tiny">База голосов лежит <b>только на этом компьютере</b> и никуда не отправляется.</p>
+              <div class="box dupes"><b>Возможно, это одни и те же люди</b>
+                <div class="dupe">«Куренков Сергей» и «С. Куренков» <span class="tiny muted">— отличается только порядком слов</span>
+                  <button class="ghost small" type="button">Объединить в «Куренков Сергей»</button>
+                  <button class="ghost small" type="button">в «С. Куренков»</button>
+                  <button class="ghost small" type="button">это разные</button></div>
+              </div>
+              <div class="voices">
+                <div class="voice-card">
+                  <div class="voice"><span class="vn">Иван Петров</span>
+                    <span class="vbadge">это вы</span>
+                    <span class="tiny muted">образцов голоса: 12</span>
+                    <button class="ghost small" type="button">свернуть</button></div>
+                  <div class="voice-more">
+                    <div class="tiny">Варианты имени: <span class="alias">Петров Иван <a href="#" title="убрать вариант">×</a></span>
+                      <span class="alias">И. Петров <a href="#" title="убрать вариант">×</a></span></div>
+                    <div class="vsamples">
+                      <div class="vsample">13.09 09:09 · Запись 13.09 09:09 <button class="ghost small" type="button">забыть</button></div>
+                      <div class="vsample odd">12.09 21:49 · Запись 12.09 21:49 · ⚠ не похож на остальные
+                        <button class="ghost small" type="button">забыть</button></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="voice-card">
+                  <div class="voice"><span class="vn">Переговорка 4</span>
+                    <span class="vbadge warn">общее устройство</span>
+                    <span class="tiny muted">голос не запоминается</span>
+                    <button class="ghost small" type="button">подробнее</button></div>
+                </div>
+                <div class="voice-card">
+                  <div class="voice"><span class="vn">Anton Kozin</span>
+                    <span class="tiny muted">образцов голоса: 4</span>
+                    <button class="ghost small" type="button">подробнее</button></div>
+                </div>
+              </div>
+            </div>
+            <div class="dlg-foot">
+              <button class="primary" type="button">Сохранить</button>
+              <button class="ghost" type="button">Отмена</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isToast }}" hint-placeholder-val="{{ false }}">
+        <div class="p-dlgwrap">
+          <div class="notices" style="left:50%;top:14px">
+            <div class="notice">Включаю устройства…</div>
+            <div class="notice ok">Идёт запись: микрофон и собеседники</div>
+          </div>
+          <div class="toast" id="call-toast" style="right:20px;bottom:20px">
+            <div class="toast-body">
+              <div>Начался звонок в Teams — записать разговор?</div>
+              <div class="tiny muted">Встреча «Подпроцессы 1С: закупки» · без ответа через 12 с — «Записать»</div>
+            </div>
+            <div class="toast-actions">
+              <button class="primary small" type="button">Записать</button>
+              <button class="ghost small" type="button">Не сейчас</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------ три плотности рядом -->
+  <h2 style="margin:34px 0 10px;font-size:15px;font-weight:700">Четыре плотности</h2>
+  <p style="margin:0 0 12px;font-size:13px;color:#5c6573;max-width:760px">Меняются шрифт, высота кнопок, шаг сетки
+    и ширина боковой панели. Высота кнопок: 24 / 26 / 32 / 38 px — «Обычно» на 10% ниже прежнего.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+    <sc-for list="{{ densities }}" as="d" hint-placeholder-count="3">
+      <div class="p-frame" data-theme="{{ theme }}" data-density="{{ d.id }}" style="padding:0">
+        <div class="p-title"><span class="p-dots"><i></i><i></i><i></i></span> {{ d.name }} · {{ d.note }}</div>
+        <div style="background:var(--bg);padding:14px">
+          <div class="footer-bar" style="border-radius:var(--radius)">
+            <div class="fb-row">
+              <label class="inline">Категория <select><option>Встречи</option></select></label>
+              <button class="primary" type="button">Сохранить стенограмму</button>
+              <span class="fb-spacer"></span>
+              <button class="ghost small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-copy"></use></svg> Копировать</button>
+            </div>
+            <div class="fb-row">
+              <div class="fb-group">
+                <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+              </div>
+              <span class="fb-sep"></span>
+              <div class="fb-group">
+                <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-refine"></use></svg> Перечитать точнее</button>
+              </div>
+              <button class="danger small p-del" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+            </div>
+          </div>
+          <div class="transcript" style="margin-top:12px;border-top:1px solid var(--line);border-radius:var(--radius);min-height:0;max-height:none">
+            <div class="line me"><span class="ts">00:00</span><span class="who">Иван Петров</span>
+              <span class="txt">Давайте начнём с закупочных подпроцессов.</span></div>
+            <div class="line them"><span class="ts">00:12</span><span class="who c2">Алексей Одинцов</span>
+              <span class="txt">Спецификация формируется в документообороте.</span></div>
+            <div class="line them"><span class="ts">00:31</span><span class="who">Участник<span class="ask">имя?</span></span>
+              <span class="txt">А вложения где лежат?</span></div>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- ------------------------------------------------ кнопки и состояния -->
+  <h2 style="margin:34px 0 10px;font-size:15px;font-weight:700">Кнопки: иерархия и состояния</h2>
+  <div class="p-frame" data-theme="{{ theme }}" data-density="{{ density }}">
+    <div class="p-title"><span class="p-dots"><i></i><i></i><i></i></span> {{ themeName }} · {{ densityName }}</div>
+    <div style="background:var(--bg);padding:18px;display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <span style="display:inline-flex;flex-direction:column;gap:4px">
+          <button class="rec-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-dot-rec"></use></svg> Старт</button>
+          <span style="font:400 var(--fs-xs)/1.2 var(--font);color:var(--muted)">можно записывать</span>
+        </span>
+        <span style="display:inline-flex;flex-direction:column;gap:4px">
+          <button class="rec-btn" type="button" disabled="{{ yes }}"><svg aria-hidden="true"><use href="icons.svg#ic-dot-rec"></use></svg> Старт</button>
+          <span style="font:400 var(--fs-xs)/1.2 var(--font);color:var(--muted)">нельзя: бордовый, темнее</span>
+        </span>
+        <button class="stop-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-stop"></use></svg> Стоп</button>
+        <button class="primary" type="button">Сохранить стенограмму</button>
+        <button class="primary" type="button" disabled="{{ yes }}">Сохранить (нечего)</button>
+        <button class="action" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-doc"></use></svg> Сделать документ</button>
+        <button class="ghost" type="button">Проверить устройства</button>
+        <button class="ghost small" type="button">+ новая</button>
+        <button class="danger small" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-trash"></use></svg> Удалить</button>
+        <button class="ghost icon-only" type="button" title="Открыть папку" aria-label="Открыть папку">
+          <svg aria-hidden="true"><use href="icons.svg#ic-folder"></use></svg></button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <div class="mode-row" style="padding:0;width:260px">
+          <button class="mode-btn active" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-mic"></use></svg> Запись</button>
+          <button class="mode-btn" type="button"><svg aria-hidden="true"><use href="icons.svg#ic-video"></use></svg> Видео</button>
+        </div>
+        <div class="src-row" style="margin:0">
+          <button class="src-btn active" type="button">Файлы с диска</button>
+          <button class="src-btn" type="button">Ссылка на видео</button>
+          <button class="src-btn" type="button">SharePoint и Teams</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <span class="badge-rec">● ИДЁТ ЗАПИСЬ РАЗГОВОРА</span>
+        <span class="badge">говорящие размечены</span>
+        <span class="pill rec">пишется</span>
+        <span class="pill work">размечаю ~4 мин</span>
+        <span class="pill ok">✓ говорящие</span>
+        <span class="warn">янтарный — нужен ответ</span>
+        <span class="tiny muted ok-note" style="padding:2px 7px;border-radius:12px">авторазметка ✓</span>
+      </div>
+      <div style="font:400 var(--fs-xs)/1.4 var(--font);color:var(--muted)">
+        Фокус с клавиатуры виден на всех кнопках: обведите Tab’ом — рамка цвета акцента, одна и та же во всех темах.
+      </div>
+    </div>
+  </div>
+
+  <p style="margin:26px 0 0;font-size:12.5px;color:#5c6573">
+    Файлы к внедрению: <b>themes.css</b>, <b>app.css</b>, <b>icons.svg</b>, иконка приложения (<a href="app-icon-a.svg">А</a>,
+    <a href="app-icon-b.svg">Б</a>, <a href="app-icon-c.svg">В</a>). Описания — 01-colors.md, 03-markup.md, 05-checklist.md, 06-copy.md.
+    <b>preview.css</b> нужен только этому превью.</p>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1220,&quot;height&quot;:900},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;,&quot;warm&quot;,&quot;bright&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Превью&quot;},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;tiny&quot;,&quot;compact&quot;,&quot;normal&quot;,&quot;large&quot;],&quot;default&quot;:&quot;normal&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Превью&quot;},&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;idle&quot;,&quot;live&quot;,&quot;done&quot;,&quot;video&quot;,&quot;sp&quot;,&quot;view&quot;,&quot;speaker&quot;,&quot;voices&quot;,&quot;toast&quot;],&quot;default&quot;:&quot;done&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Превью&quot;}}">
+const THEMES = [
+  { id: 'light',  name: 'Светлая', note: 'развитие текущей: тот же синий, выровненные контрасты' },
+  { id: 'dark',   name: 'Тёмная',  note: 'для вечера и долгих встреч' },
+  { id: 'warm',   name: 'Тёплая',  note: 'бумага и терракота, без синего свечения' },
+  { id: 'bright', name: 'Яркая',   note: 'на тёмной базе, акценты сильнее — но не кислота' },
+];
+const DENSITIES = [
+  { id: 'tiny',    name: 'Мелко',  note: 'кнопки 24 px, текст 12 px' },
+  { id: 'compact', name: 'Плотно', note: 'кнопки 26 px, текст 12,5 px' },
+  { id: 'normal',  name: 'Обычно', note: 'кнопки 32 px, текст 14 px' },
+  { id: 'large',   name: 'Крупно', note: 'кнопки 38 px, текст 15,5 px' },
+];
+const SCREENS = [
+  { id: 'idle',    name: 'Готов к записи' },
+  { id: 'live',    name: 'Идёт запись' },
+  { id: 'done',    name: 'Готовая запись' },
+  { id: 'video',   name: 'Видео' },
+  { id: 'sp',      name: 'SharePoint' },
+  { id: 'view',    name: 'Настройки → Вид' },
+  { id: 'speaker', name: 'Кто это говорит?' },
+  { id: 'voices',  name: 'Настройки → Голоса' },
+  { id: 'toast',   name: 'Звонок и уведомления' },
+];
+const KEY = 'hagen-themes-preview';
+
+class Component extends DCLogic {
+  state = { theme: null, density: null, screen: null };
+
+  componentDidMount() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || '{}');
+      if (s.theme || s.density || s.screen) this.setState(s);
+    } catch (e) { /* первый запуск */ }
+    this.paintStates();
+  }
+
+  save(next) {
+    this.setState(next);
+    try { localStorage.setItem(KEY, JSON.stringify(Object.assign({
+      theme: this.theme(), density: this.density(), screen: this.screen(),
+    }, next))); } catch (e) { /* приватный режим */ }
+  }
+
+  theme()   { return this.state.theme   || this.props.theme   || 'light'; }
+  density() { return this.state.density || this.props.density || 'normal'; }
+  screen()  { return this.state.screen  || this.props.screen  || 'done'; }
+
+  renderVals() {
+    const theme = this.theme(), density = this.density(), screen = this.screen();
+    const dialog = ['view', 'speaker', 'voices', 'toast'].includes(screen);
+    const videoMode = screen === 'video' || screen === 'sp';
+    const mark = (el, on) => { /* состояния кнопок ставим после отрисовки */ };
+
+    // Боковой список подстраивается под режим — как в настоящем окне
+    const recs = videoMode ? [
+      { title: 'Подпроцессы 1С-20260819_132941UTC…', sub: 'Встречи · сегодня, 11:27', dur: '01:36:59', pill: '✓ говорящие', pillKind: 'ok', active: true },
+      { title: 'Обсуждение перехода приёма УПД', sub: 'Встречи · сегодня, 11:26', dur: '00:00:00', pill: 'остановлено', pillKind: '', active: false },
+      { title: 'GPT-6 Astra разбор 35+ функций', sub: 'Заметки · вчера, 21:16', dur: '00:32:22', pill: '✓ говорящие', pillKind: 'ok', active: false },
+    ] : [
+      { title: 'Запись 13.09 09:09', sub: 'Встречи · сегодня, 09:09', dur: '00:01:23', pill: screen === 'live' ? 'пишется' : '✓ говорящие', pillKind: screen === 'live' ? 'rec' : 'ok', active: screen !== 'done' },
+      { title: 'Запись 13.09 08:56', sub: 'Встречи · сегодня, 08:56', dur: '00:04:23', pill: 'размечаю ~3 мин', pillKind: 'work', active: false },
+      { title: 'Подпроцессы 1С — Meeting Recording', sub: 'Встречи · вчера, 21:49', dur: '01:36:59', pill: '✓ говорящие', pillKind: 'ok', active: screen === 'done' || dialog },
+    ];
+
+    const pick = (key) => (e) => {
+      const id = e.currentTarget.getAttribute('data-id');
+      this.save({ [key]: id });
+    };
+
+    return {
+      yes: true,   // логические атрибуты в шаблоне: disabled="{{ yes }}", checked="{{ yes }}"
+      theme, density, screen,
+      themes: THEMES.map((t) => Object.assign({}, t, { sel: t.id === theme })),
+      densities: DENSITIES.map((d) => Object.assign({}, d, { sel: d.id === density })),
+      screens: SCREENS,
+      themeName: (THEMES.find((t) => t.id === theme) || {}).name,
+      densityName: (DENSITIES.find((d) => d.id === density) || {}).name,
+      screenName: (SCREENS.find((s) => s.id === screen) || {}).name,
+      sideTitle: videoMode ? 'ВИДЕО' : 'ЗАПИСИ',
+      isRecMode: !videoMode,
+      recActive: !videoMode,
+      videoActive: videoMode,
+      recs,
+      isIdle: screen === 'idle',
+      isLive: screen === 'live',
+      isDone: screen === 'done',
+      isVideo: screen === 'video',
+      isSp: screen === 'sp',
+      isDialog: dialog,
+      isView: screen === 'view',
+      isSpeaker: screen === 'speaker',
+      isVoices: screen === 'voices',
+      isToast: screen === 'toast',
+      pickTheme: pick('theme'),
+      pickDensity: pick('density'),
+      pickScreen: pick('screen'),
+    };
+  }
+
+  // Классы состояний ставим на уже отрисованные узлы: так разметка в превью
+  // остаётся такой же, как в index.html, без служебных подстановок.
+  componentDidUpdate() { this.paintStates(); }
+  paintStates() {
+    const root = document.querySelector('x-dc') || document;
+    root.querySelectorAll('[data-mode-active]').forEach((el) => {
+      el.classList.toggle('active', el.getAttribute('data-mode-active') === 'true');
+    });
+    root.querySelectorAll('.rec-item[data-active]').forEach((el) => {
+      el.classList.toggle('active', el.getAttribute('data-active') === 'true');
+    });
+    root.querySelectorAll('.pill[data-pill]').forEach((el) => {
+      const k = el.getAttribute('data-pill');
+      el.classList.remove('rec', 'ok', 'work');
+      if (k) el.classList.add(k);
+    });
+    root.querySelectorAll('.theme-card[data-sel]').forEach((el) => {
+      el.classList.toggle('sel', el.getAttribute('data-sel') === 'true');
+    });
+    root.querySelectorAll('.density-seg button[data-sel]').forEach((el) => {
+      el.classList.toggle('sel', el.getAttribute('data-sel') === 'true');
+    });
+  }
+}
+
+</script>
+</body>
+</html>

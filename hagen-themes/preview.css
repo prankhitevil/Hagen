@@ -1,0 +1,61 @@
+/* Только для превью «Hagen — темы.dc.html». В static\ не кладётся.
+   Причина: app.css держит раскладку на id (#app, #sidebar, #main, #live-controls),
+   а в превью таких окон несколько — id не могут повторяться. Здесь те же правила,
+   переписанные на классы, плюс раскраска мини-макетов в переключателе тем. */
+
+.p-app{display:grid;grid-template-columns:var(--side-w) 1fr;height:100%;overflow:hidden;
+  background:var(--bg);color:var(--text);font:var(--fs-base)/var(--lh-base) var(--font)}
+.p-sidebar{background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0}
+.p-main{overflow-y:auto;min-width:0;padding:18px 22px 28px;position:relative}
+.p-frame{border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  box-shadow:0 10px 30px rgba(16,24,40,.14);background:var(--panel);color:var(--text);
+  font:var(--fs-base)/var(--lh-base) var(--font)}
+.p-title{display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;
+  background:var(--panel-2);border-bottom:1px solid var(--line);
+  color:var(--muted);font:600 var(--fs-xs)/1 var(--font)}
+.p-title .p-dots{display:flex;gap:5px}
+.p-title .p-dots i{width:9px;height:9px;border-radius:50%;background:var(--line);display:block}
+.p-del{margin-left:auto}
+.p-frame{position:relative}
+.p-dlgwrap{position:absolute;inset:0;overflow:hidden}
+.p-dlgwrap .overlay,.p-dlgwrap .dialog,.p-dlgwrap .toast,.p-dlgwrap .notices{position:absolute}
+.p-dlgwrap #dlg-settings,.p-dlgwrap .dialog{max-height:none;height:auto}
+.p-folded .meters,.p-folded .ctl-row2{display:none}
+.p-folded .ctl-summary{display:flex;align-items:center;gap:10px;font-size:var(--fs-sm);
+  color:var(--muted);flex-wrap:wrap}
+.p-folded .ctl-summary .meter{width:56px}
+
+/* Мини-макет темы внутри карточки переключателя: показывает свою тему,
+   а не текущую, поэтому цвета заданы явно. */
+.theme-mini[data-mini] .tm-line{background:#dfe3ea}
+.theme-mini[data-mini] .tm-line.short{width:60%}
+.theme-mini[data-mini="light"]{background:#f4f6f9;border-color:#dfe3ea}
+.theme-mini[data-mini="light"] .tm-bar{background:#fff;border-bottom:1px solid #dfe3ea}
+.theme-mini[data-mini="light"] .tm-bar i{background:#2f6feb}
+.theme-mini[data-mini="light"] .tm-line{background:#dfe3ea}
+.theme-mini[data-mini="dark"]{background:#14171c;border-color:#323a46}
+.theme-mini[data-mini="dark"] .tm-bar{background:#1b1f26;border-bottom:1px solid #323a46}
+.theme-mini[data-mini="dark"] .tm-bar i{background:#6aa1ff}
+.theme-mini[data-mini="dark"] .tm-line{background:#323a46}
+.theme-mini[data-mini="warm"]{background:#f6f1e8;border-color:#e0d5c3}
+.theme-mini[data-mini="warm"] .tm-bar{background:#fffdf8;border-bottom:1px solid #e0d5c3}
+.theme-mini[data-mini="warm"] .tm-bar i{background:#a84b18}
+.theme-mini[data-mini="warm"] .tm-line{background:#e0d5c3}
+.theme-mini[data-mini="bright"]{background:#0f1324;border-color:#2f3760}
+.theme-mini[data-mini="bright"] .tm-bar{background:#181d33;border-bottom:1px solid #2f3760}
+.theme-mini[data-mini="bright"] .tm-bar i{background:#5b8cff}
+.theme-mini[data-mini="bright"] .tm-line{background:#2f3760}
+/* точки состояний: красный — запись, янтарный — вопрос, зелёный — готово */
+.theme-mini[data-mini="light"] .tm-dot.rec{background:#c4271b}
+.theme-mini[data-mini="light"] .tm-dot.warn{background:#8f4708}
+.theme-mini[data-mini="light"] .tm-dot.ok{background:#0b7a4b}
+.theme-mini[data-mini="dark"] .tm-dot.rec{background:#ff8178}
+.theme-mini[data-mini="dark"] .tm-dot.warn{background:#f0b429}
+.theme-mini[data-mini="dark"] .tm-dot.ok{background:#4ede9f}
+.theme-mini[data-mini="warm"] .tm-dot.rec{background:#a52818}
+.theme-mini[data-mini="warm"] .tm-dot.warn{background:#84500a}
+.theme-mini[data-mini="warm"] .tm-dot.ok{background:#16653f}
+.theme-mini[data-mini="bright"] .tm-dot.rec{background:#ff7b73}
+.theme-mini[data-mini="bright"] .tm-dot.warn{background:#ffc14d}
+.theme-mini[data-mini="bright"] .tm-dot.ok{background:#37e08a}
