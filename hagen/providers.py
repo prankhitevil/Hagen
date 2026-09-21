@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Облачные сервисы: адреса, ключи, списки моделей и единственная точка выхода в сеть.
+"""Облачные сервисы: подключения «адрес, ключ, модель» и единственная точка выхода в сеть.
 
-Один сервис — это адрес (base URL) плюс ключ. Четыре встроенных (Anthropic, OpenAI,
-GigaChat, YandexGPT) и любое число добавленных вручную: подходит любой сервис с
-API в формате OpenAI — polza.ai, OpenRouter, VseGPT и прочие.
+Подключений два, у каждого свои адрес, ключ и модель (решение 21.09):
+  docs — документы по ключу (протокол, саммари), когда их делает не Claude CLI;
+  asr  — облачное распознавание файлов.
+Раздельно — потому что их часто держат у разных сервисов: документы, например,
+пишет подписка Claude, а распознаёт агрегатор. Прежде вместо этого был список из
+полутора десятков сервисов; каждый из них отличался только адресом, а выбор в
+списке молча переключал сервис, — поэтому остались поля.
+
+Как разговаривать с сервисом, программа узнаёт по адресу: почти все говорят на
+языке OpenAI, а Anthropic, GigaChat и YandexGPT — каждый по-своему. Для
+необычного адреса вид задаётся руками (настройка api_kind).
 
 Почему сеть собрана здесь, а не размазана по модулям:
   * бывает включён локальный VPN в режиме системного прокси, и запросы,
@@ -14,7 +22,7 @@ API в формате OpenAI — polza.ai, OpenRouter, VseGPT и прочие.
     первого обращения, поэтому config импортируется здесь первым;
   * ключ не должен попасть ни в лог, ни в текст ошибки — вычистка в одном месте.
 
-Ключи хранятся в settings.json (api_keys) и наружу отдаются только маской.
+Ключи хранятся в settings.json (api_keys: docs, asr) и наружу отдаются только маской.
 """
 from __future__ import annotations
 
@@ -35,161 +43,19 @@ log = logging.getLogger("hagen.providers")
 HTTP_TIMEOUT_S = 300.0          # предел ожидания ответа, кроме скачивания
 CONNECT_TIMEOUT_S = 10.0        # соединение либо устанавливается быстро, либо не будет
 
-#: Встроенные сервисы. id совпадают со значениями, которые уже лежат в settings.json
-#: у нынешних пользователей, — поэтому переезд не требует ни миграции, ни правок
-#: руками: старое значение api_provider продолжает указывать на ту же запись.
-BUILTIN: list[dict[str, Any]] = [
-    {
-        "id": "anthropic",
-        "title": "Anthropic Claude",
-        "kind": "anthropic",
-        "base_url": "https://api.anthropic.com/v1",
-        "service": "Anthropic (api.anthropic.com)",
-        "needs": [],
-    },
-    {
-        "id": "openai",
-        "title": "OpenAI",
-        "kind": "openai",
-        "base_url": "https://api.openai.com/v1",
-        "service": "OpenAI (api.openai.com)",
-        "needs": [],
-    },
-    {
-        "id": "gigachat",
-        "title": "GigaChat (Сбер)",
-        "kind": "gigachat",
-        "base_url": "https://gigachat.devices.sberbank.ru/api/v1",
-        "service": "Сбер GigaChat (gigachat.devices.sberbank.ru)",
-        "needs": [],
-    },
-    {
-        "id": "yandexgpt",
-        "title": "YandexGPT",
-        "kind": "yandexgpt",
-        "base_url": "https://llm.api.cloud.yandex.net",
-        "service": "Яндекс Облако (llm.api.cloud.yandex.net)",
-        "needs": ["yandexgpt_folder"],
-    },
-    {
-        # Российский агрегатор: рубли, без VPN, и самый широкий выбор моделей
-        # распознавания речи. Именно он обслуживал саммаризатор.
-        "id": "polza",
-        "title": "polza.ai (много моделей, рубли)",
-        "kind": "openai",
-        "base_url": "https://polza.ai/api/v1",
-        "service": "polza.ai (polza.ai)",
-        "needs": [],
-    },
-    {
-        # Яндекс Облако держит не только YandexGPT: через личный кабинет там
-        # доступен целый ряд моделей, и у него есть слой, говорящий на языке
-        # OpenAI. Отличие от записи «YandexGPT» выше — в нём имя модели пишется
-        # целиком: gpt://<номер каталога>/<модель>/latest. Поэтому отдельная
-        # запись, а не поле «каталог» (замечено 17.09).
-        "id": "yandex_ai_studio",
-        "title": "Yandex Cloud AI Studio (много моделей)",
-        "kind": "openai",
-        "base_url": "https://llm.api.cloud.yandex.net/v1",
-        "service": "Яндекс Облако, совместимый слой (llm.api.cloud.yandex.net)",
-        "needs": [],
-    },
-    # --- российские агрегаторы: рубли, карта РФ, без VPN (собрано 17.09) ---
-    # Все они говорят на языке OpenAI, поэтому подключение у них одинаковое:
-    # получить ключ в личном кабинете и вставить его. Отличаются только ценой
-    # и набором моделей. OpenRouter в списке есть, но с оговоркой в названии:
-    # из России он больше не работает (подробности у самой записи ниже).
-    {
-        "id": "provod",
-        "title": "provod.ai (рубли, документы для юрлица)",
-        "kind": "openai",
-        "base_url": "https://api.provod.ai/v1",
-        "service": "provod.ai (api.provod.ai)",
-        "needs": [],
-    },
-    {
-        "id": "aitunnel",
-        "title": "AITunnel (рубли, 200+ моделей)",
-        "kind": "openai",
-        "base_url": "https://api.aitunnel.ru/v1",
-        "service": "AITunnel (api.aitunnel.ru)",
-        "needs": [],
-    },
-    {
-        "id": "proxyapi",
-        "title": "ProxyAPI (рубли)",
-        "kind": "openai",
-        "base_url": "https://api.proxyapi.ru/openai/v1",
-        "service": "ProxyAPI (api.proxyapi.ru)",
-        "needs": [],
-    },
-    {
-        "id": "gptunnel",
-        "title": "GPTunnel (рубли)",
-        "kind": "openai",
-        "base_url": "https://gptunnel.ru/v1",
-        "service": "GPTunnel (gptunnel.ru)",
-        "needs": [],
-    },
-    {
-        # Оставлен по решению 17.09 — с оговоркой прямо в названии:
-        # с мая 2026 не принимает карты РФ, с 27.06 отвечает отказом на запросы
-        # из России, и VPN не помогает (регион определяется и по аккаунту).
-        # Годится только тем, у кого иностранный аккаунт и карта.
-        "id": "openrouter",
-        "title": "OpenRouter (нужен иностранный аккаунт и карта)",
-        "kind": "openai",
-        "base_url": "https://openrouter.ai/api/v1",
-        "service": "OpenRouter (openrouter.ai)",
-        "needs": [],
-    },
-    # --- модели напрямую: дешевле агрегаторов, но платить нужно своей картой ---
-    {
-        "id": "deepseek",
-        "title": "DeepSeek (напрямую, дёшево)",
-        "kind": "openai",
-        "base_url": "https://api.deepseek.com/v1",
-        "service": "DeepSeek (api.deepseek.com)",
-        "needs": [],
-    },
-    {
-        "id": "zai",
-        "title": "Z.AI GLM (напрямую)",
-        "kind": "openai",
-        "base_url": "https://api.z.ai/api/paas/v4",
-        "service": "Z.AI (api.z.ai)",
-        "needs": [],
-    },
-    {
-        "id": "moonshot",
-        "title": "Moonshot Kimi (напрямую)",
-        "kind": "openai",
-        "base_url": "https://api.moonshot.ai/v1",
-        "service": "Moonshot (api.moonshot.ai)",
-        "needs": [],
-    },
-    {
-        # Бесплатный тариф: несколько тысяч запросов в сутки, карта не нужна.
-        "id": "groq",
-        "title": "Groq (есть бесплатный тариф)",
-        "kind": "openai",
-        "base_url": "https://api.groq.com/openai/v1",
-        "service": "Groq (api.groq.com)",
-        "needs": [],
-    },
-    {
-        # У Gemini есть слой, говорящий на языке OpenAI, — берём его, чтобы не
-        # заводить в программе ещё один вид сервиса.
-        "id": "gemini",
-        "title": "Google Gemini (есть бесплатный тариф)",
-        "kind": "openai",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "service": "Google Gemini (generativelanguage.googleapis.com)",
-        "needs": [],
-    },
-]
+#: Подключения и что они обслуживают.
+ROLES: dict[str, str] = {
+    "docs": "документы",
+    "asr": "облачное распознавание",
+}
 
-_BUILTIN_IDS = {p["id"] for p in BUILTIN}
+#: Как разговаривает сервис: вид → подпись для окна.
+KINDS: dict[str, str] = {
+    "openai": "как OpenAI",
+    "anthropic": "как Anthropic",
+    "gigachat": "как GigaChat",
+    "yandexgpt": "как YandexGPT",
+}
 
 #: Имена моделей, по которым видно, что это распознавание речи, а не чат.
 #: Нужно там, где сервис не умеет отдавать список по типу (у polza для этого
@@ -288,8 +154,8 @@ def _explain(status: int, service: str, body: str) -> str | None:
         return ("На счету в %s закончились деньги (код 402). Пополните баланс. %s"
                 % (service, body))
     if status == 404:
-        return ("%s не нашёл указанную модель или адрес (код 404). Выберите модель "
-                "в настройках. %s" % (service, body))
+        return ("%s не нашёл указанную модель или адрес (код 404). Проверьте адрес "
+                "и модель в настройках. %s" % (service, body))
     if status == 413:
         return ("%s отказался принять файл: слишком большой (код 413). %s"
                 % (service, body))
@@ -422,112 +288,106 @@ def gigachat_token(key: str) -> str:
         return token
 
 
-# ---------------------------------------------------------------- реестр сервисов
+# ---------------------------------------------------------------- подключения
 
 
-def _custom() -> list[dict[str, Any]]:
-    raw = config.get("providers")
-    return [p for p in (raw or []) if isinstance(p, dict) and p.get("id")]
+def kind_for(base_url: str) -> str:
+    """Как разговаривает сервис по этому адресу. Почти все — как OpenAI."""
+    parts = urlsplit(str(base_url or "").strip())
+    host = (parts.hostname or "").lower()
+    if host == "anthropic.com" or host.endswith(".anthropic.com"):
+        return "anthropic"
+    if "gigachat" in host:
+        return "gigachat"
+    # У Яндекса по одному имени сервера два разговора: свой и совместимый с
+    # OpenAI. Совместимый живёт под /v1, и в нём имя модели пишется целиком:
+    # gpt://<каталог>/<модель>/latest.
+    if host == "llm.api.cloud.yandex.net" and not parts.path.startswith("/v1"):
+        return "yandexgpt"
+    return "openai"
 
 
-def all_providers() -> list[dict[str, Any]]:
-    """Встроенные плюс добавленные вручную. Одинаковые id не дублируются."""
-    out: list[dict[str, Any]] = [dict(p) for p in BUILTIN]
-    seen = set(_BUILTIN_IDS)
-    for p in _custom():
-        pid = str(p.get("id"))
-        if pid in seen:
-            continue
-        seen.add(pid)
-        out.append({
-            "id": pid,
-            "title": str(p.get("title") or pid),
-            "kind": str(p.get("kind") or "openai"),
-            "base_url": str(p.get("base_url") or "").rstrip("/"),
-            "service": str(p.get("title") or pid),
-            "needs": [],
-            "custom": True,
-        })
-    return out
+def service_name(base_url: str) -> str:
+    """Как назвать сервис в сообщениях: имя сервера из адреса."""
+    host = (urlsplit(str(base_url or "").strip()).hostname or "").lower()
+    return host or "сервис"
 
 
-def find(pid: str) -> dict[str, Any] | None:
-    pid = str(pid or "").strip()
-    for p in all_providers():
-        if p["id"] == pid:
-            return p
-    return None
-
-
-def require(pid: str) -> dict[str, Any]:
-    p = find(pid)
-    if p is None:
-        raise RuntimeError(
-            "Сервис «%s» не найден в настройках. Выберите другой в разделе «Модели»." % pid
-        )
-    return p
-
-
-def current_id() -> str:
-    """Выбранный сервис для документов (протокол и саммари)."""
-    pid = str(config.get("api_provider") or "anthropic").strip()
-    return pid if find(pid) else "anthropic"
-
-
-def asr_id() -> str:
-    """Выбранный сервис для облачного распознавания речи."""
-    pid = str(config.get("asr_provider") or "").strip()
-    if pid and find(pid):
-        return pid
-    return "polza" if find("polza") else current_id()
-
-
-def api_key(pid: str) -> str:
+def api_key(role: str) -> str:
     keys = config.get("api_keys") or {}
     if not isinstance(keys, dict):
         return ""
-    return str(keys.get(pid) or "").strip()
+    return str(keys.get(role) or "").strip()
 
 
-def public_list() -> list[dict[str, Any]]:
-    """Для интерфейса: без ключей, только признак «задан» и маска."""
-    out = []
-    for p in all_providers():
-        key = api_key(p["id"])
-        out.append({
-            "id": p["id"],
-            "title": p["title"],
-            "kind": p["kind"],
-            "base_url": p["base_url"],
-            "custom": bool(p.get("custom")),
-            "has_key": bool(key),
-            "key_hint": mask(key),
-        })
+def connection(role: str) -> dict[str, Any]:
+    """Подключение целиком: адрес, вид, модель, ключ. Ключ — только внутрь программы."""
+    if role == "docs":
+        url = str(config.get("api_base_url") or "")
+        manual = str(config.get("api_kind") or "").strip()
+        model = str(config.get("api_model") or "")
+        folder = str(config.get("api_folder") or "")
+    elif role == "asr":
+        url = str(config.get("asr_base_url") or "")
+        manual = "openai"   # распознавание — только по образцу OpenAI (audio/transcriptions)
+        model = str(config.get("asr_model") or "")
+        folder = ""
+    else:
+        raise ValueError("Неизвестное подключение: %s" % role)
+    url = url.strip().rstrip("/")
+    return {
+        "role": role,
+        "base_url": url,
+        "kind": manual if manual in KINDS else kind_for(url),
+        "kind_manual": manual in KINDS and role == "docs",
+        "model": model.strip(),
+        "folder": folder.strip(),
+        "key": api_key(role),
+        "service": service_name(url),
+    }
+
+
+def problem(role: str) -> str:
+    """Чего не хватает подключению, человеческим языком. Пусто — можно работать.
+
+    Модель здесь не проверяется: у документов она может подобраться сама по
+    виду сервиса, это решают те, кто подключением пользуется.
+    """
+    c = connection(role)
+    if not c["base_url"]:
+        return "Не указан адрес сервиса (%s)." % ROLES[role]
+    try:
+        validate_base_url(c["base_url"])
+    except ValueError as err:
+        return "Адрес сервиса не годится: %s" % err
+    if not c["key"]:
+        return "Не задан ключ для %s." % c["service"]
+    if c["kind"] == "yandexgpt" and not c["folder"]:
+        return "Для YandexGPT не указан идентификатор каталога."
+    return ""
+
+
+def public_connections() -> dict[str, dict[str, Any]]:
+    """Для интерфейса: без ключей, только признак «задан», маска и что не так."""
+    out: dict[str, dict[str, Any]] = {}
+    for role in ROLES:
+        c = connection(role)
+        key = c.pop("key")
+        c["has_key"] = bool(key)
+        c["key_hint"] = mask(key)
+        c["kind_title"] = KINDS.get(c["kind"], c["kind"])
+        c["problem"] = problem(role)
+        out[role] = c
     return out
-
-
-_ID_CLEAN_RE = re.compile(r"[^a-z0-9_-]+")
-
-
-def _id_from_url(base_url: str, title: str) -> str:
-    host = (urlsplit(base_url).hostname or title or "service").lower()
-    host = host.replace("www.", "").split(".")[0]
-    pid = _ID_CLEAN_RE.sub("-", host).strip("-") or "service"
-    taken = {p["id"] for p in all_providers()}
-    if pid not in taken:
-        return pid
-    for n in range(2, 100):
-        if f"{pid}-{n}" not in taken:
-            return f"{pid}-{n}"
-    raise RuntimeError("Слишком много сервисов с похожим именем.")
 
 
 def validate_base_url(raw: str) -> str:
     """Проверить адрес сервиса. Возвращает очищенный адрес либо бросает ошибку.
 
-    Проверка не формальность: поле «добавить сервис» — это возможность заставить
-    приложение сходить по произвольному адресу. Без запрета на localhost и
-    домашнюю сеть его можно было бы навести на что угодно внутри этой машины.
+    Проверка не формальность: поле адреса — это возможность заставить
+    приложение сходить по произвольному адресу с ключом. Без запрета на
+    localhost и домашнюю сеть его можно было бы навести на что угодно внутри
+    этой машины.
     """
     text = str(raw or "").strip().rstrip("/")
     if not text:
@@ -552,42 +412,120 @@ def validate_base_url(raw: str) -> str:
     return text
 
 
-def add(title: str, base_url: str, kind: str = "openai", key: str = "") -> dict[str, Any]:
-    """Добавить свой сервис. Ключ, если передан, кладётся в общее хранилище ключей."""
-    url = validate_base_url(base_url)
-    kind = str(kind or "openai").strip() or "openai"
-    if kind not in ("openai", "anthropic", "gigachat", "yandexgpt"):
-        raise ValueError("Неизвестный вид сервиса: %s" % kind)
-    name = str(title or "").strip() or (urlsplit(url).hostname or "Свой сервис")
-    if "\n" in name or "\r" in name:
-        raise ValueError("В названии сервиса не должно быть переводов строки.")
-    pid = _id_from_url(url, name)
-    entry = {"id": pid, "title": name[:60], "kind": kind, "base_url": url}
-    items = _custom() + [entry]
-    patch: dict[str, Any] = {"providers": items}
-    if (key or "").strip():
-        patch["api_keys"] = {pid: key.strip()}
-    config.save(patch)
-    log.info("добавлен сервис %s (%s)", pid, url)
-    return entry
+# ---------------------------------------------------------------- перенос со списка
+
+#: Прежний список сервисов (до 21.09) — только чтобы перенести настройки тех,
+#: кто выбирал сервис из него. Вид по этим адресам определяется сам.
+_OLD_ADDRESSES: dict[str, str] = {
+    "anthropic": "https://api.anthropic.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "gigachat": "https://gigachat.devices.sberbank.ru/api/v1",
+    "yandexgpt": "https://llm.api.cloud.yandex.net",
+    "polza": "https://polza.ai/api/v1",
+    "yandex_ai_studio": "https://llm.api.cloud.yandex.net/v1",
+    "provod": "https://api.provod.ai/v1",
+    "aitunnel": "https://api.aitunnel.ru/v1",
+    "proxyapi": "https://api.proxyapi.ru/openai/v1",
+    "gptunnel": "https://gptunnel.ru/v1",
+    "llmrouter": "https://llm-router.org/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "zai": "https://api.z.ai/api/paas/v4",
+    "moonshot": "https://api.moonshot.ai/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+}
+
+#: Подсказка к полю адреса: где взять сервис. Российские — в рублях и без VPN;
+#: у Groq и Gemini есть бесплатный тариф; OpenRouter — только с иностранным
+#: аккаунтом и картой: с 27.06.2026 он отказывает запросам из России.
+SUGGESTED: list[dict[str, str]] = [
+    {"title": "polza.ai", "base_url": _OLD_ADDRESSES["polza"],
+     "note": "рубли, много моделей, есть распознавание речи"},
+    {"title": "RouterAI", "base_url": "https://routerai.ru/api/v1",
+     "note": "рубли, карта или СБП, есть распознавание речи"},
+    {"title": "LLM Router", "base_url": _OLD_ADDRESSES["llmrouter"], "note": "рубли и СБП"},
+    {"title": "provod.ai", "base_url": _OLD_ADDRESSES["provod"],
+     "note": "рубли, документы для юрлица"},
+    {"title": "AITunnel", "base_url": _OLD_ADDRESSES["aitunnel"], "note": "рубли, 200+ моделей"},
+    {"title": "ProxyAPI", "base_url": _OLD_ADDRESSES["proxyapi"], "note": "рубли"},
+    {"title": "GPTunnel", "base_url": _OLD_ADDRESSES["gptunnel"], "note": "рубли"},
+    {"title": "GigaChat", "base_url": _OLD_ADDRESSES["gigachat"],
+     "note": "Сбер: свой ключ и корневой сертификат"},
+    {"title": "Yandex AI Studio", "base_url": _OLD_ADDRESSES["yandex_ai_studio"],
+     "note": "модель пишется gpt://каталог/модель/latest"},
+    {"title": "Groq", "base_url": _OLD_ADDRESSES["groq"], "note": "есть бесплатный тариф"},
+    {"title": "Google Gemini", "base_url": _OLD_ADDRESSES["gemini"],
+     "note": "есть бесплатный тариф"},
+    {"title": "OpenRouter", "base_url": _OLD_ADDRESSES["openrouter"],
+     "note": "нужен иностранный аккаунт и карта"},
+]
+
+#: Модели, которые прежний список подставлял сам, если человек не выбирал.
+#: У Anthropic, GigaChat и YandexGPT модель по-прежнему подбирается по виду.
+_OLD_MODELS: dict[str, str] = {
+    "openai": "gpt-5.6-sol",
+    "polza": "anthropic/claude-sonnet-4.6",
+}
+
+#: Не сервисы, а соседи по словарю ключей.
+_NOT_SERVICES = ("docs", "asr", "yandexgpt_folder")
 
 
-def remove(pid: str) -> bool:
-    """Убрать свой сервис. Встроенные не удаляются."""
-    pid = str(pid or "").strip()
-    if pid in _BUILTIN_IDS:
-        raise ValueError("Встроенный сервис удалить нельзя.")
-    items = [p for p in _custom() if str(p.get("id")) != pid]
-    if len(items) == len(_custom()):
+def adopt_old_services() -> bool:
+    """Разовый перенос с прежнего списка сервисов на «адрес, ключ, модель».
+
+    У того, кто обновляется, облачный путь уже настроен, и молча пропасть он
+    не должен. Документы берут выбранный тогда сервис; распознавание — свой,
+    по умолчанию polza. Прежние ключи в файле остаются как были. Делается один
+    раз: отметка `services_adopted` в настройках. Возвращает, был ли перенос.
+    """
+    if config.get("services_adopted"):
         return False
-    patch: dict[str, Any] = {"providers": items, "api_keys": {pid: ""}}
-    if str(config.get("api_provider") or "") == pid:
-        patch["api_provider"] = "anthropic"
-    if str(config.get("asr_provider") or "") == pid:
-        patch["asr_provider"] = ""
+    keys = config.get("api_keys") or {}
+    keys = dict(keys) if isinstance(keys, dict) else {}
+    models = config.get("api_models") or {}
+    models = dict(models) if isinstance(models, dict) else {}
+    custom = {str(p.get("id")): p for p in (config.get("providers") or [])
+              if isinstance(p, dict) and p.get("id")}
+
+    def address(pid: str) -> tuple[str, str]:
+        if pid in custom:
+            return (str(custom[pid].get("base_url") or "").rstrip("/"),
+                    str(custom[pid].get("kind") or ""))
+        return _OLD_ADDRESSES.get(pid, ""), ""
+
+    patch: dict[str, Any] = {"services_adopted": True}
+    new_keys: dict[str, str] = {}
+
+    pid = str(config.get("api_provider") or "").strip()
+    with_key = [p for p, v in keys.items() if v and p not in _NOT_SERVICES]
+    if pid and not keys.get(pid) and len(with_key) == 1:
+        # Выбранный сервис без ключа, а ключ есть ровно у одного: выбор в
+        # списке сохранялся сразу, и он остался от просмотра списка.
+        pid = with_key[0]
+    url, kind = address(pid) if pid else ("", "")
+    if url and not str(config.get("api_base_url") or "").strip():
+        patch["api_base_url"] = url
+        if kind in KINDS and kind != kind_for(url):
+            patch["api_kind"] = kind
+        patch["api_model"] = str(models.get(pid) or _OLD_MODELS.get(pid, ""))
+        if keys.get(pid):
+            new_keys["docs"] = str(keys[pid])
+        if keys.get("yandexgpt_folder"):
+            patch["api_folder"] = str(keys["yandexgpt_folder"])
+
+    apid = str(config.get("asr_provider") or "").strip() or "polza"
+    url, _kind = address(apid)
+    if url and keys.get(apid) and not keys.get("asr"):
+        patch["asr_base_url"] = url
+        new_keys["asr"] = str(keys[apid])
+
+    if new_keys:
+        patch["api_keys"] = new_keys
     config.save(patch)
-    _models_cache.pop(pid, None)
-    log.info("удалён сервис %s", pid)
+    log.info("сервисы перенесены со списка: документы %s, распознавание %s",
+             patch.get("api_base_url") or "—", patch.get("asr_base_url") or "как было")
     return True
 
 
@@ -598,8 +536,7 @@ _models_lock = threading.Lock()
 CACHE_TTL_S = 3600.0
 
 
-def _auth_headers(p: dict[str, Any], key: str) -> dict[str, str]:
-    kind = p["kind"]
+def _auth_headers(kind: str, key: str) -> dict[str, str]:
     if kind == "anthropic":
         return {"x-api-key": key, "anthropic-version": "2023-06-01"}
     if kind == "gigachat":
@@ -640,9 +577,9 @@ def _entry(item: Any) -> dict[str, Any] | None:
     return {"id": mid, "title": title if title != mid else mid, "price": _price_of(item)}
 
 
-def _fetch_models(p: dict[str, Any], key: str) -> dict[str, list[dict[str, Any]]]:
+def _fetch_models(c: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Спросить у сервиса список моделей. Разделение на чат и распознавание."""
-    kind = p["kind"]
+    kind = c["kind"]
     if kind == "yandexgpt":
         # У Яндекса списка моделей нет вовсе: имена задокументированы и вписаны руками.
         return {
@@ -650,9 +587,10 @@ def _fetch_models(p: dict[str, Any], key: str) -> dict[str, list[dict[str, Any]]
                      {"id": "yandexgpt-5-lite", "title": "yandexgpt-5-lite", "price": {}}],
             "stt": [],
         }
-    base = p["base_url"].rstrip("/")
-    service = p.get("service") or p["title"]
-    headers = _auth_headers(p, key)
+    base = c["base_url"]
+    service = c["service"]
+    key = c["key"]
+    headers = _auth_headers(kind, key)
 
     chat: list[dict[str, Any]] = []
     stt: list[dict[str, Any]] = []
@@ -690,31 +628,42 @@ def _fetch_models(p: dict[str, Any], key: str) -> dict[str, list[dict[str, Any]]
     return {"chat": chat, "stt": stt}
 
 
-def list_models(pid: str, refresh: bool = False) -> dict[str, Any]:
-    """Список моделей сервиса. Ходит в сеть только по требованию и кэшируется.
+def list_models(role: str, refresh: bool = False) -> dict[str, Any]:
+    """Список моделей сервиса этого подключения. В сеть — только по требованию.
 
     Автоматически при каждом открытии настроек не обновляем намеренно: каждый
     выход в сеть — лишний повод для окна антивируса, а список меняется редко.
+    Кэш привязан к адресу: сменили адрес — прежний список не показываем.
     """
-    p = require(pid)
+    c = connection(role)
+    if not c["base_url"]:
+        raise RuntimeError("Сначала укажите адрес сервиса.")
+    try:
+        validate_base_url(c["base_url"])
+    except ValueError as err:
+        raise RuntimeError("Адрес сервиса не годится: %s" % err) from None
     with _models_lock:
-        hit = _models_cache.get(pid)
-        if hit and not refresh and (time.time() - hit["at"]) < CACHE_TTL_S:
+        hit = _models_cache.get(role)
+        if (hit and not refresh and hit["base_url"] == c["base_url"]
+                and (time.time() - hit["at"]) < CACHE_TTL_S):
             return dict(hit, cached=True)
-    key = api_key(pid)
-    if not key and p["kind"] != "openai":
-        raise RuntimeError("Для «%s» не задан ключ — список моделей не спросить."
-                           % p["title"])
-    data = _fetch_models(p, key)
-    payload = {"provider": pid, "at": time.time(), "chat": data["chat"], "stt": data["stt"]}
+    if not c["key"] and c["kind"] != "openai":
+        raise RuntimeError("Для %s не задан ключ — список моделей не спросить." % c["service"])
+    data = _fetch_models(c)
+    payload = {"role": role, "base_url": c["base_url"], "at": time.time(),
+               "chat": data["chat"], "stt": data["stt"]}
     with _models_lock:
-        _models_cache[pid] = payload
-    log.info("сервис %s: моделей чата %d, распознавания %d",
-             pid, len(data["chat"]), len(data["stt"]))
+        _models_cache[role] = payload
+    log.info("%s: моделей чата %d, распознавания %d",
+             c["service"], len(data["chat"]), len(data["stt"]))
     return dict(payload, cached=False)
 
 
-def cached_models(pid: str) -> dict[str, Any] | None:
+def cached_models(role: str) -> dict[str, Any] | None:
+    """Уже полученный список — если он о нынешнем адресе подключения."""
+    url = connection(role)["base_url"]
     with _models_lock:
-        hit = _models_cache.get(pid)
-        return dict(hit, cached=True) if hit else None
+        hit = _models_cache.get(role)
+        if hit and hit["base_url"] == url:
+            return dict(hit, cached=True)
+    return None

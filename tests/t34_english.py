@@ -12,6 +12,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
 from hagen import asr  # noqa: E402
+import isolate  # noqa: E402
 
 LINES = []
 FAIL = []
@@ -69,14 +70,17 @@ check("английский больше русского", asr.MAX_CHUNK_EN_S >
 
 say("")
 say("=== 3. Русский путь не тронут ===")
+# Точная модель на torch — чтобы подделка ниже перехватила вызов.
+isolate.settings(asr_count=1, asr_single="precise", asr_engine="torch")
+asr._live_route = None
 calls = []
 real_torch = asr._transcribe_torch
-asr._transcribe_torch = lambda pcm, name, word_timestamps=True: (
+asr._transcribe_torch = lambda pcm, name, word_timestamps=True, threads=0: (
     calls.append((name, word_timestamps)) or asr.Result("русский текст"))
 try:
     silence = np.zeros(int(0.5 * asr.SR), dtype=np.float32)
     res = asr.transcribe_precise(silence, words=True)
-    check("по умолчанию идём в GigaAM через torch", len(calls), 1)
+    check("русский идёт в GigaAM через torch", len(calls), 1)
     check("модель та же", calls[0][0], "v3_e2e_rnnt")
     check("слова запрошены", calls[0][1], True)
     check("текст вернулся", res.text, "русский текст")

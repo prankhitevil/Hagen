@@ -38,7 +38,6 @@ function vOpts() {
     video_kind: $('v-kind').value,
     store_media: $('v-store').value,
     asr_lang: $('v-lang').value,
-    asr_files: $('v-where').value,
     max_height: parseInt($('v-height').value, 10) || 720,
     prefer_transcript: $('v-subs').checked,
     yt_auto_subs: $('v-auto-subs').checked,
@@ -87,11 +86,12 @@ function vApplyKind() {
   vAsrNote();
 }
 
-/* Подсказка под выбором «где распознавать»: честно про доступность и цену. */
+/* Подсказка о распознавании: где (выбирается в настройках, 21.09), честно про
+   доступность и цену. */
 function vAsrNote() {
   const o = V.opts || {};
   const lang = $('v-lang').value;
-  const where = $('v-where').value;
+  const where = (o.defaults || {}).asr_files || 'local';
   const box = $('v-asr-note');
   if (!box) return;
   if ($('v-only').checked) {
@@ -100,8 +100,9 @@ function vAsrNote() {
   }
   if (where === 'cloud') {
     box.textContent = (o.cloud && o.cloud.ready)
-      ? 'Звук уйдёт по сети в выбранный сервис по вашему ключу. Цена видна в настройках, в списке моделей.'
-      : `Облако недоступно: ${(o.cloud && o.cloud.why) || 'не настроено'}`;
+      ? 'Распознаётся в облаке — так выбрано в «Настройки → Модели». Звук уйдёт по сети '
+        + 'в выбранный сервис по вашему ключу.'
+      : `В настройках выбрано облако, но оно недоступно: ${(o.cloud && o.cloud.why) || 'не настроено'}`;
     return;
   }
   if (lang === 'en') {
@@ -112,7 +113,8 @@ function vAsrNote() {
     if (!(o.english && o.english.ready) && window.ensurePart) window.ensurePart('english');
     return;
   }
-  box.textContent = 'Русский распознаётся на этом компьютере: бесплатно и точнее любого облака.';
+  box.textContent = 'Русский распознаётся на этом компьютере: бесплатно и точнее любого облака. '
+    + 'Где распознавать — «Настройки → Модели».';
 }
 
 async function vLoadOptions() {
@@ -130,7 +132,6 @@ async function vLoadOptions() {
   // момент нажатия «Обработать».
   if (first) {
     $('v-lang').value = d.asr_lang || 'ru';
-    $('v-where').value = d.asr_files || 'local';
     $('v-height').value = String(d.max_height || 720);
     $('v-subs').checked = !!d.prefer_transcript;
     $('v-auto-subs').checked = !!d.yt_auto_subs;
@@ -141,6 +142,7 @@ async function vLoadOptions() {
       `<option value="${esc(c)}"${c === d.category ? ' selected' : ''}>${esc(c)}</option>`).join('');
     vApplyKind();          // «что сохранить» подставляется из типа записи
   }
+  vAsrNote();              // где распознавать, меняется в настройках между заходами
   $('v-assets').textContent = 'Видео и текстовые копии складываются в ' + (V.opts.assets_dir || '');
   const web = V.opts.webauth || {};
   $('web-state').textContent = web.ready
@@ -585,7 +587,7 @@ function videoInit() {
   document.querySelectorAll('.src-btn').forEach((b) => {
     b.onclick = () => vPickSource(b.dataset.src);
   });
-  ['v-lang', 'v-where', 'v-only'].forEach((id) => {
+  ['v-lang', 'v-only'].forEach((id) => {
     const el = $(id);
     if (el) el.onchange = vAsrNote;
   });

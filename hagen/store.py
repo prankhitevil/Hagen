@@ -621,12 +621,170 @@ def remember_tags(tags: list[str]) -> None:
         _remember("rec_tags", tags)
 
 
+#: Папка проекта в сейфе (решение 20.09). У проекта может быть связанная папка:
+#: тогда заметки этого проекта ложатся туда, а не в папку категории. Связка
+#: необязательная — проект остаётся своим списком в настройках и работает без
+#: сейфа. Здесь только имя и путь; во что превращается путь и лежит ли он внутри
+#: сейфа — дело obsidian.py, хранилище про сейф не знает.
+MAX_FOLDER = 240
+
+
+def clean_project_folder(value: Any) -> str:
+    """Путь папки относительно корня сейфа, через «/». Пусто — связки нет.
+
+    Обратные косые черты приводятся к «/», края чистятся. Переходы «..» и
+    двоеточие диска отбрасывают путь целиком: папка проекта живёт внутри сейфа,
+    и «..\\..\\Windows» тут не адрес, а ошибка.
+    """
+    text = str(value or "").strip().replace("\\", "/").strip("/")
+    text = re.sub(r"/{2,}", "/", text)
+    if not text or ":" in text:
+        return ""
+    parts = [p.strip() for p in text.split("/")]
+    if any(p in {"", ".", ".."} for p in parts):
+        return ""
+    return "/".join(parts)[:MAX_FOLDER]
+
+
+def known_project_folders() -> dict[str, str]:
+    """Карта «проект → папка в сейфе». Только непустые связки."""
+    raw = config.get("project_folders") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for name, folder in raw.items():
+        name = clean_project(name)
+        folder = clean_project_folder(folder)
+        if name and folder:
+            out[name] = folder
+    return out
+
+
+def project_folder(name: Any) -> str:
+    """Папка проекта или пусто. Регистр имени не важен: «АКП» и «акп» — один проект."""
+    name = clean_project(name)
+    if not name:
+        return ""
+    folders = known_project_folders()
+    if name in folders:
+        return folders[name]
+    low = name.lower()
+    for known, folder in folders.items():
+        if known.lower() == low:
+            return folder
+    return ""
+
+
+def set_project_folder(name: Any, folder: Any) -> dict[str, str]:
+    """Привязать папку к проекту; пустая папка связку снимает.
+
+    Проект заодно запоминается в списке подсказок: связку заводят для проекта,
+    которым пользуются, и отдельно вводить его имя второй раз незачем.
+    """
+    name = clean_project(name)
+    if not name:
+        raise ValueError("Не указан проект")
+    folder = clean_project_folder(folder)
+    current = known_project_folders()
+    low = name.lower()
+    kept = {k: v for k, v in current.items() if k.lower() != low}
+    if folder:
+        kept[name] = folder
+        remember_project(name)
+    config.save({"project_folders": kept})
+    return kept
+
+
 def rec_project(meta: dict[str, Any]) -> str:
     return clean_project((meta or {}).get("project"))
 
 
 def rec_tags(meta: dict[str, Any]) -> list[str]:
     return clean_tags((meta or {}).get("tags"))
+
+
+#: Голосовые заметки к записи (20.09). Надиктованное своё: примечание, вывод,
+#: поручение. В стенограмму они не попадают — там речь встречи, как она
+#: прозвучала; заметки живут отдельным списком и отдельным разделом заметки, а
+#: в документах учитываются как слово автора, то есть в первую очередь.
+MAX_NOTES = 100
+MAX_NOTE = 2000
+
+#: Род заметки: просто запись для себя или поручение, которое уйдёт в Todoist.
+NOTE_KINDS = ("note", "task")
+
+
+def clean_note_kind(value: Any) -> str:
+    kind = str(value or "note").strip().lower()
+    return kind if kind in NOTE_KINDS else "note"
+
+
+def clean_notes(values: Any) -> list[dict[str, Any]]:
+    """Список заметок [{text, kind, at}] — без пустых, не длиннее MAX_NOTES."""
+    out: list[dict[str, Any]] = []
+    for raw in (values or []):
+        if isinstance(raw, str):
+            raw = {"text": raw}
+        if not isinstance(raw, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(raw.get("text") or "").strip())[:MAX_NOTE]
+        if not text:
+            continue
+        out.append({"text": text,
+                    "kind": clean_note_kind(raw.get("kind")),
+                    "at": str(raw.get("at") or _now_iso()),
+                    "sent": bool(raw.get("sent"))})
+        if len(out) >= MAX_NOTES:
+            break
+    return out
+
+
+def rec_notes(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    return clean_notes((meta or {}).get("notes"))
+
+
+def add_note(rec_id: str, text: str, kind: str = "note",
+             sent: bool = False) -> dict[str, Any] | None:
+    """Дописать заметку к записи. Возвращает обновлённую meta или None."""
+    meta = get(rec_id)
+    if meta is None:
+        return None
+    notes = rec_notes(meta)
+    notes.append({"text": str(text or ""), "kind": clean_note_kind(kind),
+                  "at": _now_iso(), "sent": bool(sent)})
+    return update(rec_id, {"notes": clean_notes(notes)})
+
+
+#: Роли участников В ЭТОЙ ЗАПИСИ (20.09). Обычно роль у человека одна и живёт
+#: в базе голосов, но подрядчик по одному проекту бывает партнёром по другому —
+#: и тогда роль переопределяется здесь, только для этой записи. Ключ — имя
+#: говорящего так, как оно стоит в репликах («Я» — владелец записи).
+MAX_ROLES = 40
+
+
+def clean_roles(values: Any) -> dict[str, dict[str, str]]:
+    """{имя: {side, position}} — без пустых ролей и без имён без роли."""
+    from . import voices
+
+    out: dict[str, dict[str, str]] = {}
+    if not isinstance(values, dict):
+        return out
+    for name, role in values.items():
+        name = str(name or "").strip()[:MAX_PROJECT]
+        if not name or not isinstance(role, dict):
+            continue
+        side = voices.clean_side(role.get("side"))
+        position = voices.clean_position(role.get("position"))
+        if not side and not position:
+            continue
+        out[name] = {"side": side, "position": position}
+        if len(out) >= MAX_ROLES:
+            break
+    return out
+
+
+def rec_roles(meta: dict[str, Any]) -> dict[str, dict[str, str]]:
+    return clean_roles((meta or {}).get("roles"))
 
 
 #: Связи записи с заметками сейфа («Связать с», 17.09). Хранятся здесь, а не в

@@ -73,6 +73,10 @@ class CallAutomation:
         self.call: dict[str, Any] = {"active": False}
         self.linked_rec: str | None = None
         self.last_stopped: dict[str, Any] | None = None
+        # Забытая запись (20.09): когда спрашивали в прошлый раз и сторож.
+        self._idle_asked_at = 0.0
+        self._idle_watch: threading.Thread | None = None
+        self._idle_stop = threading.Event()
 
     # ------------------------------------------------ подсказки
     def add_listener(self, fn: Callable[[dict[str, Any] | None], None]) -> None:
@@ -221,6 +225,107 @@ class CallAutomation:
             [("stop", "Остановить"), ("keep", "Писать дальше")],
             timeout_s=wait, default="stop", rec_id=active)
 
+    # ------------------------------------------------ забытая запись (20.09)
+    #
+    # Тот же вопрос, что и в конце звонка, но по другому поводу: разговор
+    # кончился, а запись идёт. Второго механизма вопросов не заводим — это
+    # новый ПОВОД для существующего.
+    #
+    # Смотрим на СЛОВА, а не на реплики: в тишине распознавание выдаёт
+    # однословный мусор с промежутками в четверть часа, и правило «нет реплик
+    # N минут» такой мусор сбрасывал бы снова и снова.
+
+    def _idle_words(self, rec_id: str, window_s: float, elapsed_s: float) -> int:
+        """Сколько слов сказано за последние window_s секунд — по обеим дорожкам."""
+        since = max(0.0, elapsed_s - window_s)
+        words = 0
+        for seg in store.sorted_segments(rec_id):
+            if float(seg.get("end") or seg.get("start") or 0.0) < since:
+                continue
+            words += len(str(seg.get("text") or "").split())
+        return words
+
+    @staticmethod
+    def _elapsed(meta: dict[str, Any]) -> float:
+        """Сколько идёт запись. Считаем от её начала, а не по длительности звука.
+
+        Длительность обновляется, когда приходит очередная реплика, — а в
+        тишине реплик нет вовсе, и она застыла бы ровно там, где разговор
+        кончился. Именно этот случай мы и ловим.
+        """
+        from datetime import datetime
+
+        raw = str((meta or {}).get("created_at") or "").strip()
+        if not raw:
+            return 0.0
+        try:
+            started = datetime.fromisoformat(raw)
+        except ValueError:
+            return 0.0
+        if started.tzinfo is not None:
+            started = started.replace(tzinfo=None)
+        return max(0.0, (datetime.now() - started).total_seconds())
+
+    def check_idle(self) -> bool:
+        """Посмотреть, не забыта ли идущая запись. True — вопрос показан."""
+        minutes = float(config.get("idle_stop_min") or 0)
+        if minutes <= 0:
+            return False                      # защита выключена
+        rec_id = self.hooks.active_recording()
+        if not rec_id:
+            self._idle_asked_at = 0.0
+            return False
+        with self._lock:
+            if self.prompt is not None:
+                return False                  # один вопрос на экране за раз
+            asked = self._idle_asked_at
+        window = minutes * 60.0
+        # «Продолжаю» откладывает следующий вопрос, а не выключает защиту на
+        # всю запись: разговор может кончиться и через час после этого.
+        if asked and time.time() - asked < window:
+            return False
+        meta = store.get(rec_id) or {}
+        elapsed = self._elapsed(meta)
+        if elapsed < window:
+            return False                      # записи меньше, чем окно тишины
+        limit = int(config.get("idle_stop_words") or 0)
+        words = self._idle_words(rec_id, window, elapsed)
+        if words > limit:
+            return False
+        wait = int(config.get("idle_stop_confirm_s") or 120)
+        with self._lock:
+            self._idle_asked_at = time.time()
+        log.info("запись %s: за %d мин %d слов — спрашиваю, не забыта ли она",
+                 rec_id, int(minutes), words)
+        self._show(
+            "idle_stop",
+            "Похоже, разговор закончился: за последние %d мин почти ничего не "
+            "сказано. Остановить запись «%s»? Без ответа остановлю через %d мин."
+            % (int(minutes), _title(rec_id), max(1, round(wait / 60.0))),
+            [("stop", "Остановить"), ("keep", "Продолжаю")],
+            timeout_s=wait, default="stop", rec_id=rec_id)
+        return True
+
+    def start_idle_watch(self, every_s: float = 30.0) -> None:
+        """Поднять сторож забытой записи. Работает и для записей с кнопки."""
+        if self._idle_watch is not None:
+            return
+
+        def run() -> None:
+            while not self._idle_stop.wait(every_s):
+                try:
+                    self.check_idle()
+                except Exception:
+                    log.debug("сторож забытой записи споткнулся", exc_info=True)
+
+        self._idle_stop.clear()
+        self._idle_watch = threading.Thread(target=run, name="idle-watch", daemon=True)
+        self._idle_watch.start()
+
+    def stop_idle_watch(self) -> None:
+        self._idle_stop.set()
+        self._idle_watch = None
+
     def recording_stopped(self, rec_id: str) -> None:
         """Служба сообщает: запись остановлена (кнопкой или автоматикой)."""
         meta = store.get(rec_id) or {}
@@ -277,6 +382,16 @@ class CallAutomation:
                                 if source == "timeout" else "Запись остановлена.")
             elif kind == "call_ended" and button == "keep":
                 self.notice("Пишу дальше. Остановить — кнопкой «Стоп».")
+            # Забытая запись (20.09): тот же ответ, но повод другой, поэтому и
+            # слова человеку говорим про разговор, а не про звонок.
+            elif kind == "idle_stop" and button == "stop":
+                if rec_id and self.hooks.active_recording() == rec_id:
+                    self.hooks.stop_recording(rec_id)
+                    self.notice("Запись остановлена: разговор, похоже, закончился."
+                                if source == "timeout" else "Запись остановлена.")
+            elif kind == "idle_stop" and button == "keep":
+                # Защиту не снимаем: спросим снова, когда снова станет тихо.
+                self.notice("Пишу дальше. Если опять станет тихо, спрошу ещё раз.")
             elif kind == "call_resumed" and button == "merge":
                 prev_id = pr.get("prev_id")
                 if rec_id and prev_id and self.hooks.active_recording() == rec_id:

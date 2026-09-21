@@ -105,6 +105,16 @@ async def api_voice_kind(person_id: str, request: Request) -> JSONResponse:
     return await _voice_call(voices.set_kind, person_id, str(body.get("kind") or ""))
 
 
+@router.post("/api/voices/{person_id}/role")
+async def api_voice_role(person_id: str, request: Request) -> JSONResponse:
+    """Сторона и должность человека (20.09). Пустые значения роль снимают."""
+    from .. import voices
+
+    body = await request.json()
+    return await _voice_call(voices.set_role, person_id,
+                             body.get("side"), body.get("position"))
+
+
 @router.delete("/api/voices/{person_id}/samples/{index}")
 async def api_voice_forget_sample(person_id: str, index: int) -> JSONResponse:
     from .. import voices

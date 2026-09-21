@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Маршруты диктовки и сервисов, которыми делают документы.
 
-Диктовка — ввод текста голосом в чужие окна; сервисы — список облачных
-провайдеров и их модели. Перенесено из `server.py` без изменений.
+Диктовка — ввод текста голосом в чужие окна; сервисы — подключения к облаку
+(документы и распознавание) и списки их моделей.
 """
 from __future__ import annotations
 
@@ -13,8 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import config, platform
-from ..events import hub
+from .. import platform
 from . import deps as deps_mod
 from .deps import dictation_status, start_dictation
 
@@ -43,6 +42,19 @@ async def api_dictate_cancel() -> JSONResponse:
         return JSONResponse(dictation_status())
     loop = asyncio.get_running_loop()
     return JSONResponse(await loop.run_in_executor(None, deps_mod._dictation.cancel))
+
+
+@router.post("/api/dictate/open-recording")
+async def api_dictate_open_recording(request: Request) -> JSONResponse:
+    """Какая запись сейчас открыта в окне — для голосовых заметок (20.09).
+
+    Клавишу заметки ловит служба, а что открыто на экране, знает только
+    страница: она об этом и сообщает. Пустое значение — ни одной, и тогда
+    заметка ведёт себя как обычная диктовка.
+    """
+    body = await request.json()
+    rec_id = deps_mod.set_open_recording(body.get("rec_id"))
+    return JSONResponse({"rec_id": rec_id})
 
 
 @router.get("/api/dictate/history")
@@ -95,55 +107,21 @@ async def api_dictate_hotkey(request: Request) -> JSONResponse:
 # ====================================================================== сервисы и модели
 
 
-@router.get("/api/providers")
-async def api_providers_get() -> JSONResponse:
+@router.get("/api/connections")
+async def api_connections_get() -> JSONResponse:
+    """Подключения к облаку — документы и распознавание: адрес, вид, модель, без ключей.
+
+    suggested — подходящие адреса для подсказки «?» у поля адреса.
+    """
     from .. import providers
 
-    return JSONResponse({"providers": providers.public_list(),
-                         "selected": providers.current_id(),
-                         "asr_selected": providers.asr_id()})
-
-
-@router.post("/api/providers")
-async def api_providers_add(request: Request) -> JSONResponse:
-    """Добавить свой сервис: адрес плюс ключ. Ключ уходит в общее хранилище ключей."""
-    from .. import providers
-
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Ожидался объект")
-    try:
-        entry = providers.add(
-            title=str(body.get("title") or ""),
-            base_url=str(body.get("base_url") or ""),
-            kind=str(body.get("kind") or "openai"),
-            key=str(body.get("key") or ""),
-        )
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-    public = config.public()
-    hub.publish({"type": "settings", "settings": public})
-    return JSONResponse({"provider": {k: v for k, v in entry.items() if k != "key"},
-                         "providers": providers.public_list()})
-
-
-@router.delete("/api/providers/{pid}")
-async def api_providers_delete(pid: str) -> JSONResponse:
-    from .. import providers
-
-    try:
-        ok = providers.remove(pid)
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-    if not ok:
-        raise HTTPException(status_code=404, detail="Такого сервиса нет")
-    hub.publish({"type": "settings", "settings": config.public()})
-    return JSONResponse({"ok": True, "providers": providers.public_list()})
+    return JSONResponse({"connections": providers.public_connections(),
+                         "suggested": providers.SUGGESTED})
 
 
 @router.post("/api/models")
-async def api_models(provider: str = "", refresh: bool = False) -> JSONResponse:
-    """Список моделей сервиса. Ходит в сеть, поэтому только по кнопке.
+async def api_models(role: str = "docs", refresh: bool = False) -> JSONResponse:
+    """Список моделей сервиса этого подключения. Ходит в сеть, поэтому только по кнопке.
 
     POST, а не GET: запрос уходит к сервису с ключом, и его не должен уметь
     вызвать чужой сайт простой картинкой-ссылкой.
@@ -153,16 +131,30 @@ async def api_models(provider: str = "", refresh: bool = False) -> JSONResponse:
     """
     from .. import providers
 
-    pid = (provider or "").strip() or providers.current_id()
+    if role not in providers.ROLES:
+        raise HTTPException(status_code=400, detail="Неизвестное подключение: %s" % role)
     loop = asyncio.get_running_loop()
     try:
-        data = await loop.run_in_executor(None, providers.list_models, pid, bool(refresh))
+        data = await loop.run_in_executor(None, providers.list_models, role, bool(refresh))
     except RuntimeError as err:
         raise HTTPException(status_code=502, detail=str(err))
     except Exception as err:
         log.warning("список моделей не получен: %s", err)
         raise HTTPException(status_code=502, detail="Не удалось получить список моделей.")
     return JSONResponse(data)
+
+
+@router.post("/api/engines/claude_cli/check")
+async def api_claude_cli_check() -> JSONResponse:
+    """Проверить Claude CLI: найден ли, выполнен ли вход, отвечает ли.
+
+    POST — по той же причине, что у списка моделей: запускает CLI и тратит
+    крошечную часть лимита подписки. Ответ ждёт до минуты — в отдельном потоке.
+    """
+    from .. import minutes
+
+    loop = asyncio.get_running_loop()
+    return JSONResponse(await loop.run_in_executor(None, minutes.check_claude_cli))
 
 
 # ====================================================================== записи

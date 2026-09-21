@@ -83,6 +83,49 @@ ORIGINS = {
     "legacy": "из прежней базы",
 }
 
+#: Роль участника (20.09) — две оси. СТОРОНА: кем человек приходится владельцу
+#: записи. «Коллега-юрист» и «юрист поставщика» — разные люди для протокола,
+#: хотя должность одна: сторона говорит документу, ЧЬИ это обязательства.
+#: ДОЛЖНОСТЬ — свободный текст, её списком не ограничить.
+#:
+#: Рядом с названием — пояснение для модели: сторона без объяснения, чем она
+#: занята в разговоре, документу мало что даёт. Пояснения живут здесь, потому
+#: что описывают саму роль, а не то, как устроен промпт.
+SIDES: dict[str, tuple[str, str]] = {
+    "ours": ("наша сторона", "коллега, с ним мы по одну сторону стола"),
+    "buyer": ("покупатель", "покупает у нас; в протоколе — его требования и ожидания"),
+    "seller": ("продавец", "продаёт нам; в протоколе — его предложения и условия"),
+    "supplier": ("поставщик", "отвечает за сроки и условия поставки; "
+                              "в протоколе — его обязательства и риски срыва"),
+    "contractor": ("подрядчик", "выполняет работы по договору; "
+                                "в протоколе — объём, сроки и приёмка"),
+    "partner": ("партнёр", "работаем вместе на общий результат, не покупаем и не продаём"),
+}
+
+MAX_POSITION = 60
+
+
+def clean_side(value: Any) -> str:
+    """Ключ стороны или пусто. Чужое значение — это «сторона не указана»."""
+    side = str(value or "").strip().lower()
+    return side if side in SIDES else ""
+
+
+def clean_position(value: Any) -> str:
+    """Должность: строка без краёв и не длиннее MAX_POSITION."""
+    return re.sub(r"\s+", " ", str(value or "").strip())[:MAX_POSITION]
+
+
+def side_title(side: Any) -> str:
+    """Название стороны по-русски или пусто."""
+    side = clean_side(side)
+    return SIDES[side][0] if side else ""
+
+
+def role_line(side: Any, position: Any) -> str:
+    """Роль одной строкой: «поставщик, коммерческий директор». Пусто — нет роли."""
+    return ", ".join([p for p in (side_title(side), clean_position(position)) if p])
+
 #: Имя учётки, похожее на переговорку: такой человек сразу заводится как
 #: «общее устройство», и его голос не учится.
 _ROOM_RE = re.compile(r"переговорн|конференц|meeting\s*room|conference|\broom\b|\bзал\b",
@@ -288,6 +331,9 @@ def _sanitize(raw: Any) -> dict[str, Any]:
             "aliases": aliases,
             "kind": kind if kind in KINDS else KIND_PERSON,
             "owner": bool(rec.get("owner")),
+            # Роль участника (20.09): у людей из прежней базы её просто нет.
+            "side": clean_side(rec.get("side")),
+            "position": clean_position(rec.get("position")),
             "not_same": [str(x) for x in (rec.get("not_same") or []) if str(x)],
             "samples": samples,
             "centroid": [],
@@ -437,6 +483,8 @@ def _public(pid: str, rec: dict[str, Any]) -> dict[str, Any]:
         "aliases": list(rec.get("aliases") or []),
         "kind": rec.get("kind") or KIND_PERSON,
         "owner": bool(rec.get("owner")),
+        "side": clean_side(rec.get("side")),
+        "position": clean_position(rec.get("position")),
         "count": int(rec.get("count") or len(rec.get("samples") or [])),
         "has_voice": bool(rec.get("centroid")),
         "created_at": rec.get("created_at"),
@@ -649,7 +697,8 @@ def search(query: str, embedding: Any = None, limit: int = 12,
 def _new_entry(name: str, kind: str = KIND_PERSON, owner: bool = False) -> dict[str, Any]:
     now = _now_iso()
     return {"name": name, "aliases": [], "kind": kind if kind in KINDS else KIND_PERSON,
-            "owner": bool(owner), "not_same": [], "samples": [], "centroid": [],
+            "owner": bool(owner), "side": "", "position": "",
+            "not_same": [], "samples": [], "centroid": [],
             "created_at": now, "updated_at": now, "count": 0}
 
 
@@ -911,6 +960,31 @@ def set_kind(person_id: str, kind: str) -> dict[str, Any]:
         people[pid] = rec
         db["people"] = people
         _write_db(db)
+        return _public(pid, rec)
+
+
+def set_role(person_id: str, side: Any, position: Any) -> dict[str, Any]:
+    """Сторона и должность человека (20.09). Пустые значения роль снимают.
+
+    Роль держится у человека, а не у записи: подрядчик остаётся подрядчиком от
+    встречи к встрече. Если в какой-то записи он выступает иначе, роль
+    переопределяется в самой записи — это дело хранилища записей, не базы.
+    """
+    with _lock:
+        db = _read_db()
+        people = dict(db.get("people") or {})
+        pid = str(person_id)
+        if pid not in people:
+            raise ValueError("человек не найден")
+        rec = dict(people[pid])
+        rec["side"] = clean_side(side)
+        rec["position"] = clean_position(position)
+        rec["updated_at"] = _now_iso()
+        people[pid] = rec
+        db["people"] = people
+        _write_db(db)
+        log.info("Роль %s: %s", rec.get("name"),
+                 role_line(rec["side"], rec["position"]) or "снята")
         return _public(pid, rec)
 
 

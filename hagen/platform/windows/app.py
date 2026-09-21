@@ -33,6 +33,20 @@ def open_path(path: str | Path) -> None:
     os.startfile(str(path))       # noqa: S606 — путь всегда свой, проверен вызывающим
 
 
+def open_link(url: str) -> None:
+    """Открыть ссылку: почтовую (`mailto:`), Telegram (`tg://`) или обычную.
+
+    Схемы — закрытым списком из описания розетки: `os.startfile` запускает то,
+    что назначено схеме в реестре, и чужая ссылка запустила бы что угодно.
+    """
+    from ..base import LINK_SCHEMES
+
+    link = str(url or "").strip()
+    if not any(link.lower().startswith(s) for s in LINK_SCHEMES):
+        raise ValueError("Такие ссылки программа не открывает: %s" % link[:40])
+    os.startfile(link)            # noqa: S606 — схема проверена выше
+
+
 def set_console_title(text: str) -> None:
     """Заголовок окна ставим из Python.
 

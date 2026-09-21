@@ -45,6 +45,20 @@
     <path d="M15.5 20.5h-11a1 1 0 0 1-1-1V7"></path>
   </symbol>
 
+  <!-- «Домой»: вернуться к добавлению ссылки или файла в разделе «Видео». -->
+  <symbol id="ic-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.5 10.5 12 3.5l8.5 7"></path>
+    <path d="M5.5 9.5v10a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-10"></path>
+    <path d="M9.5 20.5v-6h5v6"></path>
+  </symbol>
+
+  <!-- «Отправить»: стрелка вверх из коробки — привычный знак «поделиться». -->
+  <symbol id="ic-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3.5v12"></path>
+    <path d="M8 7.5l4-4 4 4"></path>
+    <path d="M5 13.5v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"></path>
+  </symbol>
+
   <symbol id="ic-fold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M6 14.5l6-6 6 6"></path>
   </symbol>

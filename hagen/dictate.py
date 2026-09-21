@@ -251,18 +251,28 @@ def recognise(pcm: np.ndarray, lang: str = "ru") -> str:
     # Точной модели может не быть в папке (в сборку её не кладут, решение
     # 16.09). gigaam скачал бы её молча, посреди диктовки, — а человек
     # ждал бы вставки текста и не понимал, почему её нет.
-    if not needs.precise_ready():
+    # Модель — та, что выбрана для голосового ввода (решение 21.09).
+    part = asr.part_for("voice")
+    if part == "precise":
+        if not needs.precise_ready():
+            raise DictateNeedsModel(
+                "Для набора текста голосом нужна точная модель распознавания (около 430 МБ). "
+                "Скачать: «Настройки → Модели → Части, которые качаются отдельно»."
+            )
+    elif not needs.ready(part):
+        info = needs.PARTS[part]
         raise DictateNeedsModel(
-            "Для набора текста голосом нужна точная модель распознавания (около 430 МБ). "
-            "Скачать: «Настройки → Модели → Части, которые качаются отдельно»."
+            "Для набора текста голосом нужна «%s» (около %d МБ). Скачать: «Настройки → "
+            "Модели → Части, которые качаются отдельно»." % (info["title"], info["size_mb"])
         )
     limit = asr.max_chunk_seconds(lang)
     if arr.size <= int(limit * SR):
-        return asr.transcribe_precise(arr, words=True, lang=lang).text
+        return asr.transcribe_precise(arr, words=True, lang=lang, role="voice").text
     spans = vad.split_for_asr(arr, max_s=limit)
     if not spans:
         return ""
-    parts = asr.transcribe_spans(arr, spans, precise=True, words=True, lang=lang)
+    parts = asr.transcribe_spans(arr, spans, precise=True, words=True, lang=lang,
+                                 role="voice")
     return " ".join(p["text"] for p in parts if p.get("text"))
 
 
@@ -321,6 +331,10 @@ class Dictation:
     busy() — идёт ли сейчас запись совещания. Пока идёт, диктовка не включается:
     микрофон один (решение 14.09).
     on_state(payload) — чтобы окно программы могло показать «капсулу».
+
+    Куда уходит надиктованное, решает НАЗНАЧЕНИЕ — то, какой клавишей начали
+    (20.09). Сама диктовка от этого не меняется: те же микрофон, распознавание,
+    чистка слов-паразитов и капсула, разный только последний шаг.
     """
 
     #: Что написано в капсуле на каждом шаге.
@@ -330,21 +344,47 @@ class Dictation:
         "sleeping": "Идёт запись — диктовка спит",
     }
 
+    #: Назначение → настройка с его сочетанием клавиш. «window» — обычная
+    #: диктовка в чужое окно, «note» — заметка к открытой записи, «task» —
+    #: поручение: та же заметка, но уходит ещё и в Todoist (решение 20.09:
+    #: заметку от задачи отличает отдельное сочетание, а не первое слово).
+    TARGETS = {
+        "window": "dictate_hotkey",
+        "note": "note_hotkey",
+        "task": "task_hotkey",
+    }
+
     def __init__(self, busy: Callable[[], bool] | None = None,
                  on_state: Callable[[dict[str, Any]], Any] | None = None,
                  paste: Callable[[str], bool] | None = None,
-                 capsule: Any = None) -> None:
+                 capsule: Any = None,
+                 on_note: Callable[[str, str], bool] | None = None) -> None:
         self.busy = busy or (lambda: False)
         self.on_state = on_state
         # Вставку можно подменить — этим пользуются проверки; по умолчанию она
         # берётся у розетки ввода, как и всё остальное общение с системой.
         self.paste = paste or (lambda text: platform.input().paste_text(text))
-        self.capsule = capsule
+        # Куда класть голосовую заметку, знает служба: клавишу ловим мы, а
+        # какая запись открыта на экране — её дело. Нет обработчика — заметка
+        # ведёт себя как обычная диктовка.
+        self.on_note = on_note
+        # Капсула бывает готовым окном (так её подсовывают проверки) или
+        # фабрикой, которая заведёт окно при первой надобности. Второе — обычный
+        # путь: окно поверх всех создаётся через pywin32, а он на время вызова
+        # не отпускает GIL, и подвисший вызов остановил бы всю программу. Пока
+        # человек не диктует, окна быть не должно вовсе.
+        self._make_capsule = capsule if callable(capsule) else None
+        self.capsule = None if callable(capsule) else capsule
+        self._capsule_failed = False
         self.stage = "off"          # off | idle | listening | thinking | sleeping
         self.last_text = ""
         self.last_error = ""
-        self.hotkey: Any = None          # разобранное сочетание из розетки ввода
+        self.hotkey: Any = None          # сочетание обычной диктовки
         self.listener: Any = None
+        #: Сочетания и слушатели заметок и задач: назначение → объект.
+        self.extra_hotkeys: dict[str, Any] = {}
+        self.extra_listeners: dict[str, Any] = {}
+        self.target = "window"      # чем начали эту диктовку
         self._rec: Any = None
         self._chunks: list[np.ndarray] = []
         self._started_at = 0.0
@@ -378,8 +418,48 @@ class Dictation:
             self.listener = listener
             self.last_error = ""
             self.stage = "idle"
+            self._enable_extra()
             self._emit()
             return self.status()
+
+    def _enable_extra(self) -> None:
+        """Занять сочетания голосовых заметок и задач (20.09), если заданы.
+
+        Пустая настройка — значит такой клавиши нет вовсе: ни одной клавиши
+        сверх нужного программа у системы не отбирает. Неудача с этими
+        сочетаниями обычную диктовку не ломает — она уже работает.
+        """
+        mode = self.mode()
+        for target, key in self.TARGETS.items():
+            if target == "window":
+                continue
+            raw = str(config.get(key) or "").strip()
+            if not raw:
+                continue
+            try:
+                hk = platform.input().parse_hotkey(raw)
+            except ValueError as err:
+                log.warning("сочетание %s не разобрано: %s", key, err)
+                continue
+            listener = platform.input().listen(
+                hk, on_press=(lambda t=target: self._on_press(t)),
+                on_release=(self._on_release if mode != "toggle" else None),
+            )
+            if not listener.start():
+                log.warning("сочетание %s занять не удалось: %s",
+                            hk.text, listener.error or "причина неизвестна")
+                continue
+            self.extra_hotkeys[target] = hk
+            self.extra_listeners[target] = listener
+
+    def _disable_extra(self) -> None:
+        for listener in self.extra_listeners.values():
+            try:
+                listener.stop()
+            except Exception:
+                log.debug("слушатель клавиши не остановился", exc_info=True)
+        self.extra_listeners.clear()
+        self.extra_hotkeys.clear()
 
     def disable(self) -> None:
         with self._lock:
@@ -391,7 +471,9 @@ class Dictation:
                     log.debug("слушатель клавиши не остановился", exc_info=True)
             self.listener = None
             self.hotkey = None
+            self._disable_extra()
             self._latched = False
+            self.target = "window"
             if self.stage != "off":
                 self.stage = "off"
                 self._emit()
@@ -408,6 +490,17 @@ class Dictation:
             same = (self.hotkey is not None and self.listener is not None
                     and self.listener.running
                     and platform.input().parse_hotkey(raw) == self.hotkey)
+            # Сочетания заметок тоже могли поменяться: сравниваем их вместе с
+            # основным, иначе новая клавиша заметки не занялась бы до перезапуска.
+            for target, key in self.TARGETS.items():
+                if target == "window" or not same:
+                    continue
+                want = str(config.get(key) or "").strip()
+                have = self.extra_hotkeys.get(target)
+                if not want:
+                    same = have is None
+                else:
+                    same = have is not None and platform.input().parse_hotkey(want) == have
         except ValueError:
             same = False
         if same:
@@ -420,7 +513,7 @@ class Dictation:
         return m if m in ("smart", "hold", "toggle") else "smart"
 
     # -------- нажатия
-    def _on_press(self) -> None:
+    def _on_press(self, target: str = "window") -> None:
         with self._lock:
             if self.stage == "listening":
                 # Второе нажатие в режиме «старт-стоп» (или после короткого касания)
@@ -428,6 +521,9 @@ class Dictation:
                 return
             if self.stage == "thinking":
                 return
+            # Назначение запоминаем на всю диктовку: дальше клавиша отпущена, а
+            # текст должен уйти туда, куда его начинали говорить.
+            self.target = target if target in self.TARGETS else "window"
             self._begin()
 
     def _on_release(self, held: float) -> None:
@@ -560,18 +656,38 @@ class Dictation:
         log.info("диктовка: %.1f с речи, %d знаков, распознано за %.1f с",
                  seconds, len(text), time.time() - t0)
         ok = False
+        target = self.target
         if text:
             remember(text, seconds)
             try:
-                ok = bool(self.paste(text))
+                ok = bool(self._deliver(text, target))
             except Exception as err:
-                log.warning("вставка не удалась: %s", err)
+                log.warning("надиктованное доставить не удалось: %s", err)
         with self._lock:
             self.last_text = text
-            self.last_error = "" if (ok or not text) else (
-                "Текст распознан, но вставить его не вышло — он остался в буфере обмена.")
+            self.last_error = "" if (ok or not text) else self._fail_note(target)
             self.stage = "idle"
+            self.target = "window"
             self._emit()
+
+    def _deliver(self, text: str, target: str) -> bool:
+        """Отдать надиктованное по назначению: в чужое окно или в запись.
+
+        Заметка без обработчика (окно программы закрыто, записи на экране нет)
+        ведёт себя как обычная диктовка — решение 20.09: текст не пропадает, а
+        уходит туда, куда ушёл бы и раньше.
+        """
+        if target in ("note", "task") and self.on_note is not None:
+            if bool(self.on_note(text, target)):
+                return True
+            log.info("заметку класть некуда — вставляю текст, как обычную диктовку")
+        return bool(self.paste(text))
+
+    @staticmethod
+    def _fail_note(target: str) -> str:
+        if target in ("note", "task"):
+            return "Текст распознан, но записать его не вышло — он остался в буфере обмена."
+        return "Текст распознан, но вставить его не вышло — он остался в буфере обмена."
 
     def _wake(self) -> None:
         with self._lock:
@@ -593,6 +709,11 @@ class Dictation:
             "latched": bool(self._latched),
             "text": self.last_text,
             "error": self.last_error,
+            # Голосовые заметки (20.09): какие сочетания заняты и чем начата
+            # идущая диктовка — по этому окно показывает, что сейчас пишется.
+            "target": self.target,
+            "note_hotkey": self.extra_hotkeys["note"].text if "note" in self.extra_hotkeys else "",
+            "task_hotkey": self.extra_hotkeys["task"].text if "task" in self.extra_hotkeys else "",
         }
 
     def _emit(self) -> None:
@@ -604,18 +725,43 @@ class Dictation:
         except Exception:
             log.debug("состояние диктовки не ушло в окно", exc_info=True)
 
+    def _ensure_capsule(self) -> Any:
+        """Капсула, заведённая при первой надобности. None — её нет и не будет.
+
+        Создание окна делается один раз и только когда капсулу правда надо
+        показать: на запуске программы этот вызов Windows иногда подвешивает, а
+        вместе с ним и всю программу (pywin32 не отпускает GIL).
+        """
+        if self.capsule is not None or self._make_capsule is None or self._capsule_failed:
+            return self.capsule
+        try:
+            self.capsule = self._make_capsule()
+        except Exception as err:
+            self._capsule_failed = True     # второй раз не пробуем
+            log.warning("капсула диктовки недоступна: %s", err)
+        return self.capsule
+
     def _paint_capsule(self) -> None:
         """Капсула поверх всех окон. Её может не быть — это не беда."""
-        cap = self.capsule
+        caption = self.CAPTION.get(self.stage)
+        # Показывать нечего — и заводить окно незачем: пока человек не диктует,
+        # капсулы в программе нет вовсе.
+        if caption is None and self.capsule is None:
+            return
+        cap = self._ensure_capsule()
         if cap is None:
             return
         try:
-            caption = self.CAPTION.get(self.stage)
             if caption is None or not config.get("dictate_pill", True):
                 cap.hide()
                 return
             if self.stage == "listening" and self._latched:
                 caption = "Слушаю — нажмите ещё раз, чтобы закончить"
+            # Чем начали, то и пишем: человек должен видеть, что сейчас
+            # записывается заметка или поручение, а не текст в чужое окно.
+            if self.stage in ("listening", "thinking") and self.target != "window":
+                caption = "%s (%s)" % (caption,
+                                       "заметка" if self.target == "note" else "поручение")
             cap.show(caption, self.stage)
         except Exception:
             log.debug("капсула не показалась", exc_info=True)

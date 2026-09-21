@@ -591,7 +591,9 @@ UI_VOICES = r"""
       && /подписан вручную/.test($('voices-list').textContent));
     // --- темы и плотность (пакет Claude Design) ---
     const bg = () => getComputedStyle(document.body).backgroundColor;
-    const btnH = () => $('btn-retry').getBoundingClientRect().height;
+    // Кнопка того же вида, что «Перечитать точнее», но видна всегда: ту
+    // прячем, когда звонки и файлы идут одной моделью.
+    const btnH = () => $('btn-diarize').getBoundingClientRect().height;
     await t('по умолчанию — светлая тема и плотность «Плотно»', () =>
       (document.documentElement.dataset.theme === 'light' && document.documentElement.dataset.density === 'compact')
       || JSON.stringify(document.documentElement.dataset));

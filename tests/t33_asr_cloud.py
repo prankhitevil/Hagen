@@ -46,13 +46,12 @@ config.get = lambda k, d=None: OVER[k] if k in OVER else _real_get(k, d)
 def setup(**kw):
     OVER.clear()
     OVER.update({
-        "api_keys": {"polza": "ключ-подлиннее-восьми"},
-        "asr_provider": "polza",
+        "api_keys": {"asr": "ключ-подлиннее-восьми"},
+        "asr_base_url": "https://polza.ai/api/v1",
         "asr_model": "openai/whisper-1",
         "asr_fallback": "openai/whisper-large-v3-turbo",
         "asr_lang": "ru",
         "chunk_min": 15,
-        "providers": [],
     })
     OVER.update(kw)
 
@@ -93,6 +92,14 @@ check("без ключа не готово", ok, False)
 check("сказано про ключ", "ключ" in why.lower(), True)
 setup(asr_model="")
 check("без модели не готово", asr_cloud.available()[0], False)
+setup(asr_base_url="")
+ok, why = asr_cloud.available()
+check("без адреса не готово", ok, False)
+check("сказано про адрес", "адрес" in why.lower(), True)
+setup(asr_base_url="http://127.0.0.1:8000/v1")
+check("адрес на своём компьютере не принят", asr_cloud.available()[0], False)
+setup(api_keys={"docs": "ключ-подлиннее-восьми"})
+check("ключ документов распознаванию не годится", asr_cloud.available()[0], False)
 
 say("")
 say("=== 2. Что уходит в запросе ===")
@@ -208,14 +215,18 @@ check("слов нет", segs[0].get("words"), None)
 say("")
 say("=== 10. Цена ===")
 setup()
-providers._models_cache["polza"] = {
-    "provider": "polza", "at": 0,
+providers._models_cache["asr"] = {
+    "role": "asr", "base_url": "https://polza.ai/api/v1", "at": 0,
     "stt": [{"id": "openai/whisper-1", "title": "whisper-1",
              "price": {"per_minute": 0.432, "currency": "RUB"}}],
     "chat": [],
 }
 check("цена часа записи", asr_cloud.estimate_cost(3600.0), "примерно 25.9 ₽")
-providers._models_cache.pop("polza", None)
+setup(asr_base_url="https://api.example.com/v1")
+check("список от прежнего адреса цену не даёт",
+      "неизвестна" in asr_cloud.estimate_cost(3600.0), True)
+setup()
+providers._models_cache.pop("asr", None)
 check("без списка моделей — честно",
       "неизвестна" in asr_cloud.estimate_cost(3600.0), True)
 

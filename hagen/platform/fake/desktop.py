@@ -12,9 +12,15 @@ from typing import Any, Callable
 
 __all__ = [
     "list_sessions", "list_capture_sessions", "detect_call", "call_output_device",
-    "watch_calls", "outlook_kind", "current_meeting", "suggest_title",
+    "watch_calls", "outlook_kind", "compose_mail", "current_meeting", "suggest_title",
     "attendee_names", "suggest_max_speakers",
 ]
+
+#: Письма, «открытые» через compose_mail: проверка смотрит, что в них попало.
+MAILS: list[dict[str, Any]] = []
+
+#: Удаётся ли собрать письмо. False — как будто классического Outlook нет.
+MAIL_OK = True
 
 #: Встреча, которую отдаёт `current_meeting`. None — встречи нет.
 MEETING: dict[str, Any] | None = None
@@ -37,14 +43,16 @@ WATCHERS: list["Watcher"] = []
 
 
 def reset() -> None:
-    global MEETING, CALL, OUTPUT, OUTLOOK
+    global MEETING, CALL, OUTPUT, OUTLOOK, MAIL_OK
     MEETING = None
     CALL = {"active": False}
     OUTPUT = None
     OUTLOOK = {"classic": True, "new": False, "com_available": True}
+    MAIL_OK = True
     SESSIONS.clear()
     CAPTURE_SESSIONS.clear()
     WATCHERS.clear()
+    MAILS.clear()
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -66,6 +74,18 @@ def call_output_device(sessions: list[dict[str, Any]] | None = None,
 
 def outlook_kind() -> dict[str, Any]:
     return dict(OUTLOOK)
+
+
+def compose_mail(subject: str, body: str,
+                 attachments: list[str] | None = None,
+                 to: list[str] | None = None) -> bool:
+    """Письмо не открывается, а записывается: проверка смотрит, что в нём."""
+    if not MAIL_OK:
+        return False
+    MAILS.append({"subject": str(subject or ""), "body": str(body or ""),
+                  "attachments": [str(a) for a in (attachments or [])],
+                  "to": [str(t) for t in (to or [])]})
+    return True
 
 
 def current_meeting(window_minutes: int | None = None,

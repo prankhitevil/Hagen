@@ -72,6 +72,34 @@ def _prefer_local_models() -> None:
         os.environ["HF_HUB_OFFLINE"] = "1"
 
 
+def hf_online():
+    """Временно разрешить обращение к Hugging Face за моделью.
+
+    Приложение работает с моделями с диска (_prefer_local_models ставит
+    HF_HUB_OFFLINE) — это и быстрее, и не плодит окна антивируса. Но если модели
+    на диске нет, за ней надо всё-таки сходить. Переменную окружения менять
+    поздно: huggingface_hub читает её один раз при импорте, поэтому
+    переключаем сам флажок в библиотеке и возвращаем как было.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _ctx():
+        try:
+            from huggingface_hub import constants as hf_constants
+        except Exception:
+            yield
+            return
+        was = getattr(hf_constants, "HF_HUB_OFFLINE", False)
+        hf_constants.HF_HUB_OFFLINE = False
+        try:
+            yield
+        finally:
+            hf_constants.HF_HUB_OFFLINE = was
+
+    return _ctx()
+
+
 def _keep_localhost_direct() -> None:
     """Обращения к самому себе не должны идти через прокси.
 
@@ -137,9 +165,25 @@ DEFAULTS: dict[str, Any] = {
     # сам, когда в карточке вводят новое имя; правится в «Настройки → Obsidian».
     "projects": [],
     "rec_tags": [],
+    # Папка проекта в сейфе (решение 20.09): {"АКП Digital": "Projects/АКП"}.
+    # Связка необязательная — проект может быть просто названием. Если папка
+    # задана, заметки этого проекта ложатся в неё, а не в папку категории.
+    "project_folders": {},
+    # Список записей сложен по папкам проектов (20.09). Привычка вида, поэтому
+    # переживает перезапуск; отбор по проекту и тегу — наоборот, только пока
+    # открыто окно: спрятанный отбор выглядел бы как пропажа записей.
+    "list_group_by_project": False,
+    # Как копировали документ в прошлый раз (20.09): "md", "rich" или "tg".
+    # Внутри документ всегда Markdown; это только вид, в котором его вставляют.
+    "copy_format": "md",
     # --- обработка (решения 13.09) ---
     # Как называть владельца в стенограмме и документах: «Я» или имя.
     "owner_name": "Я",
+    # Своя роль (20.09): сторона и должность владельца записи. Уходят в шапку
+    # стенограммы вместе с ролями остальных — документ должен понимать, кто
+    # кому что пообещал. Пусто — роль не указана, как было до 20.09.
+    "owner_side": "",
+    "owner_position": "",
     # Своя «задача и структура» документов: {"protocol": "...", ...}. Пусто — исходная.
     "prompt_overrides": {},
     # Язык ИНСТРУКЦИЙ модели: "ru" или "en" (решение 17.09).
@@ -151,10 +195,37 @@ DEFAULTS: dict[str, Any] = {
     "onnx_threads": 7,
     "live_model": "v3_e2e_ctc",
     "offline_model": "v3_e2e_rnnt",
+    # --- какие модели распознавания и для чего (решение 21.09) ---
+    # Одна модель на всё или две. При одной — asr_single: быстрая («fast») или
+    # точная («precise»). При двух — отдельно звонки (asr_calls) и голосовой
+    # ввод (asr_voice), файлы и видео всегда на точной; asr_reread — кнопка
+    # «Перечитать точнее», есть только когда звонки идут быстрой. Движок точной
+    # модели — asr_engine («onnx_asr» или «torch»), у onnx-asr веса asr_weights:
+    # сжатые («int8») или полные («fp32»). Действует после перезапуска
+    # программы; нет файлов — роль берёт то, что скачано, и окно говорит почему.
+    # По умолчанию — рекомендованное (asr.RECOMMENDED): одна точная модель на
+    # onnx-asr с полными весами.
+    "asr_count": 1,
+    "asr_single": "precise",
+    "asr_calls": "fast",
+    "asr_voice": "precise",
+    "asr_reread": True,
+    "asr_engine": "onnx_asr",
+    "asr_weights": "fp32",
+    # Черновик — бегущий текст фразы, пока человек говорит: хвост фразы
+    # перераспознаётся каждые полторы секунды. Только у быстрой модели в эфире;
+    # по умолчанию выключен — на замере 20.09 он один занимал 4–5 ядер.
+    "live_draft": False,
+    # Скачанные части, которые человек сказал оставить, хотя выбору они не
+    # нужны: про них больше не спрашиваем. И части, которые удалить при
+    # следующем запуске, — те, что держала работавшая программа.
+    "asr_keep_parts": [],
+    "asr_pending_delete": [],
     # Через сколько минут простоя выгружать точную модель из памяти. Она весит
     # около 1,3 ГБ вместе с torch и нужна не всегда: файлам, «Перечитать точнее»
     # и диктовке. Быстрой модели эфира это не касается — она держится всегда,
-    # иначе первая фраза записи ждала бы загрузку. 0 = не выгружать.
+    # иначе первая фраза записи ждала бы загрузку. В вариантах одной модели так
+    # же держится точная: она и есть модель эфира. 0 = не выгружать.
     "precise_idle_min": 30,
     # --- правило пауз (раздел 6 ТЗ) ---
     "silence_finalize_ms": 2200,
@@ -265,6 +336,18 @@ DEFAULTS: dict[str, Any] = {
     # Новый звонок в пределах этого времени после записи — спросить,
     # дописать ли его в прошлую заметку.
     "call_resume_window_s": 600,
+    # --- забытая запись (20.09) ---
+    # Запись 18.09 проработала 1 ч 17 мин, из них разговор — первые шесть минут.
+    # Если за последние N минут в записи меньше K слов, программа спрашивает,
+    # не закончился ли разговор, и без ответа останавливает запись сама.
+    # Считаем СЛОВА, а не реплики: в тишине распознавание выдаёт однословный
+    # мусор («По.», «Т.», «Ава.») с промежутками в четверть часа, и правило
+    # «нет реплик N минут» такой мусор сбрасывал бы снова и снова.
+    # 0 минут — защита выключена.
+    "idle_stop_min": 10,
+    "idle_stop_words": 5,
+    # Сколько ждать ответа на вопрос, прежде чем остановить запись самой.
+    "idle_stop_confirm_s": 120,
     "outlook_enabled": True,
     # За сколько минут до встречи считать начавшийся звонок её началом. Имя
     # записи берётся у идущей встречи, а у будущей — только в пределах этого
@@ -298,23 +381,27 @@ DEFAULTS: dict[str, Any] = {
     # --- модели и облачные сервисы (общее для протокола, саммари и распознавания) ---
     # Чем делать документы: claude_cli (подписка на этом компьютере) либо api (по ключу).
     "minutes_engine": "claude_cli",
-    # Выбранный сервис для документов и добавленные вручную сервисы.
-    # Встроенные (anthropic, openai, gigachat, yandexgpt, polza) в списке не лежат,
-    # они заданы в providers.BUILTIN — здесь только свои.
-    "api_provider": "anthropic",
-    "providers": [],
+    # Сервис для документов по ключу — адрес, ключ и модель (решение 21.09).
+    # Как с ним разговаривать, программа узнаёт по адресу; api_kind задаёт это
+    # руками для необычного адреса (openai, anthropic, gigachat, yandexgpt).
+    # Пустая модель — подберётся сама там, где имена известны (Anthropic,
+    # GigaChat, YandexGPT); у остальных её указывает человек.
+    "api_base_url": "",
+    "api_kind": "",
+    "api_model": "",
+    "api_folder": "",              # идентификатор каталога, нужен только YandexGPT
+    # Ключи подключений: {"docs": "...", "asr": "..."}. Наружу — только маской.
     "api_keys": {},
-    # Модель на сервис: {"<id сервиса>": "<имя модели>"}. Пусто = «по умолчанию»,
-    # то есть приложение подберёт само (сильная для протокола, быстрая для
-    # коротких документов и промежуточных выжимок).
-    "api_models": {},
+    "services_adopted": False,     # разовый перенос с прежнего списка сервисов сделан
     "claude_cli_model": "",
     "claude_timeout_s": 600,
     "minutes_chunk_chars": 0,      # размер куска стенограммы; 0 = считать по модели
     # --- распознавание файлов (живой микрофон это НЕ затрагивает) ---
     "asr_files": "local",          # local = на этом компьютере, cloud = по API
     "asr_lang": "ru",              # ru = GigaAM, en = Parakeet
-    "asr_provider": "polza",       # сервис для облачного распознавания
+    # Облачное распознавание — своё подключение: адрес, ключ (api_keys.asr),
+    # модель. По умолчанию polza: рубли, без VPN, много моделей распознавания.
+    "asr_base_url": "https://polza.ai/api/v1",
     "asr_model": "openai/whisper-1",
     "asr_fallback": "openai/whisper-large-v3-turbo",
     # --- диктовка текста (см. dictate.py) ---
@@ -322,6 +409,12 @@ DEFAULTS: dict[str, Any] = {
     # той же точной моделью, что и «Перечитать точнее».
     "dictate_enabled": False,
     "dictate_hotkey": "ctrl+shift+space",
+    # Голосовые заметки к записи (20.09): та же диктовка, но текст ложится в
+    # запись, открытую на экране, а не в чужое окно. Заметку от поручения
+    # отличает отдельное сочетание — так решено 20.09, чтобы не заставлять
+    # человека выговаривать служебное слово. Пусто — клавиши нет вовсе.
+    "note_hotkey": "",
+    "task_hotkey": "",
     # smart = коротко нажал: старт-стоп, держу: пока держу;
     # hold = только пока держу; toggle = только старт-стоп.
     "dictate_mode": "smart",
@@ -432,16 +525,53 @@ def load(force: bool = False) -> dict[str, Any]:
     global _cache
     with _lock:
         if _cache is None or force:
+            raw = _read_raw()
             merged = dict(DEFAULTS)
-            merged.update(_read_raw())
+            merged.update(raw)
             # разовый перенос токена из hf_token.txt, который просили создать вручную
             if not merged.get("hf_token") and LEGACY_TOKEN_PATH.exists():
                 tok = _extract_hf_token_from_file(LEGACY_TOKEN_PATH)
                 if tok:
                     merged["hf_token"] = tok
-            _cache = _merge_replacements(merged)
+            _cache = _merge_asr_choice(_merge_replacements(merged), raw)
         return dict(_cache)
 
+
+#: Как прежний выбор варианта распознавания (стенд 18.09, asr_preset) ложится
+#: на нынешние параметры (решение 21.09).
+_PRESET_TO_CHOICE: dict[str, dict[str, Any]] = {
+    "current": {"asr_count": 2, "asr_calls": "fast", "asr_voice": "precise",
+                "asr_reread": True, "asr_engine": "torch", "live_draft": True},
+    "current_nodraft": {"asr_count": 2, "asr_calls": "fast", "asr_voice": "precise",
+                        "asr_reread": True, "asr_engine": "torch", "live_draft": False},
+    "one_torch": {"asr_count": 1, "asr_single": "precise", "asr_engine": "torch"},
+    "one_torch_2": {"asr_count": 1, "asr_single": "precise", "asr_engine": "torch"},
+    "one_ox_fp32": {"asr_count": 1, "asr_single": "precise", "asr_engine": "onnx_asr",
+                    "asr_weights": "fp32"},
+    "one_ox_int8": {"asr_count": 1, "asr_single": "precise", "asr_engine": "onnx_asr",
+                    "asr_weights": "int8"},
+}
+
+# Хоть один из них в файле — выбор уже сделан по-новому, переносить нечего.
+_ASR_CHOICE_KEYS = ("asr_count", "asr_single", "asr_calls", "asr_voice", "asr_reread",
+                    "asr_engine", "asr_weights")
+
+
+def _merge_asr_choice(data: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Перенести выбор моделей распознавания с прежних настроек (решение 21.09).
+
+    Умолчание — рекомендованное: одна точная модель. Но у того, кто уже
+    работает, поведение не должно меняться молча: выбранный на стенде вариант
+    ложится на новые параметры, а тот, кто стенда не трогал, остаётся «как
+    было» — быстрая модель в звонках, точная в диктовке и файлах, с бегущим
+    текстом. Делается при чтении, пока параметров нет в файле; первое же
+    сохранение настроек запишет их явно.
+    """
+    if not raw or any(key in raw for key in _ASR_CHOICE_KEYS):
+        return data
+    preset = str(raw.get("asr_preset") or "current")
+    data.update(_PRESET_TO_CHOICE.get(preset, _PRESET_TO_CHOICE["current"]))
+    return data
 
 
 def _merge_replacements(data: dict[str, Any]) -> dict[str, Any]:
@@ -506,11 +636,11 @@ def save(patch: dict[str, Any]) -> dict[str, Any]:
     with _lock:
         current = load()
         for k, v in patch.items():
-            # Словари «по сервису» сливаются по одному ключу, а не заменяются
-            # целиком: интерфейс присылает только тот сервис, который правили, и
-            # полная замена стёрла бы ключи и выбранные модели остальных.
+            # Ключи сливаются по одному, а не заменяются целиком: интерфейс
+            # присылает только тот, который правили (документы или
+            # распознавание), и полная замена стёрла бы другой.
             # Пустая строка в значении — это «убрать запись».
-            if k in ("api_keys", "api_models") and isinstance(v, dict):
+            if k == "api_keys" and isinstance(v, dict):
                 merged = dict(current.get(k) or {})
                 for provider, val in v.items():
                     if val == "":
@@ -627,6 +757,13 @@ def public() -> dict[str, Any]:
     keys = data.get("api_keys") or {}
     out["api_keys_set"] = {p: bool(v) for p, v in keys.items() if v}
     out["api_keys_hint"] = {p: _mask(v) for p, v in keys.items() if v}
+    # Движок разметки назначает релиз, а не настройки; странице он нужен, чтобы
+    # не показывать поле токена там, где токен не нужен. Импорт здесь: дверь
+    # разметки сама зависит от config.
+    from . import diarize
+
+    out["diarize_engine"] = diarize.engine_name()
+    out["diarize_needs_token"] = diarize.needs_token()
     return out
 
 

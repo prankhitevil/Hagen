@@ -11,9 +11,12 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-import isolate  # noqa: E402  настоящая база голосов не трогается
+import isolate  # noqa: E402  настоящие база голосов и настройки не трогаются
 
 isolate.voices()
+# Служба при запуске переносит старые настройки и пишет их в файл: на
+# настоящем settings.json проверка переписала бы настройки человека.
+isolate.settings()
 
 LINES = []
 FAIL = []
@@ -63,19 +66,18 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
     st = cli.get("/api/state").json()
     check("состояние отдаётся", isinstance(st.get("recordings"), list), True)
     caps = st.get("capabilities") or {}   # именно так поле зовётся в ответе
-    # Число сервисов растёт, когда в список добавляют новый (17.09 добавлены
-    # российские агрегаторы, китайские модели напрямую, Groq и Gemini).
-    # Проверяем не точное число, а что список непустой и в нём есть тот,
-    # на котором держится распознавание.
-    ids = [p.get("id") for p in (caps.get("providers") or [])]
-    check("сервисы в списке есть", len(ids) >= 5, True)
-    check("polza на месте", "polza" in ids, True)
+    # Сервисы — два подключения «адрес, ключ, модель» (решение 21.09).
+    conns = caps.get("connections") or {}
+    check("подключения: документы и распознавание", sorted(conns), ["asr", "docs"])
+    check("распознавание по умолчанию — polza",
+          (conns.get("asr") or {}).get("base_url"), "https://polza.ai/api/v1")
+    check("у документов адреса по умолчанию нет", (conns.get("docs") or {}).get("base_url"), "")
     say("   подсказка моделей: " + str(caps.get("minutes_models"))[:110])
-    keys_leaked = [p for p in (caps.get("providers") or []) if "api_key" in p]
-    check("ключей наружу нет", keys_leaked, [])
-    pr = cli.get("/api/providers").json()
-    check("выбранный сервис", pr.get("selected"), "anthropic")
-    check("сервис для распознавания", pr.get("asr_selected"), "polza")
+    check("ключей наружу нет", [r for r, c in conns.items() if "key" in c], [])
+    pr = cli.get("/api/connections").json()
+    check("маршрут подключений", sorted(pr.get("connections") or {}), ["asr", "docs"])
+    check("в нём подходящие адреса для подсказки",
+          any("routerai.ru" in s.get("base_url", "") for s in pr.get("suggested") or []), True)
 
     say("")
     say("=== 3. Настройки раздела «Видео» ===")
@@ -107,15 +109,22 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
     check("саммари для несуществующей записи — 404", nosuch.status_code, 404)
 
     say("")
-    say("=== 5. Добавление сервиса: проверка адреса ===")
+    say("=== 5. Адрес сервиса: проверка ===")
     for url, why in (("http://polza.ai/api/v1", "не https"),
                      ("https://127.0.0.1/v1", "свой компьютер"),
                      ("https://192.168.0.2/v1", "домашняя сеть")):
-        r = cli.post("/api/providers", json={"title": "т", "base_url": url},
-                     headers=ORIGIN)
-        check("отклонён адрес (%s)" % why, r.status_code, 400)
-    r = cli.delete("/api/providers/anthropic", headers=ORIGIN)
-    check("встроенный сервис не удаляется", r.status_code, 400)
+        cli.post("/api/settings", json={"api_base_url": url,
+                                        "api_keys": {"docs": "ключ-подлиннее-восьми"}},
+                 headers=ORIGIN)
+        docs = cli.get("/api/connections").json()["connections"]["docs"]
+        check("отклонён адрес (%s)" % why, "не годится" in docs.get("problem", ""), True)
+    r = cli.post("/api/models?role=docs&refresh=true", headers=ORIGIN)
+    check("по такому адресу список моделей не спрашивается", r.status_code, 502)
+    check("неизвестное подключение — 400",
+          cli.post("/api/models?role=нет", headers=ORIGIN).status_code, 400)
+    check("готовность обновилась сразу после сохранения",
+          "не годится" in str(cli.get("/api/state").json()["capabilities"]["engines"][1]["reason"]),
+          True)
 
     say("")
     say("=== 6. Старых путей больше нет ===")
@@ -125,6 +134,8 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
           404)
     check("новый путь загрузки на месте",
           cli.post("/api/media/upload", headers=ORIGIN).status_code in (400, 422), True)
+    check("/api/providers убран (список сервисов стал полями)",
+          cli.get("/api/providers").status_code, 404)
 
 say("")
 say("ИТОГО провалов: %d" % len(FAIL))

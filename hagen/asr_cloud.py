@@ -9,8 +9,8 @@
 Живой микрофон сюда не попадает НИКОГДА: непрерывно лить звук в чужой сервис
 нельзя, да и смысла нет — эфир и так распознаётся мгновенно.
 
-Сервис и ключ берутся из общего реестра (providers.py), модель — из настроек
-asr_model, запасная — asr_fallback.
+Адрес, ключ и модель — своё подключение «asr» (providers.connection), запасная
+модель — asr_fallback.
 """
 from __future__ import annotations
 
@@ -53,23 +53,19 @@ def _direct_env() -> dict[str, str]:
 
 def available() -> tuple[bool, str]:
     """Готов ли облачный путь, и если нет — почему, человеческим языком."""
-    pid = providers.asr_id()
-    info = providers.find(pid)
-    if info is None:
-        return False, "Сервис для распознавания не выбран в настройках."
-    if not providers.api_key(pid):
-        return False, ("Для «%s» не задан ключ. Настройки → Модели → «Ключ "
-                       "выбранного сервиса»." % info["title"])
-    if not str(config.get("asr_model") or "").strip():
-        return False, "Не выбрана модель распознавания в настройках."
-    return True, "Готово: %s, модель %s." % (info["title"], config.get("asr_model"))
+    problem = providers.problem("asr")
+    if problem:
+        return False, problem + " Настройки → Модели → «Облачное распознавание файлов»."
+    conn = providers.connection("asr")
+    if not conn["model"]:
+        return False, "Не указана модель распознавания в настройках."
+    return True, "Готово: %s, модель %s." % (conn["service"], conn["model"])
 
 
 def estimate_cost(seconds: float) -> str:
     """Во сколько обойдётся эта запись. Цену берём из списка моделей сервиса."""
-    pid = providers.asr_id()
     model = str(config.get("asr_model") or "")
-    cached = providers.cached_models(pid) or {}
+    cached = providers.cached_models("asr") or {}
     for item in cached.get("stt") or []:
         if item.get("id") != model:
             continue
@@ -136,10 +132,9 @@ def _post_chunk(path: Path, model: str, want_words: bool,
     lang — язык задания; пусто — из общих настроек (раньше язык из формы
     «Видео» в облако не доходил).
     """
-    pid = providers.asr_id()
-    info = providers.require(pid)
-    key = providers.api_key(pid)
-    url = "%s/audio/transcriptions" % info["base_url"].rstrip("/")
+    conn = providers.connection("asr")
+    key = conn["key"]
+    url = "%s/audio/transcriptions" % conn["base_url"]
     data: list[tuple[str, str]] = [("model", model), ("response_format", fmt)]
     lang = lang if lang in ("ru", "en") else _lang()
     if lang:
@@ -155,7 +150,7 @@ def _post_chunk(path: Path, model: str, want_words: bool,
             headers={"Authorization": "Bearer %s" % key},
             data=data,
             files={"file": (path.name, fh, "audio/mpeg")},
-            service=info.get("service") or info["title"],
+            service=conn["service"],
             secrets=[key],
             timeout=600.0,
             attempts=3,

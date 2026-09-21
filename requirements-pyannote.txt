@@ -1,0 +1,9 @@
+# Зависимости релиза «Hagen» с разметкой говорящих через pyannote.
+#
+# Этот набор ставится, только если в release.json стоит "diarize": "pyannote".
+# Такому релизу нужен токен Hugging Face и принятые условия модели
+# pyannote/speaker-diarization-community-1. Релизу с ONNX + VBx (по умолчанию)
+# хватает requirements.txt: та же модель лежит в models\diar.
+-r requirements.txt
+
+pyannote.audio==4.0.7

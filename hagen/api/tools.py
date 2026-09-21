@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Маршруты мелких инструментов: модель эфира, словарь замен, микрофон Windows.
+"""Маршруты мелких инструментов: модели распознавания, словарь замен, микрофон Windows.
 
 Перенесено из `server.py` без изменений.
-Область объединяет три коротких набора, у которых нет своей большой темы:
-«повторить загрузку модели», словарь из ручных правок и выключатель микрофона.
+Область объединяет короткие наборы, у которых нет своей большой темы:
+«повторить загрузку модели» и выбор моделей распознавания (что скачать, что
+удалить, «Сбросить всё»), словарь из ручных правок и выключатель микрофона.
 """
 from __future__ import annotations
 
@@ -37,6 +38,90 @@ async def api_asr_warmup() -> JSONResponse:
     state = asr.live_state()
     hub.publish({"type": "ready", "asr": state})
     return JSONResponse(state)
+
+
+@router.get("/api/asr/models")
+async def api_asr_models() -> JSONResponse:
+    """Модели распознавания: что выбрано, чего не хватает, что не нужно (решение 21.09)."""
+    from .. import needs
+
+    loop = asyncio.get_running_loop()
+    return JSONResponse(await loop.run_in_executor(None, needs.models_state))
+
+
+def _models_job(title: str, work) -> JSONResponse:
+    """Скачивание и сброс моделей — задачей в очереди: видно ход, можно остановить."""
+    from .. import jobs, needs
+
+    if jobs.busy_with("needs", "asr-models"):
+        raise HTTPException(status_code=409, detail="С моделями уже идёт работа")
+
+    def run(handle) -> dict[str, Any]:
+        res = work(handle)
+        hub.publish({"type": "needs", "parts": needs.state()})
+        return res
+
+    return JSONResponse({"job_id": jobs.submit("needs", run, title, rec_id="asr-models"),
+                         "title": title})
+
+
+@router.post("/api/asr/models/download")
+async def api_asr_models_download() -> JSONResponse:
+    """«Скачать нужное»: всё, чего не хватает выбору в «Моделях»."""
+    from .. import needs
+
+    missing = needs.models_state()["missing"]
+    if not missing:
+        return JSONResponse({"job_id": None, "title": "Всё нужное уже на месте"})
+
+    def work(handle) -> dict[str, Any]:
+        done = []
+        for item in missing:
+            needs.install(item["key"], note=handle.log)
+            done.append(item["key"])
+        hub.publish({"type": "notice", "level": "ok",
+                     "text": "Модели скачаны. Выбор сработает после перезапуска программы."})
+        return {"installed": done}
+
+    return _models_job("Скачиваю модели: %s" % ", ".join(m["title"] for m in missing), work)
+
+
+@router.post("/api/asr/models/cleanup")
+async def api_asr_models_cleanup(request: Request) -> JSONResponse:
+    """«Удалить» или «Оставить» то, что выбору в «Моделях» не нужно."""
+    from .. import needs
+
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        if str(body.get("action") or "") == "keep":
+            await loop.run_in_executor(None, needs.keep_unneeded)
+            res: dict[str, Any] = {"kept": True}
+        else:
+            res = await loop.run_in_executor(None, needs.delete_unneeded)
+    except needs.NeedError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    res["state"] = await loop.run_in_executor(None, needs.models_state)
+    return JSONResponse(res)
+
+
+@router.post("/api/asr/models/reset")
+async def api_asr_models_reset() -> JSONResponse:
+    """«Сбросить всё»: одна точная модель и рекомендованные настройки."""
+    from .. import needs
+
+    def work(handle) -> dict[str, Any]:
+        res = needs.reset_models(note=handle.log)
+        hub.publish({"type": "settings", "settings": config.public()})
+        hub.publish({"type": "notice", "level": "ok",
+                     "text": "Модели сброшены. Настройки сработают после перезапуска программы."})
+        return res
+
+    return _models_job("Сбрасываю модели распознавания", work)
 
 
 @router.get("/api/fixes")

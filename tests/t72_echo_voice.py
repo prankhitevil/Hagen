@@ -208,7 +208,11 @@ try:
     say("=== 6. Короткие куски и подключение к разметке ===")
     check("короче полсекунды отпечаток не считаем", diarize.MIN_EMB_S >= 0.5, diarize.MIN_EMB_S)
     src = io.open(PROJECT / "hagen" / "diarize.py", encoding="utf-8").read()
-    check("счёт отпечатков берёт модель разметки", '_embedding' in src and 'def embed_spans' in src)
+    engines = [io.open(PROJECT / "hagen" / name, encoding="utf-8").read()
+               for name in ("diar_pyannote.py", "diar_onnx.py")]
+    check("счёт отпечатков берёт модель разметки",
+          'def embed_spans' in src and 'eng.embed(' in src
+          and all('def embed(' in e for e in engines))
     srv = io.open(PROJECT / "hagen" / "server.py", encoding="utf-8").read()
     # Разметка говорящих переехала в роутер.
     spk = io.open(PROJECT / "hagen" / "api" / "speakers.py", encoding="utf-8").read()

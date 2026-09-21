@@ -14,6 +14,16 @@ const S = {
   categories: [],
   projects: [],           // подсказки поля «Проект»: что уже вводили
   recTags: [],            // подсказки поля «Теги»
+  projectFolders: {},     // {проект: папка в сейфе} — куда уходят его заметки
+  listFilter: { project: '', tag: '' },  // отбор списка записей (20.09)
+  selected: [],           // отмеченные Ctrl+щелчком записи — чтобы удалить пачкой
+  // Список сложен по папкам проектов. null — ещё не знаем: значение возьмётся
+  // из настроек при первом чтении состояния. Дальше это выбор человека, и
+  // перечитывание состояния его не отменяет.
+  groupByProject: null,
+  foldedProjects: {},     // какие папки проектов свёрнуты: {проект: true}
+  copyFormat: 'md',       // как копировали документ в прошлый раз (20.09)
+  share: null,            // что можно отправить у открытой записи (20.09)
   linkDraft: [],          // отмеченное в окне «Связать с» до нажатия «Сохранить»
   caps: {},
   vault: {},
@@ -151,52 +161,215 @@ function paintMeters() {
     : (S.farSilent ? 'На выбранном устройстве нет звука. Проверьте, куда Teams выводит звонок.' : '');
 }
 
-function paintSidebar() {
-  const box = $('rec-list');
+/* Отбор списка по проекту и тегу (20.09). Проект и теги уже приходят с каждой
+   записью, поэтому отбор — дело показа: службу об этом не спрашиваем. */
+function listFilter(list) {
+  const p = (S.listFilter.project || '').toLowerCase();
+  const t = (S.listFilter.tag || '').toLowerCase();
+  return list.filter((m) => {
+    if (p && String(m.project || '').toLowerCase() !== p) return false;
+    if (t && !(m.tags || []).some((x) => String(x).toLowerCase() === t)) return false;
+    return true;
+  });
+}
+
+/* Проекты и теги, которые есть у записей на экране. Берём из самих записей, а
+   не из подсказок настроек: в отборе не должно быть проектов, по которым в
+   списке всё равно ничего не найдётся. */
+function paintListFilter() {
   const all = S.recordings || [];
   const list = S.mode === 'video' ? all.filter(isVideoRec) : all.filter((m) => !isVideoRec(m));
-  if (!list.length) {
-    box.innerHTML = '<div class="tiny muted" style="padding:14px 10px">'
-      + (S.mode === 'video' ? 'Обработанных видео пока нет' : 'Записей пока нет') + '</div>';
-    return;
+  const projects = [], tags = [];
+  list.forEach((m) => {
+    const p = String(m.project || '').trim();
+    if (p && !projects.some((x) => x.toLowerCase() === p.toLowerCase())) projects.push(p);
+    (m.tags || []).forEach((t) => {
+      t = String(t).trim();
+      if (t && !tags.some((x) => x.toLowerCase() === t.toLowerCase())) tags.push(t);
+    });
+  });
+  projects.sort((a, b) => a.localeCompare(b, 'ru'));
+  tags.sort((a, b) => a.localeCompare(b, 'ru'));
+  const fill = (sel, values, cur, none) => {
+    const el = $(sel);
+    if (!el) return;
+    // Выбранное значение держим в списке, даже если под него уже ничего нет:
+    // иначе отбор молча снялся бы, а список остался коротким.
+    const shown = cur && !values.some((v) => v.toLowerCase() === cur.toLowerCase())
+      ? values.concat([cur]) : values;
+    el.innerHTML = [`<option value="">${none}</option>`].concat(
+      shown.map((v) => `<option value="${esc(v)}"${v.toLowerCase() === (cur || '').toLowerCase() ? ' selected' : ''}>${esc(v)}</option>`)).join('');
+    el.value = cur || '';
+  };
+  fill('flt-project', projects, S.listFilter.project, 'все проекты');
+  fill('flt-tag', tags, S.listFilter.tag, 'все теги');
+  const btn = $('btn-group');
+  if (btn) {
+    btn.setAttribute('aria-pressed', S.groupByProject ? 'true' : 'false');
+    btn.classList.toggle('on', !!S.groupByProject);
+    btn.title = S.groupByProject ? 'Показать списком, без папок проектов'
+      : 'Складывать записи по проектам';
   }
-  box.innerHTML = list.map((m) => {
-    const isRec = m.status === 'recording';
-    // Вторая строка — дата, длительность и участники.
-    // Категорию в каждой строке не повторяем: она одна почти у всех записей
-    // и ничего не различает; отбор по ней будет над списком.
-    const v = m.diarized ? (m.voices || null) : null;
-    let who = '', whoHint = '';
-    if (v && v.mine && v.others) {
-      who = `${v.mine} + ${v.others}`;
-      whoHint = `${v.mine} в комнате, ${v.others} на связи`;
-    } else if (v && (v.mine || v.others)) {
-      who = String(v.mine || v.others);
-      whoHint = `голосов в записи: ${who}`;
-    }
-    const sub = [fmtDate(m.created_at), isRec ? fmtClock(m.duration_s) : fmtDur(m.duration_s),
-      who ? `<span title="${esc(whoHint)}">${who}</span>` : ''].filter(Boolean).join(' · ');
-    // Третья строка — только исключения: обычное состояние ничего не сообщает,
-    // а «✓ говорящие» у каждой записи просто занимало место.
-    let note = '';
-    if (isRec) note = '<span class="dot-st bad"></span>идёт запись';
-    else if (m.diarize_status === 'running' || m.diarize_status === 'queued') {
-      note = '<span class="dot-st go"></span>идёт разметка';
-    } else if (m.status === 'processing' || m.status === 'queued') {
-      note = '<span class="dot-st go"></span>идёт обработка';
-    } else if (m.status === 'stopped') {
-      note = '<span class="dot-st bad"></span>обработка остановлена';
-    } else if (m.status === 'recorded' && !m.diarized && m.duration_s) {
-      note = '<span class="dot-st none"></span>говорящие не размечены';
-    }
-    return `<div class="rec-item${m.id === S.currentId ? ' active' : ''}" data-id="${m.id}">
+}
+
+/* Отметки в списке (20.09): Ctrl+щелчок набирает несколько записей, чтобы
+   удалить их разом. Обычный щелчок, как и раньше, просто открывает запись и
+   отметки снимает — иначе они копились бы незаметно для человека. */
+function isPicked(id) {
+  return (S.selected || []).includes(id);
+}
+
+function togglePicked(id) {
+  const picked = (S.selected || []).slice();
+  // Первый Ctrl+щелчок при открытой записи берёт в отметку и её: так ведёт
+  // себя список файлов в Windows, и удивлять человека тут незачем.
+  if (!picked.length && S.currentId && S.currentId !== id) picked.push(S.currentId);
+  const at = picked.indexOf(id);
+  if (at >= 0) picked.splice(at, 1); else picked.push(id);
+  S.selected = picked;
+  paintSidebar();
+}
+
+function pickedIds() {
+  // Ничего не отмечено — работаем с открытой записью, как раньше.
+  const picked = (S.selected || []).filter((id) =>
+    (S.recordings || []).some((m) => m.id === id));
+  return picked.length ? picked : (S.currentId ? [S.currentId] : []);
+}
+
+/* Щелчки по строкам списка — одним местом на оба вида, плоский и по папкам. */
+function bindRecItems(box) {
+  box.querySelectorAll('.rec-item').forEach((el) => {
+    el.onclick = (ev) => {
+      const id = el.dataset.id;
+      if (ev.ctrlKey || ev.metaKey) {
+        ev.preventDefault();
+        togglePicked(id);
+        return;
+      }
+      S.selected = [];
+      openRecording(id);
+    };
+  });
+}
+
+/* Одна строка списка. Вынесена отдельно, потому что рисуется из двух мест:
+   плоским списком и внутри папки проекта. */
+function recItemHtml(m) {
+  const isRec = m.status === 'recording';
+  // Вторая строка — дата, длительность и участники.
+  // Категорию в каждой строке не повторяем: она одна почти у всех записей
+  // и ничего не различает; отбор по ней будет над списком.
+  const v = m.diarized ? (m.voices || null) : null;
+  let who = '', whoHint = '';
+  if (v && v.mine && v.others) {
+    who = `${v.mine} + ${v.others}`;
+    whoHint = `${v.mine} в комнате, ${v.others} на связи`;
+  } else if (v && (v.mine || v.others)) {
+    who = String(v.mine || v.others);
+    whoHint = `голосов в записи: ${who}`;
+  }
+  const sub = [fmtDate(m.created_at), isRec ? fmtClock(m.duration_s) : fmtDur(m.duration_s),
+    who ? `<span title="${esc(whoHint)}">${who}</span>` : ''].filter(Boolean).join(' · ');
+  // Третья строка — только исключения: обычное состояние ничего не сообщает,
+  // а «✓ говорящие» у каждой записи просто занимало место.
+  let note = '';
+  if (isRec) note = '<span class="dot-st bad"></span>идёт запись';
+  else if (m.diarize_status === 'running' || m.diarize_status === 'queued') {
+    note = '<span class="dot-st go"></span>идёт разметка';
+  } else if (m.status === 'processing' || m.status === 'queued') {
+    note = '<span class="dot-st go"></span>идёт обработка';
+  } else if (m.status === 'stopped') {
+    note = '<span class="dot-st bad"></span>обработка остановлена';
+  } else if (m.status === 'recorded' && !m.diarized && m.duration_s) {
+    note = '<span class="dot-st none"></span>говорящие не размечены';
+  }
+  return `<div class="rec-item${m.id === S.currentId ? ' active' : ''}${isPicked(m.id) ? ' picked' : ''}" data-id="${m.id}">
       <div class="rec-item-title"><span class="nm">${esc(m.title)}</span></div>
       <div class="rec-item-sub">${sub}</div>
       ${note ? `<div class="rec-item-note">${note}</div>` : ''}</div>`;
-  }).join('');
-  box.querySelectorAll('.rec-item').forEach((el) => {
-    el.onclick = () => openRecording(el.dataset.id);
+}
+
+/* Список, сложенный по проектам: заголовок папки, счётчик, сворачивание.
+   Записи без проекта — последней группой: их обычно больше всех, и наверху
+   они отодвинули бы сами проекты. */
+function groupedHtml(list) {
+  const groups = [];
+  const byName = new Map();
+  list.forEach((m) => {
+    const name = String(m.project || '').trim();
+    const key = name.toLowerCase();
+    if (!byName.has(key)) {
+      const g = { name: name, items: [] };
+      byName.set(key, g);
+      groups.push(g);
+    }
+    byName.get(key).items.push(m);
   });
+  groups.sort((a, b) => {
+    if (!a.name !== !b.name) return a.name ? -1 : 1;
+    return a.name.localeCompare(b.name, 'ru');
+  });
+  return groups.map((g) => {
+    const key = g.name.toLowerCase();
+    const folded = !!S.foldedProjects[key];
+    const folder = g.name ? (S.projectFolders || {})[
+      Object.keys(S.projectFolders || {}).find((k) => k.toLowerCase() === key) || ''] : '';
+    const hint = g.name
+      ? (folder ? `Проект «${g.name}», заметки в ${folder}` : `Проект «${g.name}»`)
+      : 'Записи без проекта';
+    return `<div class="rec-group">
+      <div class="rec-group-head${folded ? ' folded' : ''}" data-project="${esc(key)}" title="${esc(hint)}">
+        <span class="grp-caret">${folded ? '▸' : '▾'}</span>
+        <span class="grp-name">${esc(g.name || 'Без проекта')}</span>
+        <span class="grp-count">${g.items.length}</span>
+      </div>
+      ${folded ? '' : g.items.map(recItemHtml).join('')}</div>`;
+  }).join('');
+}
+
+function paintSidebar() {
+  const box = $('rec-list');
+  const all = S.recordings || [];
+  const byMode = S.mode === 'video' ? all.filter(isVideoRec) : all.filter((m) => !isVideoRec(m));
+  paintListFilter();
+  const list = listFilter(byMode);
+  if (!list.length) {
+    const filtered = byMode.length && !list.length;
+    box.innerHTML = '<div class="tiny muted" style="padding:14px 10px">'
+      + (filtered ? 'Под этот отбор ничего не подходит'
+        : (S.mode === 'video' ? 'Обработанных видео пока нет' : 'Записей пока нет')) + '</div>';
+    return;
+  }
+  if (S.groupByProject) {
+    box.innerHTML = groupedHtml(list);
+    box.querySelectorAll('.rec-group-head').forEach((el) => {
+      el.onclick = () => {
+        const key = el.dataset.project;
+        S.foldedProjects[key] = !S.foldedProjects[key];
+        paintSidebar();
+      };
+    });
+    bindRecItems(box);
+    paintPickedNote();
+    return;
+  }
+  box.innerHTML = list.map(recItemHtml).join('');
+  bindRecItems(box);
+  paintPickedNote();
+}
+
+/* Сколько записей отмечено — строкой под списком. Без неё человек, отметивший
+   три записи и ушедший в другой раздел, не поймёт, почему Delete спрашивает
+   про три. */
+function paintPickedNote() {
+  const box = $('picked-note');
+  if (!box) return;
+  const n = (S.selected || []).length;
+  box.classList.toggle('hidden', !n);
+  if (!n) return;
+  box.innerHTML = `Отмечено записей: ${n}. <button type="button" class="ghost small js-picked-clear">снять</button>`;
+  box.querySelector('.js-picked-clear').onclick = () => { S.selected = []; paintSidebar(); };
 }
 
 /* Одна функция на все места, где показывается ход задачи:
@@ -350,7 +523,7 @@ function capsRows() {
   rows.push('<div>Распознавание речи: <b>локально, GigaAM</b></div>');
   rows.push('<div>Разметка говорящих: ' + (c.diarize
     ? '<b>готова</b>'
-    : '<b>нужен токен HuggingFace</b> — ' + esc(c.diarize_note || '')) + '</div>');
+    : '<b>не готова</b> — ' + esc(c.diarize_note || '')) + '</div>');
   rows.push('<div>Протокол: ' + (c.claude_cli
     ? '<b>Claude CLI найден</b>' : 'нужен ключ API или Claude CLI') + '</div>');
   rows.push('<div>Встреча из Outlook: ' + (c.outlook ? '<b>доступна</b>' : 'недоступна') + '</div>');
@@ -884,9 +1057,10 @@ function paintHead() {
     $('rec-title').disabled = true;
     $('rec-date').textContent = '';
     $('rec-duration').textContent = '00:00:00';
+    $('rec-stand').classList.add('hidden');
     paintRecStatus();
     ['btn-save', 'btn-diarize', 'btn-retry', 'btn-echo', 'btn-add-doc', 'btn-delete',
-      'btn-copy-transcript', 'btn-hide', 'btn-edit-transcript', 'btn-del-cat']
+      'btn-copy-transcript', 'btn-hide', 'btn-edit-transcript', 'btn-del-cat', 'btn-share']
       .forEach((id) => { $(id).disabled = true; });
     $('diar-progress').classList.add('hidden');
     paintRecShell();
@@ -900,12 +1074,19 @@ function paintHead() {
   if (document.activeElement !== $('rec-title')) $('rec-title').value = m.title || '';
   $('rec-date').textContent = fmtDate(m.created_at);
   $('rec-duration').textContent = fmtDur(m.duration_s);
+  // Каким вариантом распознавания шла запись и как он себя вёл (стенд 18.09).
+  const stand = m.asr_stand;
+  $('rec-stand').classList.toggle('hidden', !stand);
+  $('rec-stand-title').textContent = stand ? (stand.title || '') : '';
+  $('rec-stand').title = stand ? (stand.text || '') : '';
   $('rec-mode').value = m.mode === 'offline' ? 'offline' : 'online';
 
   $('cat-select').value = m.category || '';
   $('rec-project').value = m.project || '';
   $('rec-tags').value = (m.tags || []).join(', ');
   paintTagChips();
+  paintProjectFolder();
+  paintNotes();
   paintLinkChips();
   paintContinues();
   paintRecStatus();
@@ -921,7 +1102,13 @@ function paintHead() {
   const noMedia = !!m.media_removed;
   $('btn-diarize').disabled = busy || !m.duration_s || noMedia;
   $('btn-retry').disabled = busy || !m.duration_s || isRec || noMedia;
+  // «Перечитать точнее» есть, только когда звонки идут другой моделью, чем
+  // файлы (решение 21.09): перечитывать той же моделью незачем.
+  $('btn-retry').classList.toggle('hidden', !!(S.asr && S.asr.reread === false));
   $('btn-add-doc').disabled = busy || !hasText;
+  // «Отправить» (20.09): отправлять нечего, пока нет ни документа, ни
+  // стенограммы. Идущую запись тоже не отправляем — она ещё не готова.
+  $('btn-share').disabled = isRec || (!hasText && !(S.docs || []).length);
   // Пересчёт эха текст не распознаёт заново, поэтому нужен только текст —
   // но дорожка собеседников должна быть: эхо ищется сравнением с ней.
   if ($('btn-echo')) {
@@ -934,7 +1121,7 @@ function paintHead() {
     : 'Распознать запись заново точной моделью: дольше, но меньше ошибок в словах';
   if (!S.caps.diarize) {
     $('btn-diarize').disabled = true;
-    $('btn-diarize').title = S.caps.diarize_note || 'нужен токен HuggingFace';
+    $('btn-diarize').title = S.caps.diarize_note || 'разметка говорящих не готова';
   } else {
     $('btn-diarize').title = noMedia ? noMediaWhy
       : 'Разделить собеседников по голосам и подписать знакомых по базе голосов';
@@ -1000,10 +1187,37 @@ async function loadLabels() {
     const res = await api('/api/labels');
     S.projects = res.projects || [];
     S.recTags = res.tags || [];
-  } catch (e) { S.projects = S.projects || []; S.recTags = S.recTags || []; }
+    S.projectFolders = res.folders || {};
+  } catch (e) {
+    S.projects = S.projects || []; S.recTags = S.recTags || [];
+    S.projectFolders = S.projectFolders || {};
+  }
   const dl = $('dl-projects');
   if (dl) dl.innerHTML = (S.projects || []).map((p) => `<option value="${esc(p)}"></option>`).join('');
   paintTagChips();
+  paintProjectFolder();
+}
+
+/* Папка проекта в сейфе (20.09). Связка живёт у проекта, а не у записи,
+   поэтому подсказка меняется вслед за полем «Проект», а не за записью. */
+function currentProjectFolder() {
+  const name = ($('rec-project').value || '').trim().toLowerCase();
+  if (!name) return '';
+  const map = S.projectFolders || {};
+  const key = Object.keys(map).find((k) => k.toLowerCase() === name);
+  return key ? map[key] : '';
+}
+
+function paintProjectFolder() {
+  const hint = $('project-folder-hint');
+  const btn = $('btn-project-folder');
+  if (!hint || !btn) return;
+  const name = ($('rec-project').value || '').trim();
+  // Без проекта привязывать нечего: папка принадлежит проекту, не записи.
+  btn.disabled = !name;
+  const folder = currentProjectFolder();
+  hint.textContent = !name ? ''
+    : (folder ? `заметки проекта → ${folder}` : 'папка не привязана, заметка — по категории');
 }
 
 function paintTagChips() {
@@ -1235,6 +1449,109 @@ async function saveLinks(links) {
   } catch (e) { notice(e.message, 'err'); }
 }
 
+/* Голосовые заметки к записи (20.09). Надиктованное клавишей заметки ложится
+   в запись, открытую на экране, — поэтому служба должна знать, какая это
+   запись: клавишу ловит она, а что открыто в окне, знает только страница. */
+async function tellOpenRecording() {
+  try {
+    await api('/api/dictate/open-recording', {
+      method: 'POST', body: { rec_id: S.currentId || '' },
+    });
+  } catch (e) { /* не дошло — заметка просто вставится, как обычная диктовка */ }
+}
+
+function paintNotes() {
+  const box = $('notes-list');
+  if (!box) return;
+  const notes = (S.current && S.current.meta && S.current.meta.notes) || [];
+  box.innerHTML = notes.length ? notes.map((n, i) => `
+    <div class="note-row${n.kind === 'task' ? ' task' : ''}">
+      <span class="note-mark">${n.kind === 'task' ? 'поручение' : 'заметка'}</span>
+      <span class="note-text">${esc(n.text)}</span>
+      <button type="button" class="ghost small js-note-del" data-i="${i}" title="Убрать заметку">×</button>
+    </div>`).join('') : '<span class="muted tiny">заметок нет</span>';
+  box.querySelectorAll('.js-note-del').forEach((b) => {
+    b.onclick = async () => {
+      const left = notes.slice();
+      left.splice(Number(b.dataset.i), 1);
+      try {
+        const meta = await api(`/api/recordings/${S.currentId}`, {
+          method: 'PATCH', body: { notes: left },
+        });
+        S.current.meta = meta;
+        paintNotes();
+      } catch (e) { notice(e.message, 'err'); }
+    };
+  });
+  const hk = (S.dictate || {}).note_hotkey || '';
+  const tk = (S.dictate || {}).task_hotkey || '';
+  $('notes-hint').textContent = (hk || tk)
+    ? `Надиктовать: ${[hk && `заметка — ${hk}`, tk && `поручение — ${tk}`].filter(Boolean).join(', ')}.`
+      + ' Заметки уходят в документы как ваше слово, в первую очередь.'
+    : 'Сочетания для голосовых заметок не назначены — «Настройки → Диктовка».';
+}
+
+/* Окно выбора папки проекта (20.09). Выбор одиночный — у проекта одна папка,
+   поэтому список с переключателями, а не с галочками, как у «Связать с». */
+let folderTimer = null;
+
+function openProjectFolderDialog() {
+  const name = ($('rec-project').value || '').trim();
+  if (!name) return;
+  S.folderDraft = currentProjectFolder();
+  $('pf-project').textContent = `Проект: ${name}`;
+  $('pf-filter').value = '';
+  $('overlay').classList.remove('hidden');
+  $('dlg-project-folder').classList.remove('hidden');
+  searchFolders();
+  $('pf-filter').focus();
+}
+
+async function searchFolders() {
+  const box = $('pf-list');
+  const q = ($('pf-filter').value || '').trim();
+  let folders = [];
+  try {
+    folders = (await api(`/api/vault/folders?q=${encodeURIComponent(q)}`)).folders || [];
+  } catch (e) {
+    box.innerHTML = `<div class="tiny err-line">${esc(e.message)}</div>`;
+    return;
+  }
+  // Привязанная папка показывается первой, даже если под отбор не попала:
+  // иначе её не видно и непонятно, что вообще выбрано.
+  const cur = S.folderDraft || '';
+  const shown = cur && !folders.some((f) => f.path === cur)
+    ? [{ title: cur.split('/').pop(), path: cur }].concat(folders) : folders;
+  if (!shown.length) {
+    box.innerHTML = '<div class="tiny muted">В сейфе не нашлось ни одной папки.</div>';
+    return;
+  }
+  box.innerHTML = shown.map((f, i) => `
+    <label class="link-row">
+      <input type="radio" name="pf-pick" data-i="${i}"${f.path === cur ? ' checked' : ''}>
+      <span class="link-title">${esc(f.title)}</span>
+      <span class="tiny muted">${esc(f.path)}</span>
+    </label>`).join('');
+  box.querySelectorAll('input[type=radio]').forEach((c) => {
+    c.onchange = () => { S.folderDraft = shown[Number(c.dataset.i)].path; };
+  });
+}
+
+async function saveProjectFolder(folder) {
+  const name = ($('rec-project').value || '').trim();
+  if (!name) return;
+  try {
+    const res = await api('/api/projects/folder', {
+      method: 'POST', body: { project: name, folder: folder || '' },
+    });
+    S.projectFolders = res.folders || {};
+    paintProjectFolder();
+    hideDialogs();
+    notice(folder ? `Заметки проекта «${name}» будут в ${folder}`
+      : `Связка с папкой снята: заметки проекта «${name}» — по категории`, 'ok');
+  } catch (e) { notice(e.message, 'err'); }
+}
+
 /* Имя владельца вместо «Я»: в данных реплики микрофона всегда «Я». */
 function displaySpeaker(name) {
   const owner = ((S.settings && S.settings.owner_name) || '').trim();
@@ -1329,6 +1646,8 @@ function setMode(mode) {
     b.classList.toggle('active', b.dataset.mode === S.mode));
   $('side-title').textContent = S.mode === 'video' ? 'ВИДЕО' : 'ЗАПИСИ';
   $('btn-new').classList.toggle('hidden', S.mode === 'video');
+  // В разделе «Видео» на этом месте — возврат к добавлению ссылки или файла.
+  $('btn-video-home').classList.toggle('hidden', S.mode !== 'video');
   if (S.mode === 'video' && window.videoReloadOptions) window.videoReloadOptions();
   paintAll();
 }
@@ -1352,6 +1671,10 @@ async function loadState() {
   S.call = st.call || {};
   S.recordingId = st.active_recording || null;
   $('chk-far').checked = S.settings.record_far !== false;
+  // Вид списка берём из настроек один раз, при первом чтении состояния: дальше
+  // им распоряжается человек, и ответ службы не должен перебивать его выбор.
+  if (S.groupByProject === null) S.groupByProject = !!S.settings.list_group_by_project;
+  if (COPY_FORMATS[S.settings.copy_format]) S.copyFormat = S.settings.copy_format;
   S.asr = S.caps.asr || { state: 'loading' };
   applyFeatures();
   paintProgramState();
@@ -1393,6 +1716,9 @@ async function openRecording(id) {
     S.showRecord = true;
     if (S.current.session && S.current.session.drafts) S.drafts = S.current.session.drafts;
     paintAll();
+    // Клавиша голосовой заметки кладёт текст в ЭТУ запись (20.09), а знает об
+    // открытом на экране только страница — говорим службе сами.
+    tellOpenRecording();
     await loadMinutesFor(id);
   } catch (e) {
     notice(e.message, 'err');
@@ -1402,9 +1728,85 @@ async function openRecording(id) {
 /* Удаление в одном из трёх объёмов: всё, только видео и звук, только из
    истории. Первый и третий убирают запись с экрана, второй — оставляет:
    стенограмма на месте, и по ней ещё можно собрать протокол или саммари. */
+/* Окно «Что удалить?» — одно на оба случая: кнопка в карточке и клавиша Delete
+   (20.09). Отмечено несколько записей — вопрос задаётся один раз на всех, а
+   объём работы («всё», «только видео и звук», «только из списка») тот же. */
+function openDeleteDialog() {
+  const ids = pickedIds();
+  if (!ids.length) return;
+  const metas = ids.map((id) => (S.recordings || []).find((m) => m.id === id)).filter(Boolean);
+  const many = ids.length > 1;
+
+  if (many) {
+    const names = metas.slice(0, 3).map((m) => `«${m.title}»`).join(', ');
+    const tail = metas.length > 3 ? ` и ещё ${metas.length - 3}` : '';
+    $('del-what').textContent = `Записей: ${ids.length} — ${names}${tail}.`;
+  } else {
+    const m = (S.current && S.current.meta) || metas[0] || {};
+    const where = [];
+    if (m.video_path) where.push('видео лежит рядом с записью');
+    if (m.vault_path) where.push('заметка сохранена в хранилище');
+    $('del-what').textContent = `Запись «${m.title}»`
+      + (where.length ? `. Сейчас: ${where.join(', ')}.` : '.');
+  }
+
+  // Если у всех отмеченных медиа уже нет, второй пункт бессмыслен.
+  const mediaChoice = $('del-choices').querySelector('[data-scope="media"]');
+  const gone = metas.length
+    ? metas.every((m) => m.media_removed)
+    : !!((S.current && S.current.meta) || {}).media_removed;
+  mediaChoice.classList.toggle('off', gone);
+  $('del-media-note').textContent = gone
+    ? 'Видео и звук уже удалены.'
+    : 'Стенограммы останутся — по ним можно сделать протокол или саммари.';
+  // Третий пункт обещает ровно то, что правда: папка записи уходит вместе со
+  // стенограммой, а снаружи остаётся только то, что и правда лежит снаружи.
+  const stays = [];
+  if (metas.some((m) => m.video_path)) stays.push('видео');
+  if (metas.some((m) => m.vault_path)) stays.push('заметки в хранилище');
+  $('del-history-note').textContent = stays.length
+    ? `Записи и их стенограммы уходят. Остаётся: ${stays.join(', ')}.`
+    : 'Записи уходят вместе со стенограммами. Снаружи ничего не сохранено.';
+  showDialog('dlg-delete');
+}
+
+/* Удалить всё отмеченное (20.09). Объём работы тот же, что и для одной записи,
+   и спрашивается он один раз на всех: три подряд одинаковых вопроса — это не
+   осторожность, а мучение. Идём по одной и в конце говорим, что получилось. */
+async function deleteMany(scope, ids) {
+  hideDialogs();
+  let ok = 0;
+  const failed = [];
+  for (const id of ids) {
+    try {
+      await api(`/api/recordings/${id}?scope=${encodeURIComponent(scope)}`, { method: 'DELETE' });
+      ok += 1;
+    } catch (e) {
+      const m = (S.recordings || []).find((x) => x.id === id);
+      failed.push((m && m.title) || id);
+    }
+  }
+  S.selected = [];
+  if (ids.includes(S.currentId) && scope !== 'media') { S.current = null; S.currentId = null; }
+  await loadState();
+  if (S.currentId) await refreshCurrent();
+  paintAll();
+  const what = scope === 'media' ? 'Видео и звук убраны'
+    : (scope === 'history' ? 'Убраны из списка вместе со стенограммой' : 'Удалены');
+  if (failed.length) {
+    notice(`${what}: ${ok}. Не вышло: ${failed.join(', ')}.`, 'err');
+  } else {
+    notice(`${what}: ${ok} ${ok === 1 ? 'запись' : 'записей'}.`, 'ok');
+  }
+}
+
 async function deleteRecording(scope) {
-  const id = S.currentId;
+  // Отмечено несколько — удаляем их, а не только открытую.
+  const ids = pickedIds();
+  if (ids.length > 1) return deleteMany(scope, ids);
+  const id = ids[0];
   if (!id) return;
+  S.selected = [];
   hideDialogs();
   try {
     const res = await api(`/api/recordings/${id}?scope=${encodeURIComponent(scope)}`,
@@ -1613,7 +2015,7 @@ function openSpeakerDialog(key, currentName) {
     return;
   }
   const meta = S.current && S.current.meta;
-  S.speakerCtx = { key: key, decision: {}, picked: null, items: [], active: -1, seq: 0 };
+  S.speakerCtx = { key: key, decision: {}, picked: null, items: [], active: -1, seq: 0, role: null };
   $('speaker-current').textContent = `Сейчас подписано: ${currentName || key}`;
   $('speaker-name').value = '';
   $('speaker-remember').checked = true;
@@ -1660,6 +2062,9 @@ async function speakerSearch() {
   ctx.active = -1;
   ctx.hasVoice = !!res.has_voice;
   if (!res.has_voice) $('speaker-notes').textContent = 'Голос этого говорящего ещё не размечен — запомнится только имя.';
+  // Роль показываем один раз, при открытии карточки: дальше человек правит
+  // поля, и перерисовка на каждую букву в имени стирала бы правку.
+  if (!ctx.role) paintSpeakerRole(res.role || {});
   paintSpeakerAc();
 }
 
@@ -1740,6 +2145,77 @@ async function postSpeaker(body) {
   return { status: r.status, data: data };
 }
 
+/* Роль участника (20.09): сторона и должность прямо в карточке говорящего.
+   Постоянная роль живёт у человека в базе голосов, разовая — в записи. */
+function paintSpeakerRole(role) {
+  const box = $('speaker-role');
+  if (!box) return;
+  const ctx = S.speakerCtx;
+  if (ctx) ctx.role = role;
+  // Человека в базе ещё нет — роль привязывать не к кому. Разовую роль в
+  // записи поставить всё равно можно: она держится за именем, а не за базой.
+  const known = !!(role && role.person_id);
+  const once = !!(role && (role.rec_side || role.rec_position)) || !known;
+  $('speaker-side').innerHTML = ['<option value="">не указана</option>'].concat(
+    ((role && role.sides) || []).map((s) => `<option value="${esc(s.key)}">${esc(s.title)}</option>`)).join('');
+  $('speaker-role-once').checked = once;
+  $('speaker-role-once').disabled = !known;
+  $('speaker-side').value = once ? ((role && role.rec_side) || (known ? '' : (role && role.side) || ''))
+    : ((role && role.side) || '');
+  $('speaker-position').value = once ? ((role && role.rec_position) || (known ? '' : (role && role.position) || ''))
+    : ((role && role.position) || '');
+  paintSpeakerRoleNote();
+}
+
+function paintSpeakerRoleNote() {
+  const ctx = S.speakerCtx;
+  const role = (ctx && ctx.role) || {};
+  const once = $('speaker-role-once').checked;
+  const perm = role.side || role.position
+    ? `постоянная роль: ${[sideTitle(role.side), role.position].filter(Boolean).join(', ')}`
+    : 'постоянной роли нет';
+  $('speaker-role-note').textContent = !role.person_id
+    ? 'Человека ещё нет в базе голосов — роль запомнится только для этой записи.'
+    : (once ? `Только для этой записи. У человека ${perm}.`
+      : 'Роль запомнится у человека и будет действовать во всех записях.');
+}
+
+function sideTitle(key) {
+  const ctx = S.speakerCtx;
+  const list = ((ctx && ctx.role && ctx.role.sides) || []);
+  const found = list.find((s) => s.key === key);
+  return found ? found.title : '';
+}
+
+/* Сохранить роль: постоянную — человеку в базу, разовую — в запись.
+   Зовётся из «Сохранить» карточки говорящего, вместе с именем. */
+async function saveSpeakerRole() {
+  const ctx = S.speakerCtx;
+  const role = (ctx && ctx.role) || {};
+  const side = $('speaker-side').value || '';
+  const position = ($('speaker-position').value || '').trim();
+  const once = $('speaker-role-once').checked || !role.person_id;
+  const name = role.name || ($('speaker-name').value || '').trim();
+  const was = once ? [role.rec_side || '', role.rec_position || '']
+    : [role.side || '', role.position || ''];
+  if (was[0] === side && was[1] === position) return;   // ничего не меняли
+  try {
+    if (once) {
+      const roles = Object.assign({}, (S.current && S.current.meta && S.current.meta.roles) || {});
+      if (side || position) roles[name] = { side: side, position: position };
+      else delete roles[name];
+      const meta = await api(`/api/recordings/${S.currentId}`, {
+        method: 'PATCH', body: { roles: roles },
+      });
+      if (S.current) S.current.meta = meta;
+    } else {
+      await api(`/api/voices/${role.person_id}/role`, {
+        method: 'POST', body: { side: side, position: position },
+      });
+    }
+  } catch (e) { notice(e.message, 'err'); }
+}
+
 function applySpeakerResult(data) {
   if (data.meta && S.current) { S.current.meta = data.meta; S.current.segments = data.segments; }
   paintAll();
@@ -1769,6 +2245,9 @@ async function saveSpeakerDialog(extra) {
     return;
   }
   if (res.status !== 200) { notice(res.data.detail || `Ошибка ${res.status}`, 'err'); return; }
+  // Роль сохраняется вместе с именем: человек правит карточку целиком, и
+  // отдельной кнопки «сохранить роль» в ней быть не должно.
+  await saveSpeakerRole();
   hideDialogs();
   S.speakerCtx = null;
   applySpeakerResult(res.data);
@@ -2024,12 +2503,16 @@ function paintProgramState() {
   if (!box) return;
   const work = $('work-state');
   if (work) work.textContent = workLine();
+  paintAsrModels();
   const st = S.asr || {};
   const kind = st.state || 'loading';
   box.classList.toggle('bad', kind === 'error');
   if (kind === 'ready') {
-    box.textContent = 'модель распознавания готова';
-    box.title = st.seconds ? `Загрузилась за ${st.seconds} с` : '';
+    // Выбраны одни модели, а работают другие (нет файлов или модель отказала):
+    // запись идёт, но человек должен это видеть, а не искать в журнале.
+    box.textContent = st.note ? 'модель распознавания готова ⚠' : 'модель распознавания готова';
+    box.title = st.note || [st.models || '',
+      st.seconds ? `Загрузилась за ${st.seconds} с` : ''].filter(Boolean).join('. ');
     return;
   }
   if (kind === 'error') {
@@ -2267,6 +2750,8 @@ async function openSettings() {
   $('set-vault').value = s.vault_path || '';
   $('set-subfolder').value = s.vault_subfolder || '';
   $('set-hf').value = '';
+  // Токен нужен только релизу с разметкой через pyannote; решает служба.
+  $('hf-field').classList.toggle('hidden', !s.diarize_needs_token);
   $('hf-state').textContent = s.hf_token_set
     ? `токен задан (${s.hf_token_hint}) — поле оставьте пустым, чтобы не менять`
     : 'токен не задан: разметка говорящих не заработает';
@@ -2284,6 +2769,12 @@ async function openSettings() {
   $('set-autostart').checked = !!s.call_watch_autostart;
   $('set-call-stop').value = s.call_end_confirm_s || 30;
   $('set-call-resume').value = s.call_resume_window_s || 600;
+  // Забытая запись (20.09). 0 — законное значение («не следить»), поэтому не «|| 10».
+  $('set-idle-min').value = (s.idle_stop_min === undefined || s.idle_stop_min === null)
+    ? 10 : s.idle_stop_min;
+  $('set-idle-words').value = (s.idle_stop_words === undefined || s.idle_stop_words === null)
+    ? 5 : s.idle_stop_words;
+  $('set-idle-confirm').value = s.idle_stop_confirm_s || 120;
   $('set-require-mic').checked = !!s.call_watch_require_mic;
   // 0 — законное значение («только идущая встреча» и «без выдержки»), поэтому не «|| 5».
   $('set-meeting-ahead').value = (s.meeting_lookahead_min === undefined
@@ -2295,11 +2786,7 @@ async function openSettings() {
   $('set-engine').value = s.minutes_engine || 'claude_cli';
   $('set-cli-model').value = s.claude_cli_model || '';
   $('set-cli-timeout').value = s.claude_timeout_s || 600;
-  fillProviders(s.api_provider || 'anthropic');
-  fillModels();
-  $('set-apikey').value = '';
-  $('set-folder').value = (s.api_keys_hint && s.api_keys_hint.yandexgpt_folder) || '';
-  $('new-provider').classList.add('hidden');
+  fillConnections();
   const v = S.vault || {};
   $('vault-state').textContent = v.exists
     ? `папка на месте, заметок: ${v.notes != null ? v.notes : '—'}`
@@ -2308,12 +2795,12 @@ async function openSettings() {
   $('outlook-state').textContent = S.caps.outlook
     ? 'классический Outlook найден, встречи читаются'
     : 'COM-доступ к Outlook недоступен (возможно, запущен «новый Outlook»)';
-  const eng = (S.caps.engines || []).map((e) => `${e.title}: ${e.ready ? 'готов' : e.reason}`);
+  const eng = (S.caps.engines || []).map((e) => `${e.title}: ${e.ready ? (e.state || 'готов') : e.reason}`);
   $('engine-state').textContent = eng.join(' · ');
-  const hint = (s.api_keys_hint || {})[$('set-provider').value];
-  $('apikey-state').textContent = hint ? `ключ задан (${hint})` : 'ключ не задан';
   refreshModelsHint();
   loadNeeds();
+  fillAsrModels();
+  loadAsrModels();
   toggleApiFields();
   $('set-auto-diarize').checked = !!s.diarize_auto;
   $('set-retention').value = s.audio_retention_days || 0;
@@ -2353,6 +2840,10 @@ async function loadPrompts() {
   try { res = await api('/api/prompts'); } catch (e) { $('prompt-list').textContent = e.message; return; }
   S.prompts = res.prompts || [];
   $('set-owner').value = res.owner_name === 'Я' ? '' : (res.owner_name || '');
+  $('set-owner-side').innerHTML = ['<option value="">не указана</option>'].concat(
+    (res.sides || []).map((s) => `<option value="${esc(s.key)}">${esc(s.title)}</option>`)).join('');
+  $('set-owner-side').value = res.owner_side || '';
+  $('set-owner-position').value = res.owner_position || '';
   $('set-prompt-lang').value = res.prompt_lang === 'en' ? 'en' : 'ru';
   // Токен не показываем: службы отдаёт только «задан» и хвостик. Пустое поле
   // означает «не трогали», а не «убрать токен» — см. collectPrompts.
@@ -2383,6 +2874,8 @@ function collectPrompts() {
     overrides[box.dataset.k] = box.querySelector('.js-prompt').value;
   });
   const out = { owner_name: $('set-owner').value.trim() || 'Я', overrides,
+                owner_side: $('set-owner-side').value || '',
+                owner_position: $('set-owner-position').value.trim(),
                 prompt_lang: $('set-prompt-lang').value };
   // Поле токена пустое — значит его не трогали, и менять сохранённый нельзя.
   // Чтобы УБРАТЬ токен, есть отдельное слово «убрать»: иначе один случайный
@@ -2393,56 +2886,260 @@ function collectPrompts() {
 }
 
 /* Поля подписки и поля стороннего сервиса не показываем одновременно: при
-   работе по подписке сервис и ключ ни на что не влияют и только путают.
-   Идентификатор каталога нужен одному YandexGPT, кнопка «Убрать сервис» —
-   только для добавленных вручную. */
+   работе по подписке адрес и ключ ни на что не влияют и только путают. */
 function toggleApiFields() {
   const isApi = $('set-engine').value === 'api';
   $('api-fields').classList.toggle('hidden', !isApi);
   $('cli-fields').classList.toggle('hidden', isApi);
-  const p = currentProvider();
-  $('folder-field').classList.toggle('hidden', !p || p.kind !== 'yandexgpt');
-  $('btn-del-provider').classList.toggle('hidden', !p || !p.custom);
 }
 
-function providerList() {
-  return (S.caps || {}).providers || [];
-}
+/* Подключения к облаку — адрес, ключ и модель (решение 21.09): одно для
+   документов, одно для облачного распознавания. Ключ в поле не показываем:
+   пустое поле значит «не трогали», а что ключ задан, видно по маске. */
+const CONNECTION_FIELDS = ['set-api-url', 'set-apikey', 'set-model', 'set-api-kind',
+  'set-folder', 'set-asr-files', 'set-cloud-asr-url', 'set-cloud-asr-key',
+  'set-cloud-asr-model'];
 
-function currentProvider() {
-  const id = $('set-provider').value;
-  return providerList().find((p) => p.id === id) || null;
-}
-
-/* Список сервисов приходит от службы: встроенные плюс добавленные вручную. */
-function fillProviders(selected) {
-  const list = providerList();
-  const sel = $('set-provider');
-  sel.innerHTML = list.map((p) =>
-    `<option value="${esc(p.id)}">${esc(p.title)}${p.has_key ? '' : ' — ключ не задан'}</option>`
-  ).join('');
-  if (list.some((p) => p.id === selected)) sel.value = selected;
-  else if (list.length) sel.value = list[0].id;
-}
-
-/* Список моделей служба спрашивает у сервиса только по кнопке, поэтому здесь
-   показываем то, что уже получено, плюс выбранное значение — даже если его нет
-   в списке (сервис мог его переименовать, а настройка осталась). */
-function fillModels() {
+function fillConnections() {
   const s = S.settings || {};
-  const pid = $('set-provider').value;
-  const cached = (S.models || {})[pid] || (S.caps || {}).models_cached || {};
-  const chosen = (s.api_models || {})[pid] || '';
-  const items = (cached.provider === pid ? (cached.chat || []) : []);
-  const opts = ['<option value="">По умолчанию (подберётся сама)</option>'];
-  items.forEach((m) => {
-    opts.push(`<option value="${esc(m.id)}">${esc(m.title || m.id)}${priceLabel(m)}</option>`);
+  $('set-api-url').value = s.api_base_url || '';
+  $('set-model').value = s.api_model || '';
+  $('set-api-kind').value = s.api_kind || '';
+  $('set-folder').value = s.api_folder || '';
+  $('set-apikey').value = '';
+  $('set-asr-files').value = s.asr_files === 'cloud' ? 'cloud' : 'local';
+  $('set-cloud-asr-url').value = s.asr_base_url || '';
+  $('set-cloud-asr-model').value = s.asr_model || '';
+  $('set-cloud-asr-key').value = '';
+  closeServicesPop();
+  paintConnections();
+}
+
+function collectConnections() {
+  const patch = {
+    api_base_url: $('set-api-url').value.trim(),
+    api_model: $('set-model').value.trim(),
+    api_kind: $('set-api-kind').value,
+    api_folder: $('set-folder').value.trim(),
+    asr_files: $('set-asr-files').value,
+    asr_base_url: $('set-cloud-asr-url').value.trim(),
+    asr_model: $('set-cloud-asr-model').value.trim(),
+  };
+  // Ключи служба сливает по одному: отправляем только вписанный.
+  const keys = {};
+  if ($('set-apikey').value.trim()) keys.docs = $('set-apikey').value.trim();
+  if ($('set-cloud-asr-key').value.trim()) keys.asr = $('set-cloud-asr-key').value.trim();
+  if (Object.keys(keys).length) patch.api_keys = keys;
+  return patch;
+}
+
+/* Что с подключениями, говорит служба (S.caps.connections): как разговаривает
+   сервис по этому адресу, маска ключа, чего не хватает. Здесь только показ. */
+function paintConnections() {
+  const cs = (S.caps || {}).connections || {};
+  const docs = cs.docs || {};
+  const asr = cs.asr || {};
+  const keyLine = (c) => (c.has_key ? `ключ задан (${c.key_hint})` : 'ключ не задан');
+  $('apikey-state').textContent = keyLine(docs);
+  $('cloud-asr-key-state').textContent = keyLine(asr);
+  $('set-api-kind').options[0].textContent = docs.base_url && !docs.kind_manual
+    ? `По адресу — ${docs.kind_title}` : 'По адресу';
+  $('folder-field').classList.toggle('hidden', docs.kind !== 'yandexgpt');
+  $('api-url-state').textContent = docs.base_url
+    ? `${docs.service} · разговор ${docs.kind_title}` + (docs.problem ? ` · ${docs.problem}` : '')
+    : 'Адрес API, обычно заканчивается на /v1. Только https и только внешний адрес.';
+  // Облачные поля нужны, только когда распознаём в облаке: иначе они серые и
+  // не правятся — чтобы не казалось, что ключ здесь что-то меняет.
+  const local = $('set-asr-files').value !== 'cloud';
+  $('cloud-asr-fields').classList.toggle('fields-off', local);
+  $('cloud-asr-fields').querySelectorAll('input, button').forEach((el) => { el.disabled = local; });
+  $('cloud-asr-state').textContent = local
+    ? 'Файлы и видео распознаются на этом компьютере — облачные поля не используются.'
+    : (asr.problem
+      || (asr.model ? `${asr.service} · модель ${asr.model}` : 'Не указана модель распознавания.'));
+}
+
+/* Модели, которые служба уже спросила у сервиса по кнопке, — для списка у поля
+   «Модель». Сменили адрес — прежний список служба не отдаёт. */
+function modelItems(role) {
+  const cached = (S.models || {})[role] || ((S.caps || {}).models_cached || {})[role] || {};
+  return ((role === 'asr' ? cached.stt : cached.chat) || []).map((m) => ({
+    value: m.id,
+    hint: [m.title && m.title !== m.id ? m.title : '', priceLabel(m).replace(/^ — /, '')]
+      .filter(Boolean).join(' · '),
+  }));
+}
+
+/* Выпадающий список с отбором по вводу — для поля, где значение выбирают из
+   длинного списка, но можно вписать и своё. Вид — как у подсказок имени в окне
+   «Кто это говорит?». Слова отбора ищутся в любом месте имени и подписи, в
+   любом порядке. items() — [{value, hint}], pick(value) — что делать с выбранным. */
+const COMBO_LIMIT = 200;
+
+function bindComboList(input, box, items, pick) {
+  const st = { open: false, active: -1, filter: '', shown: [] };
+  const render = () => {
+    if (!st.open) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const all = items();
+    const words = st.filter.toLowerCase().split(/\s+/).filter(Boolean);
+    const match = all.filter((it) => {
+      const hay = `${it.value} ${it.hint || ''}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+    st.shown = match.slice(0, COMBO_LIMIT);
+    if (st.active >= st.shown.length) st.active = st.shown.length - 1;
+    let html = st.shown.map((it, i) =>
+      `<span class="ac-item${i === st.active ? ' active' : ''}" data-i="${i}"><b>${esc(it.value)}</b>`
+      + `${it.hint ? `<span class="tiny muted">${esc(it.hint)}</span>` : ''}</span>`).join('');
+    if (match.length > COMBO_LIMIT) {
+      html += `<span class="ac-note tiny muted">и ещё ${match.length - COMBO_LIMIT} — уточните отбор</span>`;
+    }
+    if (!all.length) {
+      html = '<span class="ac-note tiny muted">Список пуст — нажмите «Обновить список моделей».</span>';
+    } else if (!match.length) {
+      html = '<span class="ac-note tiny muted">Под отбор ничего не подошло — можно вписать своё имя.</span>';
+    }
+    box.innerHTML = html;
+    box.classList.remove('hidden');
+    box.querySelectorAll('.ac-item').forEach((el) => {
+      el.onmousedown = (e) => { e.preventDefault(); choose(st.shown[Number(el.dataset.i)]); };
+    });
+    const act = box.querySelector('.ac-item.active');
+    if (act) act.scrollIntoView({ block: 'nearest' });
+  };
+  const open = (filter) => { st.open = true; st.filter = filter; st.active = -1; render(); };
+  const close = () => { st.open = false; render(); };
+  const choose = (it) => {
+    if (!it) return;
+    input.value = it.value;
+    close();
+    pick(it.value);
+  };
+  input.addEventListener('focus', () => open(''));       // сразу весь список
+  input.addEventListener('input', () => open(input.value.trim()));
+  input.addEventListener('blur', close);
+  input.addEventListener('keydown', (e) => {
+    const n = st.shown.length;
+    if (e.key === 'ArrowDown') {
+      if (!st.open) open('');
+      else if (n) { st.active = (st.active + 1) % n; render(); }
+      e.preventDefault();
+    } else if (e.key === 'ArrowUp' && st.open && n) {
+      st.active = (st.active - 1 + n) % n;
+      render();
+      e.preventDefault();
+    } else if (e.key === 'Enter' && st.open && st.active >= 0) {
+      e.preventDefault();
+      e.stopImmediatePropagation();       // Enter выбирает пункт, а не сохраняет набранное
+      choose(st.shown[st.active]);
+    } else if (e.key === 'Escape' && st.open) {
+      e.stopPropagation();                 // закрыть список, а не окно настроек
+      close();
+    }
   });
-  if (chosen && !items.some((m) => m.id === chosen)) {
-    opts.push(`<option value="${esc(chosen)}">${esc(chosen)} (выбрано ранее)</option>`);
+  const arrow = input.parentElement.querySelector('.ac-arrow');
+  if (arrow) {
+    arrow.onmousedown = (e) => {
+      e.preventDefault();                  // фокус остаётся в поле
+      if (st.open) close();
+      else if (document.activeElement !== input) input.focus();
+      else open('');
+    };
   }
-  $('set-model').innerHTML = opts.join('');
-  $('set-model').value = chosen;
+}
+
+/* «?» у адреса сервиса: подходящие адреса — список ведёт служба. Два столбца:
+   сервис с пометкой и адрес с кнопкой «Копировать». */
+async function toggleServicesPop() {
+  const box = $('services-pop');
+  if (!box.classList.contains('hidden')) { closeServicesPop(); return; }
+  let res;
+  try { res = await api('/api/connections'); } catch (e) { notice(e.message, 'err'); return; }
+  const items = res.suggested || [];
+  box.innerHTML = `<table class="services-table">${items.map((s, i) => `<tr>
+    <td><b>${esc(s.title)}</b><div class="tiny muted">${esc(s.note || '')}</div></td>
+    <td><span class="url"><code>${esc(s.base_url)}</code>
+      <button type="button" class="ghost small js-copy-url" data-i="${i}"
+              title="Скопировать адрес в буфер обмена">Копировать</button></span></td>
+  </tr>`).join('')}</table>`;
+  box.querySelectorAll('.js-copy-url').forEach((b) => {
+    b.onclick = async () => {
+      const url = (items[Number(b.dataset.i)] || {}).base_url || '';
+      try { await navigator.clipboard.writeText(url); notice(`Скопировано: ${url}`, 'ok'); }
+      catch (e) { notice('Скопировать не вышло: ' + e.message, 'err'); }
+    };
+  });
+  box.classList.remove('hidden');
+  document.addEventListener('mousedown', servicesPopOutside, true);
+  document.addEventListener('keydown', servicesPopEscape, true);
+}
+
+function closeServicesPop() {
+  $('services-pop').classList.add('hidden');
+  document.removeEventListener('mousedown', servicesPopOutside, true);
+  document.removeEventListener('keydown', servicesPopEscape, true);
+}
+
+function servicesPopOutside(ev) {
+  if (!$('services-pop').contains(ev.target) && ev.target !== $('btn-services')) closeServicesPop();
+}
+
+function servicesPopEscape(ev) {
+  if (ev.key !== 'Escape') return;
+  ev.stopPropagation();                  // закрыть список, а не окно настроек
+  closeServicesPop();
+}
+
+/* Выбранная модель сохраняется так же, как вписанная руками: уходом из поля. */
+function bindModelCombos() {
+  [['set-model', 'api-models', 'docs'], ['set-cloud-asr-model', 'cloud-asr-models', 'asr']]
+    .forEach(([id, box, role]) => {
+      const input = $(id);
+      bindComboList(input, $(box), () => modelItems(role), () => input.blur());
+    });
+}
+
+async function refreshModels(role, btn) {
+  btn.disabled = true;
+  btn.textContent = 'спрашиваю сервис…';
+  try {
+    await applySettings(btn);            // адрес и ключ могли вписать только что
+    const res = await api(`/api/models?role=${role}&refresh=true`, { method: 'POST' });
+    S.models = S.models || {};
+    S.models[role] = res;
+    paintConnections();
+    const n = (role === 'asr' ? res.stt : res.chat) || [];
+    notice(`Моделей получено: ${n.length}. Откройте список у поля «Модель» — `
+      + 'начните вводить, и он сузится.', 'ok');
+  } catch (e) { notice(e.message, 'err'); } finally {
+    btn.disabled = false;
+    btn.textContent = 'Обновить список моделей';
+  }
+}
+
+/* Поля подключений сохраняются, как все поля настроек, но после сохранения
+   перерисовывают строки под собой: как разговаривает сервис и чего не
+   хватает, служба узнаёт только по сохранённому адресу. */
+function bindConnections() {
+  CONNECTION_FIELDS.forEach((id) => {
+    const el = $(id);
+    el.dataset.bound = '1';               // общая привязка полей настроек — мимо
+    const save = async () => {
+      // Сменили адрес — список моделей прежнего сервиса больше не подсказка.
+      if (S.models && id === 'set-api-url') delete S.models.docs;
+      if (S.models && id === 'set-cloud-asr-url') delete S.models.asr;
+      if (id === 'set-asr-files') paintConnections();   // серость — сразу, не после ответа
+      await applySettings(el);
+      if (el.type === 'password') el.value = '';
+      paintConnections();
+      refreshModelsHint();
+    };
+    if (el.tagName === 'SELECT') { el.addEventListener('change', save); return; }
+    el.addEventListener('blur', save);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    });
+  });
 }
 
 /* Цена модели, если сервис её сообщил. Сразу считаем «за час записи» и «за
@@ -2466,8 +3163,7 @@ function refreshModelsHint() {
   const s = S.settings || {};
   const now = (S.caps || {}).minutes_models || '';
   const changed = $('set-engine').value !== (s.minutes_engine || 'claude_cli')
-    || $('set-provider').value !== (s.api_provider || 'anthropic')
-    || $('set-model').value !== ((s.api_models || {})[$('set-provider').value] || '')
+    || $('set-model').value.trim() !== (s.api_model || '')
     || $('set-cli-model').value !== (s.claude_cli_model || '');
   $('quality-state').textContent = changed
     ? `Сейчас: ${now} Новый выбор применится после «Сохранить».`
@@ -2656,6 +3352,16 @@ function collectSettings() {
     // Ноль служба прочла бы как «по умолчанию», поэтому держим разумные пределы.
     call_end_confirm_s: Math.min(600, Math.max(5, parseInt($('set-call-stop').value, 10) || 30)),
     call_resume_window_s: Math.min(7200, Math.max(30, parseInt($('set-call-resume').value, 10) || 600)),
+    // Забытая запись (20.09): 0 минут — защита выключена, и это законный выбор.
+    idle_stop_min: (() => {
+      const n = parseInt($('set-idle-min').value, 10);
+      return Number.isFinite(n) && n >= 0 ? Math.min(240, n) : 10;
+    })(),
+    idle_stop_words: (() => {
+      const n = parseInt($('set-idle-words').value, 10);
+      return Number.isFinite(n) && n >= 0 ? Math.min(200, n) : 5;
+    })(),
+    idle_stop_confirm_s: Math.min(3600, Math.max(30, parseInt($('set-idle-confirm').value, 10) || 120)),
     call_watch_require_mic: $('set-require-mic').checked,
     meeting_lookahead_min: (() => {
       const n = parseInt($('set-meeting-ahead').value, 10);
@@ -2668,27 +3374,16 @@ function collectSettings() {
     call_watch_processes: $('set-procs').value.split(',').map((s) => s.trim()).filter(Boolean),
     outlook_enabled: $('set-outlook').checked,
     minutes_engine: $('set-engine').value,
-    api_provider: $('set-provider').value,
     claude_cli_model: $('set-cli-model').value,
     claude_timeout_s: parseInt($('set-cli-timeout').value, 10) || 600,
-    // Словарь «модель на сервис» служба сливает по одному ключу, поэтому
-    // отправляем только тот сервис, который сейчас на экране.
-    api_models: { [$('set-provider').value]: $('set-model').value },
   };
   const hf = $('set-hf').value.trim();
   if (hf) patch.hf_token = hf;
-  const key = $('set-apikey').value.trim();
-  // В поле каталога лежит МАСКА сохранённого значения (b1g2***34). Если её не
-  // трогали, сохранять нельзя: маска затёрла бы настоящий идентификатор.
-  const folderShown = (S.settings.api_keys_hint || {}).yandexgpt_folder || '';
-  const folderTyped = $('set-folder').value.trim();
-  const folder = folderTyped && folderTyped !== folderShown ? folderTyped : '';
-  if (key || folder) {
-    patch.api_keys = {};
-    if (key) patch.api_keys[$('set-provider').value] = key;
-    if (folder) patch.api_keys.yandexgpt_folder = folder;
-  }
+  Object.assign(patch, collectConnections());
   patch.diarize_auto = $('set-auto-diarize').checked;
+  // Список вариантов приходит от службы; пока не пришёл — выбор не трогаем.
+  // Какие модели распознавания и для чего (решение 21.09).
+  Object.assign(patch, collectAsrModels());
   patch.audio_retention_days = Math.max(0, parseInt($('set-retention').value, 10) || 0);
   Object.assign(patch, collectDictate());
   Object.assign(patch, collectAdvanced());
@@ -2722,6 +3417,8 @@ async function applySettings(from) {
     }
     if (patch.dictate_enabled) await checkDictate();
     markSaved(from);
+    // Сменили выбор моделей — служба пересчитает, что скачать и что не нужно.
+    if (from && /^set-(asr|live-draft)/.test(from.id || '')) await loadAsrModels();
     await loadState();
     if (S.currentId) await refreshCurrent();
     paintAll();
@@ -2948,6 +3645,7 @@ async function handleEvent(ev) {
     case 'needs':
       S.needs = ev.parts || [];
       paintNeeds();
+      loadAsrModels();      // скачали или сбросили модели — «нужное» и «ненужное» другие
       break;
     case 'notice':
       notice(ev.text, ev.level === 'ok' ? 'ok' : (ev.level === 'err' ? 'err' : ''));
@@ -2989,6 +3687,8 @@ async function handleEvent(ev) {
       applyView(S.settings);
       paintProgramState();   // сменили движок документов — строка внизу это говорит
       applyFeatures();
+      // «Сбросить всё» меняет выбор моделей сама служба — список на экране за ним.
+      if (!$('dlg-settings').classList.contains('hidden')) fillAsrModels();
       if (S.current) paintTranscript();       // могло смениться имя владельца
       break;
     case 'ready':
@@ -3031,6 +3731,13 @@ function paintRecTabs() {
   if (!has && S.pane === 'doc') showPane('transcript');
 }
 
+/* Открытый сейчас документ записи. Одно место на всех, кто его ищет:
+   отрисовка вкладок, копирование и отправка. */
+function currentDoc() {
+  const docs = S.docs || [];
+  return docs.find((d) => d.key === S.docShown) || docs[0] || null;
+}
+
 /* Документы записи: по вкладке на каждый (протокол, саммари, вопросы…). */
 function paintDocTabs() {
   const docs = S.docs || [];
@@ -3042,8 +3749,7 @@ function paintDocTabs() {
     // некуда — документ выбирался, а на экране ничего не менялось.
     b.onclick = () => { S.docShown = b.dataset.k; showPane('doc'); };
   });
-  const cur = docs.find((d) => d.key === S.docShown) || docs[0];
-  paintDocBody(cur);
+  paintDocBody(currentDoc());
   // Вкладка документа появляется, только когда документ есть (п. 6.3).
   paintRecTabs();
   paintFolds();   // свёрнутость документа — у каждой записи своя
@@ -3180,6 +3886,218 @@ function mdBlocks(md) {
   closeList();
   closeTable();
   return out.join('');
+}
+
+/* Копировать документ в том виде, в каком его будут вставлять (20.09).
+   Документ внутри хранится в Markdown — это одна правда, а на выходе три
+   отрисовки под три места: заметки, Word с Outlook и Telegram.
+
+   Системного вызова здесь нет и не нужно: буфер обмена браузера сам умеет
+   класть рядом простой текст и HTML, а Word с Outlook берут из него HTML. */
+const COPY_FORMATS = {
+  md: { title: 'Markdown', note: 'как есть — для заметок и Obsidian' },
+  rich: { title: 'Оформленный текст', note: 'для Word и Outlook: заголовки, списки, таблицы' },
+  tg: { title: 'Telegram', note: 'жирный и курсив, таблицы строками' },
+};
+
+/* HTML для Word и Outlook: тот же рисовальщик, что и на странице, только без
+   наших крючков — классов вычёркивания и кнопок-таймкодов. Второго
+   рисовальщика Markdown в программе заводить незачем. */
+function docHtml(md) {
+  const box = document.createElement('div');
+  box.innerHTML = mdBlocks(md);
+  box.querySelectorAll('.js-goto-ts').forEach((b) => {
+    b.replaceWith(document.createTextNode(b.textContent || ''));
+  });
+  box.querySelectorAll('*').forEach((el) => {
+    el.removeAttribute('class');
+    el.removeAttribute('data-i');
+    el.removeAttribute('title');
+  });
+  return box.innerHTML;
+}
+
+/* Telegram: заголовки жирным, списки точками, таблицы строками. Таблиц он не
+   умеет вовсе, а заголовки у него — те же жирные строки. */
+function docTelegram(md) {
+  const out = [];
+  String(md || '').split('\n').forEach((raw) => {
+    const body = String(raw).trim();
+    if (!body) { out.push(''); return; }
+    if (/^([-*_])\1{2,}$/.test(body)) { out.push('—'); return; }
+    const h = body.match(/^#{1,4}\s+(.*)$/);
+    if (h) { out.push('**' + tgInline(h[1]) + '**'); return; }
+    if (body.startsWith('|')) {
+      // Разделитель таблицы («|---|---|») выбрасываем: строкой он не читается.
+      if (/^[|\-: ]+$/.test(body)) return;
+      const cells = body.replace(/^\||\|$/g, '').split('|').map((c) => tgInline(c.trim()));
+      out.push(cells.filter(Boolean).join(' — '));
+      return;
+    }
+    const li = body.match(/^([-*+]|\d+[.)])\s+(.*)$/);
+    if (li) {
+      out.push((/\d/.test(li[1]) ? li[1] + ' ' : '• ') + tgInline(li[2]));
+      return;
+    }
+    out.push(tgInline(body));
+  });
+  // Пустых строк подряд быть не должно: в сообщении они съедают экран.
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function tgInline(text) {
+  // Разметка Telegram — та же, что у нас, кроме `код`: его он понимает так же.
+  // Вики-ссылки [[Заметка]] разворачиваем в имя: в Telegram по ним не перейти.
+  return String(text || '').replace(/\[\[([^\]]+)\]\]/g, '$1');
+}
+
+/* Положить документ в буфер в выбранном виде. Оформленный текст кладётся
+   парой «HTML + простой текст»: Word возьмёт первое, «Блокнот» — второе. */
+async function copyDocAs(format) {
+  const cur = currentDoc();
+  const md = (cur && cur.markdown) || $('minutes-text').textContent || '';
+  const kind = COPY_FORMATS[format] ? format : 'md';
+  try {
+    if (kind === 'md') {
+      await navigator.clipboard.writeText(md);
+    } else if (kind === 'tg') {
+      await navigator.clipboard.writeText(docTelegram(md));
+    } else {
+      const html = docHtml(md);
+      const plain = $('minutes-text').textContent || md;
+      if (window.ClipboardItem && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        })]);
+      } else {
+        // Без ClipboardItem оформление положить нечем — честно кладём текст.
+        await navigator.clipboard.writeText(plain);
+      }
+    }
+  } catch (e) { notice('Скопировать не вышло: ' + e.message, 'err'); return; }
+  S.copyFormat = kind;
+  notice(`Скопировано: ${COPY_FORMATS[kind].title}`, 'ok');
+  try {
+    // Ответ кладём в S.settings сразу: иначе следующее чтение состояния
+    // вернуло бы прошлый выбор, и галочка в меню отскочила бы назад.
+    S.settings = await api('/api/settings', { method: 'POST', body: { copy_format: kind } });
+  } catch (e) { /* не сохранилось — в этот раз скопировано всё равно верно */ }
+}
+
+/* «Отправить» (20.09). Продолжение копирования: там документ ложится в буфер,
+   здесь — уходит адресату. Порядок тот же, что у задач в Todoist: сначала
+   показываем, что уйдёт, потом человек отмечает, и только потом открывается
+   письмо — которое программа не отправляет, а показывает. */
+async function openShareDialog() {
+  if (!S.currentId) return;
+  let res;
+  try {
+    res = await api(`/api/recordings/${S.currentId}/share`);
+  } catch (e) { notice(e.message, 'err'); return; }
+  S.share = res;
+  const items = res.items || [];
+  if (!items.length) {
+    notice('Отправлять пока нечего: нет ни документов, ни стенограммы', 'err');
+    return;
+  }
+  // Открытый документ отмечен сразу: обычно отправляют именно его.
+  const cur = currentDoc();
+  $('share-list').innerHTML = items.map((it, i) => `
+    <label class="link-row">
+      <input type="checkbox" data-key="${esc(it.key)}"${
+  (cur && it.key === cur.key) || (!cur && i === 0) ? ' checked' : ''}>
+      <span class="link-title">${esc(it.title)}</span>
+      <span class="tiny muted">${it.kind === 'transcript' ? 'весь разговор по репликам' : 'документ'}</span>
+    </label>`).join('');
+  $('share-list').querySelectorAll('input').forEach((c) => { c.onchange = paintShareNote; });
+  $('share-target').onchange = paintShareNote;
+  paintShareNote();
+  showDialog('dlg-share');
+}
+
+function sharePicked() {
+  return [...$('share-list').querySelectorAll('input:checked')].map((c) => c.dataset.key);
+}
+
+function paintShareNote() {
+  const res = S.share || {};
+  const mail = $('share-target').value === 'mail';
+  const picked = sharePicked();
+  $('btn-share-go').textContent = mail ? 'Открыть письмо' : 'Открыть Telegram';
+  $('btn-share-go').disabled = mail && !picked.length;
+  if (!mail) {
+    $('share-note').textContent = 'Telegram откроет выбор чата с готовым сообщением. '
+      + 'Вложения он по ссылке не принимает, а длинный документ в сообщение не влезет — '
+      + 'целиком он ляжет в буфер обмена. Отмечать можно только один документ.';
+    return;
+  }
+  $('share-note').textContent = res.mail_attachments
+    ? 'Отмеченное уйдёт вложением. Письмо откроется, но НЕ отправится: адресатов впишете сами.'
+    : `Вложение доезжает только через классический Outlook. ${res.mail_note || ''} `
+      + 'Письмо откроется ссылкой, а папку с файлами покажу рядом.';
+}
+
+async function doShare() {
+  if (!S.currentId) return;
+  const target = $('share-target').value;
+  const keys = sharePicked();
+  let text = '';
+  if (target === 'telegram') {
+    // Текст готовит тот же рисовальщик, что и «Копировать в разметке Telegram»:
+    // второй разметки Telegram в программе нет. Он же едет в ссылке — по ней
+    // Telegram открывает выбор чата с готовым сообщением.
+    const items = (S.share || {}).items || [];
+    const key = keys[0] || (items[0] || {}).key;
+    const doc = (S.docs || []).find((d) => d.key === key);
+    if (!doc) { notice('В Telegram можно отправить документ, а не стенограмму', 'err'); return; }
+    text = docTelegram(doc.markdown || '');
+    // Целиком документ кладём в буфер: в ссылку влезает только начало.
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) { notice('Не вышло положить текст в буфер: ' + e.message, 'err'); }
+  }
+  try {
+    const res = await api(`/api/recordings/${S.currentId}/share`, {
+      method: 'POST', body: { target: target, keys: keys, text: text },
+    });
+    hideDialogs();
+    notice(res.note || 'Готово', 'ok');
+  } catch (e) { notice(e.message, 'err'); }
+}
+
+function copyMenuClose() {
+  const m = document.getElementById('copy-menu');
+  if (m) m.remove();
+  document.removeEventListener('mousedown', copyMenuOutside, true);
+}
+
+function copyMenuOutside(ev) {
+  const box = document.getElementById('copy-menu');
+  const btn = $('btn-copy-minutes');
+  if (box && !box.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) {
+    copyMenuClose();
+  }
+}
+
+/* Меню выбора вида. Последний выбор отмечен галочкой и стоит первым в памяти:
+   человек обычно копирует в одно и то же место. */
+function openCopyMenu() {
+  if (document.getElementById('copy-menu')) { copyMenuClose(); return; }
+  const box = document.createElement('div');
+  box.id = 'copy-menu';
+  box.className = 'rec-menu';
+  box.innerHTML = Object.entries(COPY_FORMATS).map(([key, it]) =>
+    `<button type="button" data-fmt="${key}" title="${esc(it.note)}">${
+      key === S.copyFormat ? '✓ ' : ''}${esc(it.title)}</button>`).join('');
+  document.body.appendChild(box);
+  const r = $('btn-copy-minutes').getBoundingClientRect();
+  box.style.left = `${Math.round(Math.max(8, r.left))}px`;
+  box.style.top = `${Math.round(r.top - box.offsetHeight - 4)}px`;
+  box.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { copyMenuClose(); copyDocAs(b.dataset.fmt); };
+  });
+  document.addEventListener('mousedown', copyMenuOutside, true);
 }
 
 function paintDocBody(cur) {
@@ -3420,6 +4338,85 @@ function needPart(key) {
   return (S.needs || []).find((p) => p.key === key) || null;
 }
 
+/* «Настройки → Модели»: какие модели распознавания и для чего (решение 21.09).
+   Страница показывает выбор и отправляет его; чего не хватает, что не нужно и
+   что работает сейчас — говорит служба (/api/asr/models). Выбор срабатывает
+   после перезапуска, и без строки состояния не видно, перезапускались ли. */
+async function loadAsrModels() {
+  try { S.asrModels = await api('/api/asr/models'); } catch (e) { return; }
+  if (S.asrModels.running) S.asr = S.asrModels.running;
+  paintAsrModels();
+}
+
+function fillAsrModels() {
+  const s = S.settings;
+  $('set-asr-count').value = String(s.asr_count || 1);
+  $('set-asr-single').value = s.asr_single || 'precise';
+  $('set-asr-calls').value = s.asr_calls || 'fast';
+  $('set-asr-voice').value = s.asr_voice || 'precise';
+  $('set-asr-reread').checked = s.asr_reread !== false;
+  $('set-live-draft').checked = !!s.live_draft;
+  $('set-asr-engine').value = s.asr_engine || 'onnx_asr';
+  $('set-asr-weights').value = s.asr_weights || 'fp32';
+  paintAsrRows();
+}
+
+function collectAsrModels() {
+  return {
+    asr_count: parseInt($('set-asr-count').value, 10) === 2 ? 2 : 1,
+    asr_single: $('set-asr-single').value,
+    asr_calls: $('set-asr-calls').value,
+    asr_voice: $('set-asr-voice').value,
+    asr_reread: $('set-asr-reread').checked,
+    live_draft: $('set-live-draft').checked,
+    asr_engine: $('set-asr-engine').value,
+    asr_weights: $('set-asr-weights').value,
+  };
+}
+
+/* Какие поля видны при таком выборе — сразу, не дожидаясь службы. */
+function paintAsrRows() {
+  const two = $('set-asr-count').value === '2';
+  const fastCalls = two ? $('set-asr-calls').value === 'fast' : $('set-asr-single').value === 'fast';
+  $('row-asr-single').classList.toggle('hidden', two);
+  $('row-asr-two').classList.toggle('hidden', !two);
+  $('set-asr-reread').disabled = !(two && fastCalls);
+  $('row-live-draft').classList.toggle('hidden', !fastCalls);
+  $('row-asr-engine').classList.toggle('hidden', !two && $('set-asr-single').value === 'fast');
+  $('row-asr-weights').classList.toggle('hidden', $('set-asr-engine').value !== 'onnx_asr');
+}
+
+function paintAsrModels() {
+  const box = $('asr-models-state');
+  const m = S.asrModels;
+  if (!box || !m) return;
+  const miss = m.missing || [];
+  $('asr-models-download').classList.toggle('hidden', !miss.length);
+  $('btn-asr-download').textContent = `Скачать нужное — ${m.download_mb} МБ`;
+  $('asr-download-what').textContent = miss.map((x) => x.title).join(', ');
+  const un = m.unneeded || [];
+  $('asr-models-unneeded').classList.toggle('hidden', !un.length);
+  $('asr-unneeded-what').textContent = un.map((x) => `${x.title} (${x.disk_mb} МБ`
+    + (x.busy ? ', занято — удалится после перезапуска' : '') + ')').join(', ')
+    + ` — всего ${m.unneeded_mb} МБ.`;
+  $('asr-models-notes').textContent = (m.notes || []).join(' ');
+  const st = m.running || S.asr || {};
+  let text = '';
+  if (st.note) text = '⚠ ' + st.note;
+  else if (m.restart) {
+    text = `Сейчас работает: ${st.models}. Выбранное — ${m.title} — включится после перезапуска программы.`;
+  } else if (st.models) text = `Работает: ${st.models}.`;
+  box.textContent = text;
+}
+
+async function asrModelsAction(url, body, done) {
+  try {
+    const res = await api(url, { method: 'POST', body: body || {} });
+    if (res.state) { S.asrModels = res.state; paintAsrModels(); }
+    if (done) done(res);
+  } catch (e) { notice(e.message, 'err'); }
+}
+
 function paintNeeds() {
   const box = $('needs-list');
   if (!box) return;
@@ -3547,6 +4544,48 @@ function fillDictate() {
   $('dictate-history').classList.add('hidden');
   $('btn-dictate-hotkey').dataset.hotkey = s.dictate_hotkey || 'ctrl+shift+space';
   paintHotkeyButton();
+  // Сочетания голосовых заметок (20.09): пустое — клавиши нет вовсе.
+  paintExtraHotkey('btn-note-hotkey', s.note_hotkey || '');
+  paintExtraHotkey('btn-task-hotkey', s.task_hotkey || '');
+}
+
+/* Сочетания заметки и поручения. Своё простое назначение: сочетание
+   набирается нажатием, как основное, но занятость проверяет служба при
+   включении — если занять не вышло, оно не появится в подсказке у заметок. */
+function paintExtraHotkey(id, combo) {
+  const btn = $(id);
+  if (!btn) return;
+  btn.dataset.hotkey = combo || '';
+  btn.textContent = combo ? hotkeyText(combo) : 'не задано';
+}
+
+function hotkeyText(combo) {
+  return String(combo || '').split('+')
+    .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p)).join(' + ');
+}
+
+function captureExtraHotkey(id) {
+  const btn = $(id);
+  if (!btn) return;
+  const was = btn.textContent;
+  btn.textContent = 'Нажмите сочетание…';
+  const finish = async (combo) => {
+    stop();
+    paintExtraHotkey(id, combo);
+    await applySettings(btn);
+  };
+  const onDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { stop(); btn.textContent = was; return; }
+    const mods = heldMods(e);
+    const key = hotkeyName(e.code || '');
+    // Сочетания из одних модификаторов здесь не берём: они работают только
+    // с подпиской на все нажатия, и это отдельный разговор (см. основное).
+    if (key && mods.length) finish(mods.concat([key]).join('+'));
+  };
+  function stop() { document.removeEventListener('keydown', onDown, true); }
+  document.addEventListener('keydown', onDown, true);
 }
 
 // Сочетание набора текста показано на двух вкладках — «Набор текста» и
@@ -3643,6 +4682,8 @@ function collectDictate() {
   return {
     dictate_enabled: $('set-dictate').checked,
     dictate_hotkey: $('btn-dictate-hotkey').dataset.hotkey || 'ctrl+shift+space',
+    note_hotkey: $('btn-note-hotkey').dataset.hotkey || '',
+    task_hotkey: $('btn-task-hotkey').dataset.hotkey || '',
     dictate_mode: $('set-dictate-mode').value,
     dictate_lang: $('set-dictate-lang').value,
     dictate_sound: $('set-dictate-sound').checked,
@@ -3712,6 +4753,14 @@ async function checkDictate() {
 
 function bind() {
   $('btn-new').onclick = newRecordingTab;
+  // «Домой» в разделе «Видео» (20.09): вернуться к форме добавления. Запись с
+  // экрана не убираем — она остаётся выбранной в списке, и к ней можно
+  // вернуться щелчком, ничего не потеряв.
+  $('btn-video-home').onclick = () => {
+    S.showRecord = false;
+    if (window.videoReloadOptions) window.videoReloadOptions();
+    paintAll();
+  };
   $('btn-start').onclick = startRecording;
   $('btn-stop').onclick = stopRecording;
   $('btn-settings').onclick = openSettings;
@@ -3740,6 +4789,17 @@ function bind() {
   });
 
   $('btn-dictate-hotkey').onclick = captureHotkey;
+  // Сочетания голосовых заметок (20.09).
+  $('btn-note-hotkey').onclick = () => captureExtraHotkey('btn-note-hotkey');
+  $('btn-task-hotkey').onclick = () => captureExtraHotkey('btn-task-hotkey');
+  $('btn-note-hotkey-clear').onclick = async () => {
+    paintExtraHotkey('btn-note-hotkey', '');
+    await applySettings($('btn-note-hotkey'));
+  };
+  $('btn-task-hotkey-clear').onclick = async () => {
+    paintExtraHotkey('btn-task-hotkey', '');
+    await applySettings($('btn-task-hotkey'));
+  };
   if ($('btn-keys-hotkey')) $('btn-keys-hotkey').onclick = captureHotkey;
   // Готовые сочетания: клавишу Win окно программы может и не увидеть — её
   // перехватывает сама Windows. Кнопкой выбрать всегда можно.
@@ -3758,73 +4818,63 @@ function bind() {
   document.querySelectorAll('.mode-btn').forEach((b) => {
     b.onclick = () => setMode(b.dataset.mode);
   });
-  $('set-provider').onchange = () => {
-    const hint = (S.settings.api_keys_hint || {})[$('set-provider').value];
-    $('apikey-state').textContent = hint ? `ключ задан (${hint})` : 'ключ не задан';
-    $('set-apikey').value = '';
-    fillModels();
-    refreshModelsHint();
-    toggleApiFields();
-  };
+  bindModelCombos();                     // раньше bindConnections: Enter в списке — выбор
+  bindConnections();
   $('set-model').onchange = refreshModelsHint;
   $('set-cli-model').onchange = refreshModelsHint;
   $('set-engine').onchange = () => { refreshModelsHint(); toggleApiFields(); };
+  // Модели распознавания: какие поля видны — сразу, что скачать и что не
+  // нужно — после сохранения выбора (applySettings зовёт loadAsrModels).
+  ['set-asr-count', 'set-asr-single', 'set-asr-calls', 'set-asr-engine'].forEach((id) => {
+    $(id).addEventListener('change', paintAsrRows);
+  });
+  $('btn-asr-download').onclick = () => asrModelsAction('/api/asr/models/download', {}, (res) => {
+    notice(res.job_id ? 'Скачиваю модели. Ход виден в панели задач слева.' : res.title, 'ok');
+  });
+  $('btn-asr-delete').onclick = () => asrModelsAction('/api/asr/models/cleanup',
+    { action: 'delete' }, (res) => {
+      notice(`Освобождено ${res.freed_mb || 0} МБ`
+        + ((res.later || []).length ? '; занятое удалится после перезапуска программы' : ''), 'ok');
+    });
+  $('btn-asr-keep').onclick = () => asrModelsAction('/api/asr/models/cleanup', { action: 'keep' });
+  $('btn-asr-reset').onclick = () => {
+    if (!confirm('Сбросить модели распознавания? Останется одна точная модель (onnx-asr, '
+      + 'полные веса) и рекомендованные настройки, остальные модели удалятся. Программа '
+      + 'доработает на прежних моделях до перезапуска.')) return;
+    asrModelsAction('/api/asr/models/reset', {}, () => {
+      notice('Сбрасываю модели. Ход виден в панели задач слева.', 'ok');
+    });
+  };
 
   $('btn-refresh-models').onclick = async () => {
-    const pid = $('set-provider').value;
-    const btn = $('btn-refresh-models');
-    btn.disabled = true;
-    btn.textContent = 'спрашиваю сервис…';
-    try {
-      const res = await api(`/api/models?provider=${encodeURIComponent(pid)}&refresh=true`, { method: 'POST' });
-      S.models = S.models || {};
-      S.models[pid] = res;
-      fillModels();
-      notice(`Моделей получено: ${(res.chat || []).length} для документов`
-        + `, ${(res.stt || []).length} для распознавания`, 'ok');
-    } catch (e) { notice(e.message, 'err'); } finally {
-      btn.disabled = false;
-      btn.textContent = 'Обновить список моделей';
-    }
+    await refreshModels('docs', $('btn-refresh-models'));
+  };
+  $('btn-cloud-asr-models').onclick = () => refreshModels('asr', $('btn-cloud-asr-models'));
+  // «?» внутри <label>: щелчок не должен уводить фокус в поле адреса.
+  $('btn-services').onclick = (e) => { e.preventDefault(); toggleServicesPop(); };
+  $('btn-services').onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleServicesPop(); }
   };
 
-  $('btn-add-provider').onclick = () => {
-    $('new-provider').classList.remove('hidden');
-    $('np-title').focus();
-  };
-  $('btn-cancel-provider').onclick = () => {
-    $('new-provider').classList.add('hidden');
-    ['np-title', 'np-url', 'np-key'].forEach((id) => { $(id).value = ''; });
-  };
-  $('btn-save-provider').onclick = async () => {
-    const body = {
-      title: $('np-title').value.trim(),
-      base_url: $('np-url').value.trim(),
-      kind: $('np-kind').value,
-      key: $('np-key').value.trim(),
-    };
-    if (!body.base_url) { notice('Нужен адрес сервиса', 'err'); return; }
+  // Найден ли CLI, выполнен ли вход, отвечает ли — решает служба, здесь только показ.
+  $('btn-check-cli').onclick = async () => {
+    const btn = $('btn-check-cli');
+    const box = $('cli-check-state');
+    btn.disabled = true;
+    btn.textContent = 'проверяю…';
+    box.className = 'tiny muted';
+    box.textContent = 'Спрашиваю Claude CLI — до минуты.';
     try {
-      const res = await api('/api/providers', { method: 'POST', body });
-      S.caps.providers = res.providers || [];
-      $('new-provider').classList.add('hidden');
-      ['np-title', 'np-url', 'np-key'].forEach((id) => { $(id).value = ''; });
-      fillProviders(res.provider.id);
-      $('set-provider').onchange();
-      notice('Сервис добавлен. Нажмите «Обновить список моделей».', 'ok');
-    } catch (e) { notice(e.message, 'err'); }
-  };
-  $('btn-del-provider').onclick = async () => {
-    const p = currentProvider();
-    if (!p || !p.custom) return;
-    if (!confirm(`Убрать сервис «${p.title}»? Ключ к нему тоже будет удалён.`)) return;
-    try {
-      const res = await api('/api/providers/' + encodeURIComponent(p.id), { method: 'DELETE' });
-      S.caps.providers = res.providers || [];
-      fillProviders('anthropic');
-      $('set-provider').onchange();
-      notice('Сервис убран', 'ok');
-    } catch (e) { notice(e.message, 'err'); }
+      const res = await api('/api/engines/claude_cli/check', { method: 'POST' });
+      box.textContent = (res.ok ? '✓ ' : '⚠ ') + res.text;
+      box.className = 'tiny' + (res.ok ? ' muted' : '');
+    } catch (e) {
+      box.textContent = '⚠ ' + e.message;
+      box.className = 'tiny';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Проверить';
+    }
   };
 
   $('rec-title').onchange = async () => {
@@ -3849,8 +4899,37 @@ function bind() {
   // Проект и теги сохраняются по уходу из поля и по Enter, а не на каждую
   // букву: иначе служба переписывала бы заметку на каждое нажатие.
   $('rec-project').onchange = () => { saveLabels(); };
+  // Подсказка про папку меняется сразу, ещё до сохранения: человек должен
+  // видеть, куда уедет заметка, пока правит имя проекта.
+  $('rec-project').oninput = () => { paintProjectFolder(); };
   $('rec-tags').onchange = () => { saveLabels(); };
   $('rec-tags').oninput = () => { paintTagChips(); };
+  $('btn-project-folder').onclick = () => openProjectFolderDialog();
+  // Отбор и группировка списка (20.09). Отбор живёт, пока открыто окно:
+  // спрятанный отбор, переживший перезапуск, выглядел бы как пропажа записей.
+  // Складывание по проектам — привычка, её запоминаем в настройках.
+  $('flt-project').onchange = () => {
+    S.listFilter.project = $('flt-project').value || '';
+    paintSidebar();
+  };
+  $('flt-tag').onchange = () => {
+    S.listFilter.tag = $('flt-tag').value || '';
+    paintSidebar();
+  };
+  $('btn-group').onclick = async () => {
+    S.groupByProject = !S.groupByProject;
+    paintSidebar();
+    try {
+      await api('/api/settings',
+        { method: 'POST', body: { list_group_by_project: S.groupByProject } });
+    } catch (e) { /* не сложилось сохранить — вид всё равно переключён */ }
+  };
+  $('pf-filter').oninput = () => {
+    clearTimeout(folderTimer);
+    folderTimer = setTimeout(searchFolders, 250);
+  };
+  $('btn-pf-save').onclick = () => saveProjectFolder(S.folderDraft || '');
+  $('btn-pf-clear').onclick = () => saveProjectFolder('');
   $('rec-continues').onchange = async () => {
     if (!S.currentId) return;
     try {
@@ -3978,8 +5057,9 @@ function bind() {
   $('btn-retry').onclick = async () => {
     if (!S.currentId) return;
     // Точная модель может быть не скачана: спросим до того, как человек
-    // выберет число голосов и будет ждать (решение 16.09).
-    if (!await ensurePart('precise')) return;
+    // выберет число голосов и будет ждать (решение 16.09). Какая именно часть
+    // нужна, говорит служба: у варианта распознавания на onnx-asr она своя.
+    if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise')) return;
     openVoices('repass');
   };
   document.querySelectorAll('#repass-ask .tpl').forEach((t) => {
@@ -4008,7 +5088,7 @@ function bind() {
     const body = { doc: S.tplChosen, video_kind: $('doc-video-kind').value };
     if (S.tplChosen === 'question') {
       const q = $('minutes-question').value.trim();
-      if (!q) { notice('Напишите вопрос', 'err'); return; }
+      if (!q) { notice('Напишите, что сделать', 'err'); return; }
       body.question = q;
     }
     hideDialogs();
@@ -4018,10 +5098,10 @@ function bind() {
       notice(`Готовлю: ${title}…`, 'ok');
     } catch (e) { notice(e.message, 'err'); }
   };
-  $('btn-copy-minutes').onclick = () => {
-    navigator.clipboard.writeText($('minutes-text').textContent || '')
-      .then(() => notice('Скопировано', 'ok'));
-  };
+  // Одна кнопка с выбором вида (20.09): Markdown, оформленный текст, Telegram.
+  $('btn-copy-minutes').onclick = () => openCopyMenu();
+  $('btn-share').onclick = () => openShareDialog();
+  $('btn-share-go').onclick = () => doShare();
   // «Свернуть» прячет только текст: вкладки и кнопки остаются, иначе
   // развернуть было бы нечем (замечено 13.09).
   $('btn-hide-minutes').onclick = () => setFold('minutes', !foldOf('minutes'));
@@ -4090,31 +5170,20 @@ function bind() {
     const text = segs.map((s) => `[${fmtClock(s.start)}] ${displaySpeaker(s.speaker)}: ${s.text || ''}`).join('\n');
     navigator.clipboard.writeText(text).then(() => notice('Стенограмма скопирована', 'ok'));
   };
-  $('btn-delete').onclick = () => {
-    if (!S.currentId) return;
-    const m = S.current.meta;
-    const where = [];
-    if (m.video_path) where.push('видео лежит рядом с записью');
-    if (m.vault_path) where.push('заметка сохранена в хранилище');
-    $('del-what').textContent = `Запись «${m.title}»`
-      + (where.length ? `. Сейчас: ${where.join(', ')}.` : '.');
-    // Если медиа уже нет, второй пункт бессмыслен.
-    const mediaChoice = $('del-choices').querySelector('[data-scope="media"]');
-    const gone = !!m.media_removed;
-    mediaChoice.classList.toggle('off', gone);
-    $('del-media-note').textContent = gone
-      ? 'Видео и звук уже удалены.'
-      : 'Стенограмма останется — по ней можно сделать протокол или саммари.';
-    // Третий пункт обещает ровно то, что правда: папка записи уходит вместе со
-    // стенограммой, а снаружи остаётся только то, что и правда лежит снаружи.
-    const stays = [];
-    if (m.video_path) stays.push('видео');
-    if (m.vault_path) stays.push('заметка в хранилище');
-    $('del-history-note').textContent = stays.length
-      ? `Запись и её стенограмма уходят. Остаётся: ${stays.join(', ')}.`
-      : 'Запись уходит вместе со стенограммой. Снаружи ничего не сохранено.';
-    showDialog('dlg-delete');
-  };
+  $('btn-delete').onclick = () => openDeleteDialog();
+  // Delete — то же окно, что и кнопка «Удалить» (20.09). Только когда человек
+  // и правда в списке записей: в поле ввода, в открытом окне и в режиме правки
+  // стенограммы эта клавиша занята своим делом.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Delete' || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (S.editMode) return;
+    const tag = (e.target.tagName || '').toUpperCase();
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.target.isContentEditable) return;
+    if (!$('overlay').classList.contains('hidden')) return;   // открыто какое-то окно
+    if (!pickedIds().length) return;
+    e.preventDefault();
+    openDeleteDialog();
+  });
   $('del-choices').querySelectorAll('.tpl').forEach((el) => {
     el.onclick = () => {
       if (el.classList.contains('off')) return;
@@ -4122,6 +5191,14 @@ function bind() {
     };
   });
   $('btn-save-speaker').onclick = () => saveSpeakerDialog({});
+  // Переключение «только в этой записи» меняет, какую роль показывают поля.
+  $('speaker-role-once').onchange = () => {
+    const role = (S.speakerCtx && S.speakerCtx.role) || {};
+    const once = $('speaker-role-once').checked;
+    $('speaker-side').value = once ? (role.rec_side || '') : (role.side || '');
+    $('speaker-position').value = once ? (role.rec_position || '') : (role.position || '');
+    paintSpeakerRoleNote();
+  };
   let speakerTimer = null;
   $('speaker-name').addEventListener('input', () => {
     const ctx = S.speakerCtx;

@@ -13,8 +13,8 @@ from typing import Any, Callable
 __all__ = [
     "ensure_portable", "write_shortcut", "screenshot_folders",
     "watch_screenshots", "delete_shots", "shift_shots",
-    "hidden_process_flags", "open_path", "set_console_title", "hide_console",
-    "restrict_to_owner",
+    "hidden_process_flags", "open_path", "open_link", "set_console_title",
+    "hide_console", "restrict_to_owner",
 ]
 
 #: Куда заглушка пишет «ярлыки» и откуда берёт «снимки».
@@ -31,6 +31,9 @@ DELETED: list[str] = []
 
 #: Что просили открыть программой по умолчанию.
 OPENED: list[str] = []
+
+#: Какие ссылки просили открыть (mailto:, tg://).
+LINKS: list[str] = []
 
 #: Файлы, которые просили закрыть от чужих.
 RESTRICTED: list[str] = []
@@ -110,6 +113,16 @@ def hidden_process_flags() -> int:
 
 def open_path(path: str | Path) -> None:
     OPENED.append(str(path))
+
+
+def open_link(url: str) -> None:
+    """Ссылка не открывается, а записывается. Схемы проверяем так же, как в Windows."""
+    from ..base import LINK_SCHEMES
+
+    link = str(url or "").strip()
+    if not any(link.lower().startswith(s) for s in LINK_SCHEMES):
+        raise ValueError("Такие ссылки программа не открывает: %s" % link[:40])
+    LINKS.append(link)
 
 
 def set_console_title(text: str) -> None:

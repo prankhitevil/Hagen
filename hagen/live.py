@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import time
@@ -44,6 +45,22 @@ def _write_silence(writer: audio_io.WavWriter, samples: int) -> None:
         n = min(step, left)
         writer.write(np.zeros(n, dtype=np.int16))
         left -= n
+
+
+def _cpu_seconds() -> float:
+    """Процессорное время всей программы с её запуска, секунды."""
+    t = os.times()
+    return float(t.user + t.system)
+
+
+def drafts_enabled() -> bool:
+    """Показывать ли черновик фразы, пока человек говорит.
+
+    Черновик — перераспознавание хвоста фразы каждые DRAFT_EVERY_S, и это
+    основная нагрузка эфира на процессор. Включается галочкой live_draft и
+    только у быстрой модели в звонках — это решает asr.live_route.
+    """
+    return bool(asr.live_route().get("drafts"))
 
 
 def track_frames_on_disk(rec_id: str) -> int:
@@ -118,8 +135,15 @@ class TrackPipeline:
         self._buf_origin = already    # номер отсчёта, которому соответствует _buf[0]
         self._total = already         # сколько отсчётов в дорожке всего
         self._phrase_start: int | None = None
+        self._drafts = drafts_enabled()
         self._last_draft_ts = 0.0
         self._last_draft_text = ""
+        # Сколько отсчётов пришло от устройства — вместе с тем, что ещё ждёт в
+        # очереди. Звук приходит в темпе речи, поэтому «пришло после конца
+        # фразы» — это и есть, сколько секунд человек ждал её в стенограмме.
+        self._fed = already
+        #: Через сколько секунд после конца речи фразы появлялись в стенограмме.
+        self.delays: list[float] = []
         self.level = 0.0
         self.segments_count = 0
         self.error: str | None = None
@@ -130,8 +154,10 @@ class TrackPipeline:
         """Вызывается потоком захвата устройства. Только кладёт в очередь."""
         if self._stop.is_set():
             return
+        arr = np.asarray(pcm, dtype=np.float32).reshape(-1).copy()
         try:
-            self._q.put_nowait(np.asarray(pcm, dtype=np.float32).reshape(-1).copy())
+            self._q.put_nowait(arr)
+            self._fed += int(arr.size)
         except queue.Full:
             log.warning("очередь дорожки %s переполнена, кусок отброшен", self.track)
 
@@ -146,6 +172,7 @@ class TrackPipeline:
             return False
         try:
             self._q.put((_GAP, n), timeout=2.0)
+            self._fed += n
             return True
         except queue.Full:
             log.warning("очередь дорожки %s переполнена, перерыв %.1f c не записан",
@@ -216,7 +243,7 @@ class TrackPipeline:
             elif ev["type"] == "phrase_end":
                 self._finalize(int(ev["start"]), int(ev["end"]), ev.get("reason", "silence"))
 
-        if self.detector.in_speech and self._phrase_start is not None:
+        if self._drafts and self.detector.in_speech and self._phrase_start is not None:
             self._maybe_draft()
 
     def _trim_buffer(self) -> None:
@@ -279,12 +306,18 @@ class TrackPipeline:
             return
 
         text = (res.text or "").strip()
+        # Время слов есть, только если его дала модель эфира (режим одной
+        # модели). Отсчитано оно от начала куска, а в реплике — от начала записи.
+        words = res.words_at(start / float(SR))
         # Словарь из ручных правок: имена и термины, которые человек уже
-        # правил руками, сразу пишем так, как он их поправил (17.09).
+        # правил руками, сразу пишем так, как он их поправил (17.09). В словах
+        # те же замены, иначе текст и слова разойдутся.
         try:
             from . import fixes
 
             text = fixes.apply(text)
+            if words:
+                words = fixes.apply_words(words)
         except Exception:
             log.debug("замены из словаря не применились", exc_info=True)
         self._phrase_start = None
@@ -301,6 +334,10 @@ class TrackPipeline:
             text=text,
         )
         seg["reason"] = reason
+        # Со временем слов разметка говорящих режет реплику по словам, а не
+        # отдаёт её целиком тому, кто говорил дольше. Нет слов — ключа нет.
+        if words:
+            seg["words"] = words
 
         # Эхо колонок: если человек слушает совещание не в наушниках, микрофон
         # повторяет слова собеседников. Здесь ловим то, что уже видно в эфире;
@@ -319,6 +356,9 @@ class TrackPipeline:
         self.segments_count += 1
         if seg.get("echo"):
             return
+        # Фразу, дописанную по «Стоп» или перерыву, никто не ждал — не в счёт.
+        if reason in ("silence", "too_long"):
+            self.delays.append(round(max(0, self._fed - end) / float(SR), 2))
         if self.on_segment is not None:
             self.on_segment(self.track, seg)
 
@@ -377,6 +417,8 @@ class LiveSession:
         # Общая точка старта дорожек этого сеанса, в отсчётах. Считается один
         # раз, до первой записи: пока файлы закрыты, их длина на диске честная.
         self._base_frames: int | None = None
+        # Процессорное время всей программы к началу записи — для сводки стенда.
+        self._cpu0 = _cpu_seconds()
 
     # ------------------------------------------------ события наружу
     def _emit(self, payload: dict[str, Any]) -> None:
@@ -499,11 +541,46 @@ class LiveSession:
             "status": "recorded",
             "duration_s": round(duration, 2),
             "tracks": sorted(self.tracks.keys()),
+            "asr_stand": self._stand_summary(tracks),
         })
         store.refresh_participants(self.rec_id)
         self._emit({"type": "draft", "rec_id": self.rec_id, "drafts": {}})
         log.info("запись %s: остановлена, длительность %.1f c", self.rec_id, duration)
         return self.status()
+
+    def _stand_summary(self, tracks: list[TrackPipeline]) -> dict[str, Any]:
+        """Какой моделью распознавалась запись и как она себя вела.
+
+        Модели распознавания владелец сравнивает на настоящих звонках (стенд
+        18.09, выбор параметрами с 21.09); эта сводка — то, по чему сравнивать:
+        сколько процессора занимала программа (в ядрах, работающих на полную, в
+        среднем за запись) и через сколько секунд после конца речи фраза
+        появлялась в стенограмме. Процессор — всей программы, вместе с тем, что
+        шло параллельно записи.
+        """
+        route = asr.live_route()
+        wall = max(1.0, (self.stopped_at or time.time()) - self.started_at)
+        cores = max(0.0, _cpu_seconds() - self._cpu0) / wall
+        delays = sorted(d for tp in tracks for d in tp.delays)
+        live_title = asr.ENGINE_TITLES.get(route.get("live"), route.get("live") or "")
+        if route.get("drafts"):
+            live_title += ", с бегущим текстом"
+        title = live_title[:1].upper() + live_title[1:]
+        out: dict[str, Any] = {"key": route.get("key"), "title": title,
+                               "cpu_cores": round(cores, 2), "phrases": len(delays)}
+        text = "%s. Эфир — %s: процессор %.1f ядра в среднем" % (
+            route.get("title"), live_title, cores)
+        if delays:
+            out["delay_median_s"] = delays[len(delays) // 2]
+            out["delay_max_s"] = delays[-1]
+            text += ("; фраза появлялась через %.1f с после конца речи, самая долгая — "
+                     "через %.1f с" % (out["delay_median_s"], out["delay_max_s"]))
+        if route.get("why"):
+            out["why"] = route["why"]
+            text += ". " + route["why"]
+        out["text"] = text
+        log.info("запись %s: %s", self.rec_id, text)
+        return out
 
 
 class SessionManager:

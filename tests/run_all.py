@@ -48,7 +48,9 @@ NEEDS: dict[str, str] = {
     "t57_precise_idle": "точная модель",
     "t58_diarize_tuning": "модель разметки говорящих",
     "t68_for_tester": "сборка папки целиком",
+    "t89_one_model_real": "точная модель",
     "t9_voices": "модели распознавания и разметки говорящих",
+    "t100_diar_onnx": "модель разметки говорящих",
     "t44_claude_limit": "Claude CLI",
     # звук, устройства Windows, окна
     "t6_loopback_capture": "звуковые устройства",
@@ -72,6 +74,8 @@ NEEDS: dict[str, str] = {
     "t43_call_automation": "браузер",
     "t48_sharepoint": "сеть и вход в SharePoint",
     "t49_ui_smoke": "браузер",
+    "t91_list_groups": "браузер",
+    "t93_copy_formats": "браузер",
     "t14_outlook": "Outlook на этой машине",
 }
 

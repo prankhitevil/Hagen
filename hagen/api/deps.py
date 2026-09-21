@@ -135,14 +135,18 @@ def no_recording_now() -> None:
 
 def require_media_parts(body: dict[str, Any]) -> None:
     """Обработка видео: на этом компьютере нужна точная модель, а для английского — своя."""
+    from .. import media
+
     opts = body if isinstance(body, dict) else {}
-    where = str(opts.get("asr_files") or opts.get("where") or "").strip()
+    where = media.asr_where(opts)     # выбор задания, иначе — из настроек
     if where == "cloud":
         return                        # облако своих моделей не требует
     if str(opts.get("asr_lang") or "ru").strip().lower().startswith("en"):
         require_part("english")
     else:
-        require_part("precise")
+        from .. import asr
+
+        require_part(asr.precise_part())
 
 
 def require_part(key: str) -> None:
@@ -179,6 +183,46 @@ def recording_now() -> bool:
 
 _dictation = None      # dictate.Dictation — горячая клавиша → текст в чужое окно
 
+#: Какая запись открыта на экране (20.09). Клавишу голосовой заметки ловит
+#: служба, а что открыто в окне — знает только страница, поэтому она и говорит
+#: об этом. Окно закрыли — здесь снова пусто, и заметка ведёт себя как обычная
+#: диктовка: текст не пропадает, а вставляется, как вставлялся раньше.
+_open_recording: str = ""
+
+
+def set_open_recording(rec_id: str) -> str:
+    """Запомнить, какая запись открыта в окне. Пустое — ни одной."""
+    global _open_recording
+    _open_recording = str(rec_id or "").strip()
+    return _open_recording
+
+
+def open_recording() -> str:
+    return _open_recording
+
+
+def take_voice_note(text: str, kind: str = "note") -> bool:
+    """Положить надиктованное в открытую запись. False — класть некуда.
+
+    Поручение (`kind="task"`) сразу в Todoist НЕ уходит: отправка наружу
+    необратима, и она остаётся за кнопкой «Поставить задачи» — тем же
+    порядком, что и для поручений из документа.
+    """
+    from .. import store
+
+    rec_id = open_recording()
+    if not rec_id or not str(text or "").strip():
+        return False
+    meta = store.add_note(rec_id, text, kind)
+    if meta is None:
+        # Запись успели удалить — заметку девать некуда.
+        set_open_recording("")
+        return False
+    hub.publish({"type": "recording", "meta": meta})
+    log.info("голосовая %s к записи %s: %d знаков",
+             "задача" if kind == "task" else "заметка", rec_id, len(text))
+    return True
+
 
 def start_dictation() -> None:
     """Поднять диктовку, если она включена в настройках.
@@ -195,15 +239,18 @@ def start_dictation() -> None:
     if _dictation is None:
         # Капсула — отдельное окно Windows поверх всех: диктуют в чужое окно, а
         # окно «Hagen» в этот момент обычно спрятано в трей.
-        try:
-            capsule = platform.input().capsule()
-        except Exception as err:
-            log.warning("капсула диктовки недоступна: %s", err)
-            capsule = None
+        #
+        # Заводится она не здесь, а при первой диктовке (20.09). Создание окна
+        # идёт через pywin32, а он на время вызова НЕ отпускает GIL: когда
+        # Windows подвешивает создание окна — а на запуске, пока на экране
+        # заставка, это случается, — встаёт вся программа. Служба не успевает
+        # начать слушать порт, окно не открывается, и даже страховка заставки
+        # (обычный таймер Python) не срабатывает: исполнять её некому.
         _dictation = dictate.Dictation(
             busy=lambda: bool(recording_now()),
             on_state=lambda st: hub.publish({"type": "dictate", "dictate": st}),
-            capsule=capsule,
+            capsule=lambda: platform.input().capsule(),
+            on_note=take_voice_note,
         )
     try:
         _dictation.sync()

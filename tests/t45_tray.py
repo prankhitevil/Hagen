@@ -133,12 +133,19 @@ check("снятый вопрос убирает уведомление", notifie
 # (WinError 1114, c10.dll) — а с ним распознавание и разметку.
 try:
     import torch  # noqa: F401
-    from pyannote.audio import Pipeline  # noqa: F401
+
+    from hagen import diar_pyannote
+    # pyannote есть только в релизе с разметкой через него; в релизе ONNX
+    # после уведомлений должен грузиться onnxruntime.
+    if diar_pyannote.installed():
+        from pyannote.audio import Pipeline  # noqa: F401
+    import onnxruntime  # noqa: F401
     torch_ok = float((torch.ones(2) * 3).sum()) == 6.0
     torch_err = ""
 except Exception as e:
     torch_ok, torch_err = False, str(e)[:160]
-check("после уведомлений torch и pyannote загружаются", torch_ok, torch_err)
+check("после уведомлений torch, onnxruntime и pyannote (если он есть) загружаются",
+      torch_ok, torch_err)
 
 say("")
 say("=== 4. Значок у часов ===")

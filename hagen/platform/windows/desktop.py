@@ -35,6 +35,7 @@ __all__ = [
     "call_output_device",
     "watch_calls",
     "outlook_kind",
+    "compose_mail",
     "current_meeting",
     "suggest_title",
     "attendee_names",
@@ -737,6 +738,58 @@ def outlook_kind() -> dict[str, Any]:
     else:
         note = "Outlook не запущен — встреча не определяется."
     return {"classic": classic, "new": new, "com_available": com_available, "note": note}
+
+
+#: Письмо создаётся тем же COM, которым читается календарь (olMailItem = 0).
+#: Новый Outlook (olk.exe) COM не даёт — там ядро уходит на путь `mailto:`.
+OL_MAIL_ITEM = 0
+
+
+def compose_mail(subject: str, body: str,
+                 attachments: list[str] | None = None,
+                 to: list[str] | None = None) -> bool:
+    """Открыть новое письмо в классическом Outlook. Не отправляет — показывает.
+
+    `Display()` вместо `Send()` намеренно: отправка письма необратима, и
+    последнее слово остаётся за человеком — как и с задачами в Todoist.
+    Возвращает False, если классического Outlook нет: собрать письмо с
+    вложением нечем, и звавший уходит на короткий `mailto:`.
+    """
+    owned = _co_init()
+    try:
+        import win32com.client
+
+        try:
+            app = win32com.client.GetActiveObject("Outlook.Application")
+        except Exception:
+            # Outlook не в памяти — поднимаем его сам: человек нажал «Отправить»,
+            # то есть письмо ему нужно прямо сейчас.
+            try:
+                app = win32com.client.Dispatch("Outlook.Application")
+            except Exception as err:
+                log.info("письмо через Outlook не собрать: %s", err)
+                return False
+        mail = app.CreateItem(OL_MAIL_ITEM)
+        mail.Subject = str(subject or "")
+        mail.Body = str(body or "")
+        for addr in (to or []):
+            addr = str(addr or "").strip()
+            if addr:
+                mail.Recipients.Add(addr)
+        for path in (attachments or []):
+            try:
+                mail.Attachments.Add(str(path))
+            except Exception as err:
+                # Одно непривязавшееся вложение не должно отменять письмо:
+                # человек увидит письмо и поймёт, чего в нём не хватает.
+                log.warning("вложение %s не добавилось: %s", path, err)
+        mail.Display()
+        return True
+    except Exception as err:
+        log.warning("письмо в Outlook не открылось: %s", err)
+        return False
+    finally:
+        _co_uninit(owned)
 
 
 def _naive(value: Any) -> datetime | None:

@@ -360,7 +360,30 @@ def search_for(rec_id: str, key: str, query: str) -> dict[str, Any]:
     return {"people": people, "attendees": attendees[:5],
             "suggestion": info.get("suggestion"), "has_voice": emb is not None,
             "is_mic": track_of(rec_id, key) == store.TRACK_MIC if key else False,
-            "owner": store.owner_name(), "thresholds": voices.thresholds()}
+            "owner": store.owner_name(), "thresholds": voices.thresholds(),
+            "role": role_of(meta, key)}
+
+
+def role_of(meta: dict[str, Any], key: str) -> dict[str, Any]:
+    """Роль говорящего для карточки: постоянная и та, что задана в этой записи.
+
+    Постоянная живёт у человека в базе голосов, а «в этот раз иначе» — в самой
+    записи. Окно показывает обе, чтобы было видно, что именно переопределяют.
+    """
+    info = _speakers(meta).get(key) or {}
+    name = display_name(meta, key)
+    person_id = str(info.get("person_id") or "")
+    person = voices.get_person(person_id) if person_id else voices.find_by_name(name)
+    here = store.rec_roles(meta).get(name) or {}
+    return {
+        "person_id": person["id"] if person else "",
+        "name": name,
+        "side": voices.clean_side((person or {}).get("side")),
+        "position": voices.clean_position((person or {}).get("position")),
+        "rec_side": here.get("side", ""),
+        "rec_position": here.get("position", ""),
+        "sides": [{"key": k, "title": v[0]} for k, v in voices.SIDES.items()],
+    }
 
 
 # ---------------------------------------------------------------- имена из Teams
@@ -630,7 +653,7 @@ def split_speaker(rec_id: str, key: str, handle: Any = None,
     lang = str(meta.get("asr_lang") or "ru")
     all_segs = store.sorted_segments(rec_id, include_echo=True)
     redo = [s for s in all_segs if s.get("speaker_key") == key and not s.get("echo")
-            and not diarize._usable_words(s.get("words"), float(s["start"]), float(s["end"]))]
+            and not diarize.usable_words(s.get("words"), float(s["start"]), float(s["end"]))]
     if redo:
         note("распознаю заново реплики «%s»: %d" % (base_name, len(redo)), 0.05)
         for i, s in enumerate(redo):

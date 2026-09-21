@@ -50,12 +50,17 @@ H_MINUTES = "## Протокол"
 H_SUMMARY = "## Саммари"
 H_CONSPECT = "## Конспект"
 H_DIGEST = "## Выжимка"
-H_QA = "## Вопросы и ответы"
+#: С 20.09 раздел называется «Свои запросы»: в него попадают и ответы на
+#: вопросы, и заказанные документы. Настоящий заголовок берётся из реестра
+#: видов (`minutes.DOC_KINDS`), здесь он повторён для разделов заметки.
+H_QA = "## Свои запросы"
 H_TRANSCRIPT = "## Стенограмма"
 #: «Связать с» (17.09): подпись строки со ссылками в блоке «О записи».
 H_LINKED = "Связано"
 #: «Продолжение предыдущей записи» (17.09): что осталось с прошлого раза.
 H_CARRY = "## С прошлого раза осталось"
+#: Голосовые заметки автора (20.09): сказаны им отдельно, а не на встрече.
+H_NOTES = "## Мои заметки"
 
 #: Разделы документов в заметке — у каждого вида свой (см. minutes.DOC_KINDS).
 DOC_HEADINGS = (H_MINUTES, H_SUMMARY, H_CONSPECT, H_DIGEST, H_QA)
@@ -419,6 +424,36 @@ def _category_dir(meta: dict[str, Any]) -> Path:
     return root / safe if safe and safe != "Без названия" else root
 
 
+def project_dir(meta: dict[str, Any]) -> Path | None:
+    """Папка проекта записи в сейфе или None, если связки нет.
+
+    Путь хранится относительно корня сейфа, поэтому переезд самого сейфа
+    (другой диск, другая машина) связку не рвёт. Папку, которая после сборки
+    пути оказалась вне сейфа, не признаём: заметки живут в сейфе.
+    """
+    rel = store.project_folder((meta or {}).get("project"))
+    if not rel:
+        return None
+    base = _vault_base()
+    folder = base / Path(rel)
+    try:
+        if not folder.resolve().is_relative_to(base.resolve()):
+            log.warning("Папка проекта %s вне сейфа — связка не применяется", rel)
+            return None
+    except OSError:
+        return None
+    return folder
+
+
+def _note_dir(meta: dict[str, Any]) -> Path:
+    """Где лежит заметка записи: папка проекта, если она привязана, иначе категория.
+
+    Решение 20.09: у проекта главное слово. Папку проекта выбирает человек в
+    сейфе целиком — она может быть где угодно, не только внутри корня записей.
+    """
+    return project_dir(meta) or _category_dir(meta)
+
+
 def _note_recording_id(path: Path) -> str:
     """recording_id из frontmatter готовой заметки («чей это файл»)."""
     try:
@@ -451,12 +486,15 @@ def _unique_path(folder: Path, stem: str, rec_id: str = "") -> Path:
 
 
 def note_path(meta: dict[str, Any]) -> Path:
-    """Путь заметки: <корень записей>/<Категория>/<ГГГГ-ММ-ДД> <Заголовок>.md."""
+    """Путь заметки: <папка записи>/<ГГГГ-ММ-ДД> <Заголовок>.md.
+
+    Папка записи — папка привязанного проекта, а если её нет — папка категории.
+    """
     meta = meta or {}
     date = _meta_dt(meta).strftime("%Y-%m-%d")
     title = str(meta.get("title") or "").strip() or f"Запись {date}"
     stem = _safe_name(f"{date} {title}", limit=MAX_STEM)
-    return _unique_path(_category_dir(meta), stem, str(meta.get("id") or ""))
+    return _unique_path(_note_dir(meta), stem, str(meta.get("id") or ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -858,6 +896,7 @@ def render_markdown(
     lines += _frontmatter(meta, segments, bool(docs))
     lines.append("")
     lines += _about_block(meta)
+    lines += _notes_block(meta)
     lines += _carry_block(meta)
 
     for heading, body in docs:
@@ -897,12 +936,14 @@ def _require_meta(rec_id: str) -> dict[str, Any]:
 def _resolve_target(meta: dict[str, Any]) -> tuple[Path, Path | None]:
     """Куда писать заметку. Возвращает (целевой путь, путь, который надо удалить).
 
-    Если заметка уже была и категория не изменилась — пишем в тот же файл.
-    Если категория изменилась — переносим файл в папку новой категории.
+    Если заметка уже была и место не изменилось — пишем в тот же файл. Если
+    изменилось — переносим файл туда, где ему теперь место. Место задаёт
+    категория, а с 20.09 ещё и папка привязанного проекта: сменили у записи
+    проект — заметка уезжает в папку нового проекта тем же переносом.
     """
     old_raw = str(meta.get("vault_path") or "").strip()
     old = Path(old_raw) if old_raw else None
-    target_dir = _category_dir(meta)
+    target_dir = _note_dir(meta)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if old is not None and old.exists() and old.is_file():
@@ -917,7 +958,7 @@ def _resolve_target(meta: dict[str, Any]) -> tuple[Path, Path | None]:
             if moved.exists():
                 moved.unlink()
             shutil.move(str(old), str(moved))
-            log.info("Заметка перенесена в категорию %s", target_dir.name)
+            log.info("Заметка перенесена в %s", _rel_to_vault(target_dir))
             return moved, None
         except OSError as exc:
             log.warning("Не удалось перенести заметку (%s), пишу заново", exc)
@@ -1209,6 +1250,55 @@ def find_notes(query: str, limit: int = 40) -> list[dict[str, str]]:
     return (starts + inside)[:limit]
 
 
+# --------------------------------------------------------------------------- #
+# папки сейфа: выбор папки проекта (20.09)
+# --------------------------------------------------------------------------- #
+# Папок в сейфе на порядок меньше, чем заметок, и пустой запрос здесь не
+# страшен: список папок можно показать целиком, чтобы папку проекта выбирали
+# глазами, а не угадывали название.
+_FOLDERS_MAX = 5000
+_folders_cache: dict[str, Any] = {"root": "", "stamp": 0.0, "items": []}
+
+
+def _scan_vault_folders() -> list[dict[str, str]]:
+    """Все папки сейфа: {title, path}. Кэш на минуту, как у заметок."""
+    base = _vault_base()
+    root = str(base)
+    now = time.time()
+    if (_folders_cache["root"] == root
+            and now - float(_folders_cache["stamp"]) < _NOTES_TTL_S):
+        return _folders_cache["items"]       # type: ignore[return-value]
+
+    items: list[dict[str, str]] = []
+    if base.is_dir():
+        for dirpath, dirnames, _files in os.walk(base):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d not in _SKIP_DIRS]
+            for name in dirnames:
+                full = Path(dirpath) / name
+                items.append({"title": name, "path": _rel_to_vault(full)})
+                if len(items) >= _FOLDERS_MAX:
+                    break
+            if len(items) >= _FOLDERS_MAX:
+                break
+    items.sort(key=lambda it: it["path"].lower())
+    _folders_cache.update({"root": root, "stamp": now, "items": items})
+    return items
+
+
+def find_folders(query: str = "", limit: int = 200) -> list[dict[str, str]]:
+    """Папки сейфа по куску имени или пути. Пустой запрос отдаёт начало списка."""
+    q = str(query or "").strip().lower()
+    items = _scan_vault_folders()
+    if not q:
+        return items[:limit]
+    starts = [it for it in items if it["title"].lower().startswith(q)]
+    inside = [it for it in items
+              if not it["title"].lower().startswith(q)
+              and (q in it["title"].lower() or q in it["path"].lower())]
+    return (starts + inside)[:limit]
+
+
 def _wikilink(link: dict[str, str]) -> str:
     """Вики-ссылка на заметку. Тёзки различаем путём, иначе хватает имени.
 
@@ -1227,6 +1317,24 @@ def _wikilink(link: dict[str, str]) -> str:
     return f"[[{title}]]"
 
 
+
+
+def _notes_block(meta: dict[str, Any]) -> list[str]:
+    """«Мои заметки» — надиктованное автором (20.09).
+
+    Это не часть разговора, поэтому в стенограмму заметки не попадают и стоят
+    своим разделом. Раздел второго уровня внутри «О записи»: главных разделов в
+    заметке ровно столько, сколько документов, плюс стенограмма (формат 15.09).
+    """
+    notes = store.rec_notes(meta or {})
+    if not notes:
+        return []
+    out = [H_NOTES, ""]
+    for note in notes:
+        mark = "**Поручение.** " if note.get("kind") == "task" else ""
+        out.append("- %s%s" % (mark, _escape_text(str(note.get("text") or ""))))
+    out.append("")
+    return out
 
 
 def _carry_block(meta: dict[str, Any]) -> list[str]:

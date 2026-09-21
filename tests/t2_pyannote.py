@@ -4,6 +4,9 @@
 Звук подаём готовым массивом (waveform), а не путём к файлу: pyannote 4.x
 декодирует файлы через torchcodec, которому нужны DLL FFmpeg 4-7, а в системе
 стоит FFmpeg 8 и только в виде exe. Массив обходит эту зависимость полностью.
+
+Нужны пакет pyannote и токен. В релизе с движком ONNX их нет — тогда проверка
+пропускается; тот же разбор для ONNX делает t100.
 """
 import inspect
 import io
@@ -16,7 +19,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
-from hagen import audio_io, config  # noqa: E402
+from hagen import audio_io, config, diar_pyannote  # noqa: E402
 
 LINES = []
 
@@ -38,10 +41,14 @@ def dump():
 
 
 def main():
+    if not diar_pyannote.installed():
+        say("пропуск: pyannote не установлен — в этом релизе разметка идёт через ONNX")
+        return 0
     token = config.get("hf_token")
     say("токен задан: %s" % bool(token))
     if not token:
-        return 1
+        say("пропуск: нет токена Hugging Face")
+        return 0
 
     import numpy as np
     import torch

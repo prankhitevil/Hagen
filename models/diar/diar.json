@@ -1,0 +1,100 @@
+{
+  "source": "pyannote/speaker-diarization-community-1",
+  "snapshot": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee",
+  "exported": "2026-09-21",
+  "pyannote_audio": "4.0.7",
+  "torch": "2.14.0+cpu",
+  "sample_rate": 16000,
+  "segmentation": {
+    "file": "segmentation.onnx",
+    "duration": 10.0,
+    "num_samples": 160000,
+    "num_frames": 589,
+    "frames": {
+      "start": 0.0,
+      "duration": 0.0619375,
+      "step": 0.016875
+    },
+    "num_speakers": 3,
+    "powerset": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        1,
+        0
+      ],
+      [
+        1,
+        0,
+        1
+      ],
+      [
+        0,
+        1,
+        1
+      ]
+    ],
+    "step_ratio": 0.1,
+    "min_duration_off": 0.0
+  },
+  "embedding": {
+    "file": "embedding.onnx",
+    "head": "embedding_head.npz",
+    "dimension": 256,
+    "min_num_samples": 400,
+    "exclude_overlap": true,
+    "frames_per_chunk": 125,
+    "fbank": {
+      "num_mel_bins": 80,
+      "frame_length_ms": 25.0,
+      "frame_shift_ms": 10.0,
+      "window": "hamming",
+      "dither": 0.0,
+      "scale": 32768.0,
+      "center": "global"
+    }
+  },
+  "clustering": {
+    "method": "VBx",
+    "threshold": 0.6,
+    "Fa": 0.07,
+    "Fb": 0.8,
+    "lda_dimension": 128,
+    "min_active_ratio": 0.2,
+    "metric": "cosine",
+    "plda": "plda.npz",
+    "transform": "xvec_transform.npz"
+  },
+  "files": {
+    "embedding.onnx": "636de1f897d69ca66fda322fbb91c8dcbcc9e4754482caeab8dc3438d81847b6",
+    "embedding_head.npz": "d221f2292dd8be6da538973571072e074bcc4c11773305af29ce93750abb1d9a",
+    "plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
+    "segmentation.onnx": "c24bf8ea235f6787c86225edd90580f9cd068884510e48ce8d677707399a6f98",
+    "xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f"
+  },
+  "sources": {
+    "segmentation/pytorch_model.bin": "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e",
+    "embedding/pytorch_model.bin": "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929",
+    "plda/plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
+    "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f"
+  }
+}

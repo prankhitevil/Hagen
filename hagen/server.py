@@ -219,14 +219,32 @@ async def _startup() -> None:
         config.adopt_used_features()
     except Exception as err:
         log.warning("возможности не перенеслись: %s", err)
+    # Так же разово: прежний список сервисов → адрес, ключ и модель.
+    try:
+        from . import providers
+
+        providers.adopt_old_services()
+    except Exception as err:
+        log.warning("сервисы не перенеслись: %s", err)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     _sweep_uploads()
     hub.bind_loop(asyncio.get_running_loop())
     _media_ready()
     _recover_orphans()
     log.info("служба запущена на 127.0.0.1:%s", config.get("port"))
+    # Модели, которые прежняя программа держала, а выбор в настройках их уже не
+    # просит, — удалить до прогрева: сейчас их никто не держит.
+    try:
+        from . import needs
+
+        done = needs.cleanup_pending()
+        if done:
+            log.info("отложенное удаление моделей: %s", ", ".join(done))
+    except Exception as err:
+        log.warning("отложенное удаление моделей не удалось: %s", err)
     asyncio.get_running_loop().run_in_executor(None, _warmup_async)
     _start_call_watcher()
+    _start_idle_watch()
     _start_retention()
     _start_dictation()
 
@@ -378,11 +396,13 @@ def _recover_orphans() -> None:
 
 def _warmup_async() -> None:
     try:
-        # Точную модель на старте не греем никогда — решение 14.09:
+        # Точную модель на старте не греем — решение 14.09:
         # она вместе с torch занимает около 1,3 ГБ, а нужна не всегда. Грузится
         # при первом обращении (файл, «Перечитать точнее», диктовка) и
         # выгружается после простоя (asr.release_idle, «precise_idle_min»).
         # Диктовка начинает загрузку сама, как только человек начал говорить.
+        # Исключение — режим одной модели (18.09): там точная и есть модель
+        # эфира, её греет прогрев эфира, и сторож простоя её не трогает.
         info = asr.warmup(live=True, precise=False)
         log.info("модель эфира прогрета: %s", info)
         hub.publish({"type": "ready", "asr": asr.live_state()})
@@ -479,16 +499,20 @@ def _call_merge_and_resume(src_id: str, dst_id: str) -> None:
                timeout=60)
 
 
-def _start_call_watcher() -> None:
-    global _watcher, _calls
-    if not config.get("call_watch_enabled"):
-        return
+def _ensure_calls() -> Any:
+    """Автоматика вопросов. Нужна и без наблюдения за звонками (20.09).
+
+    Через неё же спрашивается про забытую запись, а она бывает начата кнопкой —
+    когда звонки программа вообще не слушает.
+    """
+    global _calls
+    if _calls is not None:
+        return _calls
     try:
         from . import calls
     except Exception as err:
-        log.info("детект звонка недоступен: %s", err)
-        return
-
+        log.info("автоматика вопросов недоступна: %s", err)
+        return None
     _calls = calls.CallAutomation(calls.Hooks(
         active_recording=_call_active_recording,
         start_recording=_call_start_recording,
@@ -497,6 +521,29 @@ def _start_call_watcher() -> None:
         merge_and_resume=_call_merge_and_resume,
         publish=hub.publish,
     ))
+    return _calls
+
+
+def _start_idle_watch() -> None:
+    """Сторож забытой записи (20.09): разговор кончился, а запись идёт."""
+    if float(config.get("idle_stop_min") or 0) <= 0:
+        return
+    autom = _ensure_calls()
+    if autom is None:
+        return
+    try:
+        autom.start_idle_watch()
+        log.info("сторож забытой записи включён")
+    except Exception as err:
+        log.info("сторож забытой записи не включился: %s", err)
+
+
+def _start_call_watcher() -> None:
+    global _watcher
+    if not config.get("call_watch_enabled"):
+        return
+    if _ensure_calls() is None:
+        return
 
     def on_start(info: dict[str, Any]) -> None:
         meeting = None
@@ -530,6 +577,11 @@ def _stop_call_watcher() -> None:
         except Exception:
             pass
         _watcher = None
+    if _calls is not None:
+        try:
+            _calls.stop_idle_watch()
+        except Exception:
+            pass
 
 
 # ====================================================================== диктовка
@@ -742,8 +794,8 @@ def _capabilities_fresh() -> dict[str, Any]:
         caps["claude_cli"] = bool(minutes.resolve_claude_cli())
         caps["engines"] = minutes.available_engines()
         caps["minutes_models"] = minutes.models_hint()
-        caps["providers"] = _prov.public_list()
-        caps["models_cached"] = _prov.cached_models(_prov.current_id()) or {}
+        caps["connections"] = _prov.public_connections()
+        caps["models_cached"] = {role: _prov.cached_models(role) or {} for role in _prov.ROLES}
     except Exception as err:
         caps["engines_note"] = str(err)
     try:
@@ -788,13 +840,15 @@ async def api_settings_post(request: Request) -> JSONResponse:
     patch = await request.json()
     if not isinstance(patch, dict):
         raise HTTPException(status_code=400, detail="Ожидался объект настроек")
+    global _caps_cache
     for derived in ("hf_token_set", "hf_token_hint", "api_keys_set", "api_keys_hint",
-                    "providers_public"):
+                    "diarize_engine", "diarize_needs_token"):
         patch.pop(derived, None)
-    # Список сервисов правится только своими точками (/api/providers): в общем
-    # сохранении настроек он приехал бы из интерфейса без ключей и затёр бы их.
-    patch.pop("providers", None)
     config.save(patch)
+    # Готовность движков и подключений зависит от настроек: после сохранения
+    # окно должно видеть новую, а не ту, что держится в кэше ещё 20 с.
+    with _caps_lock:
+        _caps_cache = None
     if "autostart_windows" in patch:
         # Галочка «запускать вместе с Windows» — это ярлык в «Автозагрузке»:
         # кладём или убираем его сразу, а не при следующем запуске.
@@ -1128,6 +1182,13 @@ async def api_recording_patch(rec_id: str, request: Request) -> JSONResponse:
         patch["tags"] = store.clean_tags(body.get("tags"))
     if "links" in body:
         patch["links"] = store.clean_links(body.get("links"))
+    # Роли участников В ЭТОЙ записи (20.09): постоянная роль живёт у человека в
+    # базе голосов, здесь — только то, что в этот раз иначе.
+    if "roles" in body:
+        patch["roles"] = store.clean_roles(body.get("roles"))
+    # Голосовые заметки (20.09): правятся и убираются из карточки записи.
+    if "notes" in body:
+        patch["notes"] = store.clean_notes(body.get("notes"))
     if "dropped" in body:
         patch["dropped"] = store.clean_dropped(body.get("dropped"))
     # «Продолжение предыдущей записи» (17.09). Связь выбирает человек; на себя
@@ -1148,7 +1209,7 @@ async def api_recording_patch(rec_id: str, request: Request) -> JSONResponse:
     if patch.get("tags"):
         store.remember_tags(patch["tags"])
     # Заметка — выгрузка из программы: признаки должны доехать до шапки файла.
-    if ({"project", "tags", "links", "dropped", "continues"} & set(patch)) \
+    if ({"project", "tags", "links", "dropped", "continues", "notes"} & set(patch)) \
             and str(meta.get("vault_path") or ""):
         try:
             from . import obsidian
@@ -1161,8 +1222,61 @@ async def api_recording_patch(rec_id: str, request: Request) -> JSONResponse:
 
 @app.get("/api/labels")
 async def api_labels() -> JSONResponse:
-    """Что подсказывать в полях «Проект» и «Теги»: то, что уже вводили."""
-    return JSONResponse({"projects": store.known_projects(), "tags": store.known_tags()})
+    """Что подсказывать в полях «Проект» и «Теги»: то, что уже вводили.
+
+    Вместе с ними — папки проектов в сейфе: карточке записи надо показать, куда
+    уедет заметка, когда у проекта есть связанная папка (20.09).
+    """
+    return JSONResponse({"projects": store.known_projects(),
+                         "tags": store.known_tags(),
+                         "folders": store.known_project_folders()})
+
+
+@app.post("/api/projects/folder")
+async def api_project_folder(request: Request) -> JSONResponse:
+    """Привязать папку сейфа к проекту или снять связку (пустая папка).
+
+    Связка живёт у проекта, а не у записи: проект один на все свои записи.
+    Заметки переезжают не сразу, а когда каждая запись сохраняется заново, —
+    файлы в сейфе программа двигает только по ходу своей обычной работы.
+    """
+    body = await request.json()
+    try:
+        folders = store.set_project_folder(body.get("project"), body.get("folder"))
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from None
+    return JSONResponse({"folders": folders})
+
+
+@app.get("/api/recordings/{rec_id}/share")
+async def api_share_preview(rec_id: str) -> JSONResponse:
+    """Что у записи можно отправить. Ничего не отправляет и не открывает."""
+    from . import share
+
+    try:
+        return JSONResponse(await asyncio.to_thread(share.available, rec_id))
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from None
+
+
+@app.post("/api/recordings/{rec_id}/share")
+async def api_share(rec_id: str, request: Request) -> JSONResponse:
+    """Открыть письмо с отмеченным или окно Telegram (20.09).
+
+    Письмо программа только ПОКАЗЫВАЕТ: отправка наружу необратима, и
+    последнее слово за человеком — как и с задачами в Todoist.
+    """
+    from . import share
+
+    body = await request.json()
+    keys = [str(k) for k in (body.get("keys") or [])]
+    # Текст для Telegram собирает страница — там же, где живёт его разметка.
+    text = str(body.get("text") or "")
+    try:
+        res = await asyncio.to_thread(share.send, rec_id, body.get("target"), keys, text)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from None
+    return JSONResponse(res)
 
 
 @app.get("/api/tasks/{rec_id}")
@@ -1230,6 +1344,23 @@ async def api_vault_notes(q: str = "") -> JSONResponse:
         raise HTTPException(status_code=400,
                             detail="Сейф Obsidian не читается: %s" % err) from None
     return JSONResponse({"notes": found})
+
+
+@app.get("/api/vault/folders")
+async def api_vault_folders(q: str = "") -> JSONResponse:
+    """Папки сейфа — для выбора папки проекта (20.09).
+
+    В отличие от заметок, пустой запрос отдаёт список: папок немного, и папку
+    проекта выбирают глазами.
+    """
+    from . import obsidian
+
+    try:
+        found = await asyncio.to_thread(obsidian.find_folders, q)
+    except OSError as err:
+        raise HTTPException(status_code=400,
+                            detail="Сейф Obsidian не читается: %s" % err) from None
+    return JSONResponse({"folders": found})
 
 
 #: Три ответа диалога удаления — три объёма работы.
@@ -1476,7 +1607,7 @@ async def api_retranscribe(rec_id: str, request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         pass
-    _require_part("precise")          # перечитываем точной моделью — она нужна на месте
+    _require_part(asr.precise_part())  # перечитываем точной моделью — она нужна на месте
     want = _voices_asked(body)
     meta = store.get(rec_id)
     if meta is None:
@@ -1725,6 +1856,7 @@ def _submit_minutes(rec_id: str, meta: dict[str, Any], template: str,
         retry_body["question"] = question
     return jobs.submit("minutes", work, "%s: %s" % (info["title"], meta.get("title")),
                        rec_id=rec_id,
+                       lane=_minutes.document_lane(engine),
                        extra={"engine": engine or config.get("minutes_engine"),
                               "retry": {"url": "/api/recordings/%s/minutes" % rec_id,
                                         "body": retry_body}})
@@ -1814,8 +1946,15 @@ async def api_prompts_get() -> JSONResponse:
     """Инструкции документов для «Настройки → Обработка»."""
     from . import minutes
 
+    from . import voices
+
     return JSONResponse({
         "owner_name": store.owner_name(),
+        # Своя роль (20.09): сторона и должность владельца записи. Список
+        # сторон один на всю программу и живёт в базе голосов.
+        "owner_side": voices.clean_side(config.get("owner_side")),
+        "owner_position": voices.clean_position(config.get("owner_position")),
+        "sides": [{"key": k, "title": v[0]} for k, v in voices.SIDES.items()],
         "prompt_lang": minutes.prompt_lang(),
         # Токен наружу не отдаём: только «задан» и хвостик (правило секретов).
         "todoist_set": bool(str(config.get("todoist_token") or "").strip()),
@@ -1844,6 +1983,11 @@ async def api_prompts_post(request: Request) -> JSONResponse:
     if "owner_name" in body:
         name = " ".join(str(body.get("owner_name") or "").split()).strip()[:60]
         patch["owner_name"] = name or store.SPEAKER_ME
+    if "owner_side" in body or "owner_position" in body:
+        from . import voices
+
+        patch["owner_side"] = voices.clean_side(body.get("owner_side"))
+        patch["owner_position"] = voices.clean_position(body.get("owner_position"))
     over = body.get("overrides")
     if isinstance(over, dict):
         current = dict(config.get("prompt_overrides") or {})

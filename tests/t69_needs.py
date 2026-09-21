@@ -33,7 +33,8 @@ sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
 
 isolate.voices()
-isolate.settings()
+# Две модели, точная на torch: здесь проверяются отказы без части «precise».
+isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_engine="torch")
 
 LINES = []
 FAIL = []
@@ -61,10 +62,15 @@ from hagen import needs  # noqa: E402
 
 say("=== 1. Список частей ===")
 parts = {p["key"]: p for p in needs.state()}
-check("в списке три части", set(parts) == {"precise", "english", "browser"}, list(parts))
+# Быстрая модель и два варианта весов onnx-asr — части моделей распознавания,
+# их выбирают в «Настройки → Модели» (решение 21.09).
+check("в списке шесть частей", set(parts) == {"fast", "precise", "english", "browser",
+                                             "precise_ox_int8", "precise_ox_fp32"}, list(parts))
 check("у каждой есть вес", all(p["size_mb"] > 0 for p in parts.values()),
       {k: p["size_mb"] for k, p in parts.items()})
 check("у каждой сказано, для чего она", all(len(p["why"]) > 20 for p in parts.values()))
+check("быстрая модель весит около 440 МБ", 300 < parts["fast"]["size_mb"] < 600,
+      parts["fast"]["size_mb"])
 check("точная модель весит около 430 МБ", 300 < parts["precise"]["size_mb"] < 600,
       parts["precise"]["size_mb"])
 check("английская — около 630 МБ", 500 < parts["english"]["size_mb"] < 800,
@@ -78,7 +84,8 @@ say("")
 say("=== 2. Скачивание ===")
 calls = []
 real = {k: needs.PARTS[k]["install"] for k in needs.PARTS}
-ready_flags = {"precise": True, "english": False, "browser": False}
+ready_flags = {"fast": True, "precise": True, "english": False, "browser": False,
+               "precise_ox_int8": True, "precise_ox_fp32": True}
 real_ready = {k: needs.PARTS[k]["ready"] for k in needs.PARTS}
 
 
@@ -141,7 +148,7 @@ try:
     with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
         r = cli.get("/api/needs")
         check("служба отдаёт список частей",
-              r.status_code == 200 and len(r.json().get("parts", [])) == 3, r.text[:200])
+              r.status_code == 200 and len(r.json().get("parts", [])) == 6, r.text[:200])
         r = cli.post("/api/needs/нет-такой", headers=ORIGIN)
         check("неизвестная часть — 404", r.status_code == 404, r.status_code)
         r = cli.post("/api/needs/english", headers=ORIGIN)
@@ -232,7 +239,7 @@ check("список частей в «Моделях»", 'id="needs-list"' in ht
 check("страница спрашивает список у службы", "'/api/needs'" in js)
 check("кнопка в списке ставит скачивание", "/api/needs/${key}" in js)
 check("перед «Перечитать точнее» проверяется точная модель",
-      "if (!await ensurePart('precise')) return;" in js)
+      "if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise')) return;" in js)
 check("английский предлагается скачать в разделе «Видео»",
       "ensurePart('english')" in video)
 check("браузер предлагается скачать до ввода пароля",
@@ -242,8 +249,10 @@ srv = io.open(PROJECT / "hagen" / "server.py", encoding="utf-8").read()
 # — смотрим туда, где код живёт теперь.
 deps = io.open(PROJECT / "hagen" / "api" / "deps.py", encoding="utf-8").read()
 media = io.open(PROJECT / "hagen" / "api" / "media.py", encoding="utf-8").read()
+# Какая часть нужна точной модели, зависит от варианта распознавания (стенд
+# 18.09): служба спрашивает её у asr.precise_part().
 check("служба не начинает работу без нужной части",
-      "def require_part" in deps and 'require_part("precise")' in (srv + media)
+      "def require_part" in deps and "require_part(asr.precise_part())" in (srv + deps)
       and 'require_part("browser")' in media)
 check("для английского видео спрашивается своя модель",
       "def require_media_parts" in deps and 'require_part("english")' in deps)

@@ -14,8 +14,10 @@ r"""Установка «Hagen» на компьютер с Windows.
     1. проверяет Python, ffmpeg (скачает сам) и место на диске;
     2. создаёт окружение .venv и ставит зависимости (torch — CPU-сборкой);
     3. кладёт копию Python внутрь папки (узкое правило антивируса, переносимость);
-    4. скачивает модели распознавания и переводит их в ONNX (около 2,6 ГБ);
-    5. спрашивает папку хранилища Obsidian и токен HuggingFace;
+    4. скачивает модель распознавания — по умолчанию одну точную, около 890 МБ;
+       остальные выбираются потом в «Настройки → Модели»;
+    5. спрашивает папку хранилища Obsidian (и токен HuggingFace — только в
+       релизе с разметкой через pyannote, см. release.json);
     6. создаёт ярлык «Hagen» на рабочем столе и в меню «Пуск»;
     7. печатает файлы, которые нужно разрешить в антивирусе.
 
@@ -42,6 +44,21 @@ VENV = PROJECT / ".venv"
 VENV_PY = VENV / "Scripts" / "python.exe"
 TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 TORCH_PINS = ["torch==2.14.0", "torchaudio==2.11.0"]
+
+
+def diarize_engine() -> str:
+    """Движок разметки этого релиза из release.json: "onnx" или "pyannote".
+
+    Повторяет diarize.release_engine: установщик работает системным Python
+    ещё до того, как появится окружение с библиотеками программы, и
+    импортировать её модули не может.
+    """
+    try:
+        data = json.load(io.open(PROJECT / "release.json", encoding="utf-8"))
+        name = str((data or {}).get("diarize") or "").strip().lower()
+    except (OSError, ValueError, AttributeError):
+        name = ""
+    return name if name in ("onnx", "pyannote") else "pyannote"
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 OK = "  [готово]"
@@ -270,9 +287,11 @@ def install_deps(offline_models: bool = False) -> bool:
     if not run(pip("install", *TORCH_PINS, "--index-url", TORCH_INDEX),
                "ставлю torch (сборка для процессора, без CUDA)", 3600):
         return False
-    req = PROJECT / "requirements.txt"
+    # Релизу с pyannote нужен ещё и он; набор включает requirements.txt.
+    name = "requirements-pyannote.txt" if diarize_engine() == "pyannote" else "requirements.txt"
+    req = PROJECT / name
     if not req.exists():
-        say("%s нет файла requirements.txt рядом с install.py" % BAD)
+        say("%s нет файла %s рядом с install.py" % (BAD, name))
         return False
     # torch уже стоит нужной версии — не даём его переустановить
     con = PROJECT / "constraints.txt"
@@ -453,14 +472,19 @@ def prune_runtime(root: Path = PROJECT) -> tuple[int, int]:
 
 
 def is_ready_copy() -> bool:
-    """Папка перенесена целиком: Python, окружение и модели уже на месте."""
+    """Папка перенесена целиком: Python, окружение и модели уже на месте.
+
+    Смотрим на папку models целиком, а не на папки быстрой модели: её может
+    не быть вовсе — по умолчанию стоит одна точная (решение 21.09).
+    """
     return ((PROJECT / "python" / "python.exe").exists() and VENV_PY.exists()
-            and (PROJECT / "models" / "onnx").exists() and (PROJECT / "models" / "gigaam").exists())
+            and (PROJECT / "models").is_dir())
 
 
 def prepare_models() -> bool:
-    say("  Скачиваю модели распознавания и перевожу их в ONNX.")
-    say("  Это один раз, примерно 2,6 ГБ и несколько минут.")
+    say("  Скачиваю модель распознавания, выбранную в настройках.")
+    say("  По умолчанию это одна точная модель, около 890 МБ; другие можно")
+    say("  скачать потом в «Настройки → Модели».")
     return run([str(VENV_PY), "run.py", "--prepare"], "готовлю модели", 5400)
 
 
@@ -485,15 +509,16 @@ def configure() -> None:
     if not Path(vault).exists():
         say("       Папки пока нет — приложение создаст её при первом сохранении.")
 
-    say("")
-    say("  Токен HuggingFace нужен только для разметки говорящих.")
-    say("  Получить: huggingface.co/settings/tokens (тип Read), и один раз принять")
-    say("  лицензию на huggingface.co/pyannote/speaker-diarization-community-1")
-    say("  Можно пропустить сейчас и вписать позже в настройках приложения.")
-    token = ask("Токен hf_… (Enter — пропустить)", "")
-    if token:
-        data["hf_token"] = token
-        say("%s токен сохранён (в чат и в журналы он не попадает)" % OK)
+    if diarize_engine() == "pyannote":
+        say("")
+        say("  Токен HuggingFace нужен только для разметки говорящих.")
+        say("  Получить: huggingface.co/settings/tokens (тип Read), и один раз принять")
+        say("  лицензию на huggingface.co/pyannote/speaker-diarization-community-1")
+        say("  Можно пропустить сейчас и вписать позже в настройках приложения.")
+        token = ask("Токен hf_… (Enter — пропустить)", "")
+        if token:
+            data["hf_token"] = token
+            say("%s токен сохранён (в чат и в журналы он не попадает)" % OK)
 
     write_atomic(settings_path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     say("%s настройки записаны в settings.json" % OK)

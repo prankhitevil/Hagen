@@ -35,7 +35,8 @@ sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
 
 isolate.voices()
-isolate.settings()
+# Две модели, точная на torch: выгружается после простоя именно она.
+isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_engine="torch")
 
 import numpy as np  # noqa: E402
 

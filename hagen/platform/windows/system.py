@@ -28,6 +28,7 @@ __all__ = [
     "shift_shots",
     "hidden_process_flags",
     "open_path",
+    "open_link",
     "set_console_title",
     "hide_console",
     "restrict_to_owner",
@@ -90,6 +91,11 @@ def hidden_process_flags() -> int:
 def open_path(path: str | Path) -> None:
     """Открыть файл или папку программой по умолчанию."""
     app.open_path(path)
+
+
+def open_link(url: str) -> None:
+    """Открыть ссылку: почтовую, Telegram или обычную."""
+    app.open_link(url)
 
 
 def set_console_title(text: str) -> None:

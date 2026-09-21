@@ -2,8 +2,26 @@
 """Очередь фоновых задач: диаризация, обработка файлов, протоколы.
 
 Тяжёлые задачи не должны подвешивать интерфейс, поэтому они выполняются в
-отдельных потоках по одной за раз (модели распознавания и так съедают все ядра,
-параллелить их бессмысленно). Интерфейс видит очередь, прогресс и оценку времени.
+отдельных потоках. Одной общей очередью они шли до 20.09 — и ждали друг друга
+без всякой на то причины: пока распознавался часовой ролик, саммари соседней
+записи стояло в очереди, хотя считает его не наш процессор, а модель на той
+стороне; второе видео не начинало скачиваться, хотя скачивание — это сеть.
+
+Поэтому очередей теперь несколько — ДОРОЖЕК, по роду занятия (решение 20.09):
+
+  * ``heavy`` — счёт на нашем процессоре: разметка голосов, «перечитать
+    точнее», пересчёт эха. Тут по-прежнему строго по одной: модель занимает
+    все ядра, и две такие задачи вместе идут не быстрее, а медленнее;
+  * ``media`` — добыть файл: скачать, вытащить звук. Это сеть и диск, поэтому
+    несколько сразу — нормально. Распознавание внутри такой задачи всё равно
+    берёт общий пропуск на тяжёлый счёт (:meth:`JobHandle.heavy`), так что
+    одновременно считается ровно одна запись;
+  * ``docs`` — документы: протокол, саммари. Считает языковая модель, наш
+    процессор ждёт ответа;
+  * ``net`` — качаем части программы, обновляем yt-dlp.
+
+Внутри дорожки порядок прежний — кто первым встал, тот первым и пойдёт.
+Интерфейс видит очередь, прогресс и оценку времени.
 """
 from __future__ import annotations
 
@@ -13,20 +31,63 @@ import time
 import traceback
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from typing import Any, Callable
 
 log = logging.getLogger("hagen.jobs")
+
+#: Дорожки и сколько задач каждой идёт одновременно (решение 20.09).
+#: Пределы скромные намеренно: смысл не в том, чтобы запустить всё разом, а в
+#: том, чтобы разнородные дела не ждали друг друга. Два скачивания — это два
+#: канала и два файла на диск; больше только мешает.
+LANES: dict[str, int] = {
+    "heavy": 1,     # наш процессор: разметка, «перечитать точнее», эхо
+    "media": 2,     # скачать файл и вытащить звук — сеть и диск
+    "docs": 2,      # документы ОБЛАЧНОЙ моделью — считает чужой сервер
+    "docs_one": 1,  # документы всем остальным — по одному (решение 20.09)
+    "net": 2,       # части программы, обновление yt-dlp
+}
+
+#: Какому роду занятий принадлежит задача. Незнакомый вид попадёт в «heavy» —
+#: осторожность важнее скорости: лучше лишний раз подождать, чем запустить
+#: вторую тяжёлую задачу и уронить обеим скорость.
+KIND_LANES: dict[str, str] = {
+    "diarize": "heavy",
+    "split": "heavy",
+    "retranscribe": "heavy",
+    "echo": "heavy",
+    "media": "media",
+    # Документы: дорожку выбирает тот, кто ставит задачу, — она зависит не от
+    # вида документа, а от того, ЧЕМ его считают (`minutes.document_lane`).
+    # Здесь — осторожное значение на случай, если дорожку не указали.
+    "minutes": "docs_one",
+    "summary": "docs_one",
+    "needs": "net",
+    "ytdlp": "net",
+}
+
+DEFAULT_LANE = "heavy"
 
 _LISTENERS: list[Callable[[dict], None]] = []
 _lock = threading.RLock()
 _jobs: dict[str, dict[str, Any]] = {}
 _order: deque[str] = deque()
-_queue: deque[str] = deque()
-_worker: threading.Thread | None = None
-_wake = threading.Event()
+#: Своя очередь и свои рабочие потоки у каждой дорожки.
+_queues: dict[str, deque[str]] = {lane: deque() for lane in LANES}
+_wakes: dict[str, threading.Event] = {lane: threading.Event() for lane in LANES}
+_workers: dict[str, list[threading.Thread]] = {lane: [] for lane in LANES}
 _fns: dict[str, Callable[["JobHandle"], Any]] = {}
 
+#: Пропуск на тяжёлый счёт. Его держит задача дорожки «heavy» всё своё время, а
+#: задача «media» — только пока распознаёт. Так скачивание идёт параллельно
+#: чему угодно, а считает процессор всё равно одну запись за раз.
+_heavy_pass = threading.BoundedSemaphore(1)
+
 MAX_KEEP = 60
+
+
+def lane_of(kind: str) -> str:
+    return KIND_LANES.get(str(kind), DEFAULT_LANE)
 
 
 def on_change(fn: Callable[[dict], None]) -> None:
@@ -99,6 +160,31 @@ class JobHandle:
             job = _jobs.get(self.job_id)
             return bool(job and job.get("cancel_requested"))
 
+    @contextmanager
+    def heavy(self, note: str = "жду очереди на распознавание"):
+        """Взять пропуск на тяжёлый счёт на время этого куска работы (20.09).
+
+        Нужен там, где задача лёгкой дорожки доходит до настоящего счёта на
+        процессоре: скачали ролик — и распознаём. Пока пропуск занят соседней
+        записью, здесь честно пишем, что стоим в очереди, — иначе человек видел
+        бы «идёт обработка» и недоумевал, почему ничего не происходит.
+        """
+        if _heavy_pass.acquire(blocking=False):
+            taken = True
+        else:
+            if note:
+                self.log(note)
+            _heavy_pass.acquire()
+            taken = True
+        try:
+            yield
+        finally:
+            if taken:
+                try:
+                    _heavy_pass.release()
+                except ValueError:      # уже отпущен — отпускать второй раз нельзя
+                    log.debug("пропуск на тяжёлый счёт уже был отпущен")
+
 
 def submit(
     kind: str,
@@ -107,17 +193,22 @@ def submit(
     rec_id: str | None = None,
     eta_s: float | None = None,
     extra: dict[str, Any] | None = None,
+    lane: str | None = None,
 ) -> str:
-    """Поставить задачу в очередь. Возвращает её идентификатор.
+    """Поставить задачу в очередь своей дорожки. Возвращает её идентификатор.
 
     ``extra`` — дополнительные поля карточки задачи. Например ``retry``:
     куда и с чем обратиться, чтобы собрать тот же документ другим движком.
+    ``lane`` задаётся только в редких случаях: обычно род занятия понятен по
+    виду задачи (``KIND_LANES``).
     """
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
+    lane = lane if lane in LANES else lane_of(kind)
     job = {
         "id": job_id,
         "kind": kind,
+        "lane": lane,
         "title": title,
         "rec_id": rec_id,
         "status": "queued",
@@ -140,11 +231,11 @@ def submit(
         _jobs[job_id] = job
         _fns[job_id] = fn
         _order.append(job_id)
-        _queue.append(job_id)
+        _queues[lane].append(job_id)
         _trim_locked()
-        _ensure_worker_locked()
+        _ensure_workers_locked(lane)
     _notify(job)
-    _wake.set()
+    _wakes[lane].set()
     return job_id
 
 
@@ -159,20 +250,30 @@ def _trim_locked() -> None:
         _fns.pop(old, None)
 
 
-def _ensure_worker_locked() -> None:
-    global _worker
-    if _worker is None or not _worker.is_alive():
-        _worker = threading.Thread(target=_run_loop, name="hagen-jobs", daemon=True)
-        _worker.start()
+def _ensure_workers_locked(lane: str) -> None:
+    """Поднять рабочие потоки дорожки — ровно столько, сколько ей положено.
+
+    Потоки заводятся при первой задаче дорожки, а не при запуске программы:
+    пока человек ничего не обрабатывает, лишним потокам взяться неоткуда.
+    """
+    alive = [t for t in _workers[lane] if t.is_alive()]
+    while len(alive) < LANES[lane]:
+        t = threading.Thread(target=_run_loop, args=(lane,),
+                             name="hagen-jobs-%s-%d" % (lane, len(alive) + 1),
+                             daemon=True)
+        t.start()
+        alive.append(t)
+    _workers[lane] = alive
 
 
-def _run_loop() -> None:
+def _run_loop(lane: str) -> None:
+    queue, wake = _queues[lane], _wakes[lane]
     while True:
         with _lock:
-            job_id = _queue.popleft() if _queue else None
+            job_id = queue.popleft() if queue else None
         if job_id is None:
-            _wake.wait(timeout=1.0)
-            _wake.clear()
+            wake.wait(timeout=1.0)
+            wake.clear()
             continue
         _run_one(job_id)
 
@@ -188,6 +289,7 @@ def _run_one(job_id: str) -> None:
         return
 
     handle = JobHandle(job_id)
+    lane = str(job.get("lane") or lane_of(job.get("kind")))
     t0 = time.time()
     with _lock:
         job["status"] = "running"
@@ -197,7 +299,13 @@ def _run_one(job_id: str) -> None:
     _notify(snapshot)
 
     try:
-        result = fn(handle)
+        if lane == "heavy":
+            # Тяжёлая задача держит пропуск всё своё время — иначе соседняя
+            # запись начала бы распознаваться прямо поверх неё.
+            with handle.heavy(note="жду, пока освободится процессор"):
+                result = fn(handle)
+        else:
+            result = fn(handle)
         if handle.cancelled:
             _finish(job_id, status="cancelled", note="отменено", elapsed=time.time() - t0)
         else:

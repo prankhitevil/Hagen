@@ -372,10 +372,9 @@ def main() -> int:
         log.warning("проверка переносимости не удалась: %s", err)
 
     if args.prepare:
-        for name in (config.get("live_model"), config.get("offline_model")):
-            log.info("готовлю %s", name)
-            ok = asr.export_onnx(name)
-            log.info("%s: %s", name, "готово" if ok else "НЕ УДАЛОСЬ")
+        # Готовится то, что нужно выбору в «Настройки → Модели» (решение 21.09).
+        for title, ok in asr.prepare_all():
+            log.info("%s: %s", title, "готово" if ok else "НЕ УДАЛОСЬ")
         return 0
 
     preferred = args.port or int(config.get("port") or 8787)

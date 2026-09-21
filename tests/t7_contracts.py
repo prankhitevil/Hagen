@@ -25,7 +25,7 @@ def say(msg):
 
 NEED = {
     "diarize": [
-        "available", "load_pipeline", "diarize_pcm", "estimate_seconds",
+        "available", "engine", "diarize_pcm", "estimate_seconds", "embed_spans",
         "relabel", "save_result", "load_result",
     ],
     "voices": [
@@ -39,6 +39,7 @@ NEED = {
     "minutes": [
         "TEMPLATES", "build_transcript_text", "resolve_claude_cli", "run_claude_cli",
         "available_engines", "chunk_transcript", "generate", "cloud_warning",
+        "check_claude_cli",
     ],
     "platform.windows.desktop": [
         "list_sessions", "list_capture_sessions", "detect_call", "call_output_device",

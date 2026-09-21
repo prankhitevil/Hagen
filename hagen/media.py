@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -178,7 +179,9 @@ def _wants_diarize(opts: dict[str, Any]) -> bool:
     return bool(KIND_DEFAULTS[_kind(opts)]["diarize"]) and _flag(opts, "diarize_auto")
 
 
-def _asr_where(opts: dict[str, Any]) -> str:
+def asr_where(opts: dict[str, Any]) -> str:
+    """Где распознавать: «local» или «cloud». Выбор — в настройках (21.09);
+    задание может сказать своё, если его прислал вызывающий."""
     where = str(opts.get("asr_files") or config.get("asr_files") or "local").strip().lower()
     return where if where in ("local", "cloud") else "local"
 
@@ -273,14 +276,32 @@ def _segments_from_subs(rec_id: str, path: Path, handle: Any) -> int:
     return len(segs)
 
 
+@contextmanager
+def _heavy(handle: Any, note: str = ""):
+    """Пропуск на тяжёлый счёт, если задача его умеет брать (20.09).
+
+    Скачиваний может идти несколько сразу, а вот распознавание на этом
+    компьютере — по одному: модель занимает все ядра. В проверках handle
+    бывает подставным и пропусков не раздаёт — тогда просто работаем.
+    """
+    take = getattr(handle, "heavy", None)
+    if take is None:
+        yield
+        return
+    with take(note) if note else take():
+        yield
+
+
 def _segments_from_asr(rec_id: str, wav: Path, duration: float,
                        opts: dict[str, Any], handle: Any) -> int:
     """Распознать звук: на этом компьютере или в облаке — по выбору человека."""
-    where = _asr_where(opts)
+    where = asr_where(opts)
     lang = _lang(opts)
     if where == "cloud":
+        # Считает чужой сервер — нашему процессору ждать незачем.
         return _segments_from_cloud(rec_id, wav, opts, handle)
-    return _segments_from_local(rec_id, wav, duration, lang, handle)
+    with _heavy(handle, "жду очереди на распознавание"):
+        return _segments_from_local(rec_id, wav, duration, lang, handle)
 
 
 def _segments_from_local(rec_id: str, wav: Path, duration: float, lang: str,
@@ -623,7 +644,7 @@ def _new_record(title: str, opts: dict[str, Any], source: str,
     payload = {
         "doc_kind": "summary",      # в заметке раздел называется «Саммари»
         "stages": {},
-        "asr_files": _asr_where(opts),
+        "asr_files": asr_where(opts),
         "asr_lang": _lang(opts),
         # Тип и способ хранения запоминаем в самой записи: обработка идёт
         # этапами и может продолжиться в другом запуске службы, когда форма
@@ -860,6 +881,7 @@ def submit_summary(rec_id: str, document: str | None = None,
     return jobs.submit("summary", work,
                        "%s: %s" % (names.get(document, "Документ"), meta.get("title")),
                        rec_id=rec_id,
+                       lane=minutes.document_lane(engine),
                        extra={"engine": engine or config.get("minutes_engine"),
                               "retry": {"url": "/api/media/%s/summary" % rec_id,
                                         "body": {"document": document}}})

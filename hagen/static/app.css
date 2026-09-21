@@ -137,12 +137,47 @@ button.icon-only svg{width:calc(var(--icon) - 4px);height:calc(var(--icon) - 4px
 .rec-item:first-child{border-top:0}
 .rec-item:hover{background:var(--line-soft)}
 .rec-item.active{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent-mark)}
+/* Отмечено Ctrl+щелчком (20.09): видно, что запись попадёт под удаление. */
+.rec-item.picked{background:var(--warn-soft)}
+.rec-item.picked.active{box-shadow:inset 3px 0 0 var(--accent-mark)}
+.picked-note{padding:5px var(--pad-side);border-top:1px solid var(--line);
+  color:var(--muted);display:flex;gap:8px;align-items:center;justify-content:space-between}
 .rec-item-title{font-weight:650;display:flex;gap:6px;align-items:baseline}
 .rec-item-title .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rec-item-sub{font-size:var(--fs-xs);color:var(--muted);margin-top:1px;
   display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-variant-numeric:tabular-nums}
 .rec-item-note{font-size:var(--fs-xs);color:var(--muted);margin-top:1px;
   display:flex;gap:6px;align-items:center}
+/* Голосовые заметки к записи (20.09): строка на заметку, род — слева.
+   Поручение выделено, потому что его ещё предстоит куда-то отправить. */
+.notes-list{display:flex;flex-direction:column;gap:3px;margin-bottom:4px}
+.note-row{display:flex;gap:6px;align-items:baseline}
+.note-row .note-mark{font-size:var(--fs-xs);color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.note-row.task .note-mark{color:var(--warn-ink);font-weight:700}
+.note-row .note-text{flex:1;min-width:0}
+
+/* Роль участника в карточке говорящего (20.09): своим блоком, отделённым
+   линией, — имя и роль правятся вместе, но это разные вещи. */
+.role-box{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+.role-box .fb-row{margin-bottom:4px}
+
+/* Отбор и группировка списка (20.09). Строка над списком: два отбора во всю
+   ширину и кнопка складывания по проектам — она нажимается, как выключатель. */
+.list-filter{display:flex;gap:4px;align-items:center;padding:4px var(--pad-side) 6px}
+.list-filter select{flex:1;min-width:0;font-size:var(--fs-xs)}
+.grp-btn.on{background:var(--accent-soft);color:var(--accent-mark)}
+.rec-group-head{display:flex;gap:6px;align-items:center;cursor:pointer;
+  padding:5px var(--pad-side);background:var(--line-soft);
+  font-size:var(--fs-xs);font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em;
+  border-top:1px solid var(--line)}
+.rec-group-head:hover{color:var(--text)}
+.rec-group-head .grp-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec-group-head .grp-count{margin-left:auto;font-variant-numeric:tabular-nums;
+  background:var(--bg);border-radius:var(--radius-ctl);padding:0 6px}
+.rec-group .rec-item:first-child{border-top:1px solid var(--line-soft)}
+
 .pill{font-size:var(--fs-xs);padding:1px 7px;border-radius:var(--radius-ctl);white-space:nowrap;
   background:var(--line-soft);color:var(--muted)}
 .pill.rec{background:var(--rec-soft);color:var(--rec-ink);font-weight:600}
@@ -544,6 +579,7 @@ table.keys td:first-child{white-space:nowrap;width:1%;color:var(--text)}
 /* «Продвинутые»: короткое число и кнопка «по умолчанию» в одну строку */
 .field .dt-row{display:flex;gap:8px;align-items:center;margin-top:4px}
 .field .dt-row input{display:inline-block;width:150px;margin-top:0}
+.field .dt-row.grow input{flex:1;width:auto}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;align-items:center}
 
 /* ---------------- раздел «Видео» ---------------- */
@@ -700,6 +736,22 @@ table.keys td:first-child{white-space:nowrap;width:1%;color:var(--text)}
   color:var(--text)}
 .ac-item:hover,.ac-item.active{background:var(--accent-soft)}
 .ac-item.ac-new b{color:var(--accent)}
+.ac-note{display:block;padding:7px 10px}
+/* Выпадающий список с отбором (модели сервиса): тот же вид, плюс стрелка. */
+.ac-combo input{padding-right:30px}
+.ac-arrow{position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;
+  background:none;color:var(--muted);cursor:pointer;padding:2px 6px}
+/* Подходящие адреса сервисов по «?»: два столбца — сервис и адрес с кнопкой. */
+.q.q-click{cursor:pointer}
+.ac-list.services-pop{padding:4px 6px;max-height:min(440px,60vh)}
+.services-table{border-collapse:collapse;width:100%}
+.services-table td{padding:6px 8px;vertical-align:middle;border-top:1px solid var(--line-soft)}
+.services-table tr:first-child td{border-top:0}
+.services-table .url{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.services-table code{font-size:12px;word-break:break-all}
+/* Блок настроек, которым сейчас не пользуются: серый и не правится. */
+.fields-off{opacity:.5}
+.fields-off input,.fields-off button{cursor:not-allowed}
 #speaker-picked{margin:-6px 0 10px}
 .conflict{background:var(--warn-soft);border:1px solid var(--warn-line);
   border-radius:var(--radius-box);padding:10px 12px;margin:10px 0;font-size:var(--fs-sm);

@@ -26,9 +26,12 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-import isolate  # noqa: E402  настоящая база голосов не трогается
+import isolate  # noqa: E402  настоящие база голосов и настройки не трогаются
 
 isolate.voices()
+# Служба при запуске переносит старые настройки и пишет их в файл: на
+# настоящем settings.json проверка переписала бы настройки человека.
+isolate.settings()
 
 LINES = []
 FAIL = []
@@ -262,12 +265,13 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
     sent = []
 
     def fake_cloud(info, prompt, text, key, model):
-        sent.append((info.get("id"), model, len(text)))
+        sent.append((info.get("service"), model, len(text)))
         return "# Протокол совещания\n\nСобрано облаком.\n\n## Участники\nЯ"
 
     minutes.CALLS = {k: fake_cloud for k in minutes.CALLS}
     minutes._call_openai = fake_cloud
-    minutes._provider_key = lambda p: "test-key"
+    config.save({"api_base_url": "https://api.example.com/v1",
+                 "api_keys": {"docs": "test-key-подлиннее"}})
     minutes._model_for = lambda provider, role="strong": "test-model"
     body = dict(retry.get("body") or {}, engine="api")
     r = cli.post(retry.get("url"), headers=ORIGIN, json=body)

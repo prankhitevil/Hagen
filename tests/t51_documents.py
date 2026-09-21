@@ -104,7 +104,8 @@ def fake_engine(engine, prompt, text, timeout=None, role="strong", handle=None):
     PROMPTS.append((prompt, text))
     COUNT["n"] += 1
     n = COUNT["n"]
-    if "ответь на вопрос" in prompt:
+    # «Свой запрос» (20.09): одно поле и на вопрос, и на заказ документа.
+    if "выполни просьбу пользователя" in prompt:
         return "ОТВЕТ-%d по стенограмме." % n
     if "протокол совещания" in prompt.lower() and "НАЗВАНИЕ:" not in prompt:
         # как у настоящего Claude: участники — своим разделом, суть — в следующих
@@ -256,12 +257,14 @@ try:
               [x["key"] for x in docs["documents"]] == ["protocol", "meeting", "lecture", "question"]
               and docs["last"] == "lecture", ([x["key"] for x in docs["documents"]], docs["last"]))
         body = note_text()
-        heads = [h for h in ("# Протокол", "# Саммари", "# Конспект", "# Вопросы и ответы", "# Стенограмма")
+        # «Свои запросы» — с 20.09: в разделе и ответы на вопросы, и документы,
+        # заказанные своими словами.
+        heads = [h for h in ("# Протокол", "# Саммари", "# Конспект", "# Свои запросы", "# Стенограмма")
                  if ("\n" + h + "\n") in body]
         check("в заметке все разделы и стенограмма", len(heads) == 5, heads)
         mains = [ln for ln in body.splitlines() if ln.startswith("# ")]
         check("главные разделы: «О записи», 4 документа, стенограмма (формат 15.09)",
-              mains == ["# О записи", "# Протокол", "# Саммари", "# Конспект", "# Вопросы и ответы",
+              mains == ["# О записи", "# Протокол", "# Саммари", "# Конспект", "# Свои запросы",
                         "# Стенограмма"], mains)
         about = body.split("# О записи", 1)[1].split("\n# ", 1)[0]
         check("«О записи» — только то, чего нет в свойствах",

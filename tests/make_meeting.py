@@ -3,7 +3,7 @@
 
 Голос 1 — синтез Windows (Irina) без изменений.
 Голос 2 — тот же синтез со сдвинутым вниз тембром (другие форманты).
-Голос 3 — живая человеческая запись из example.wav.
+Голос 3 — готовый синтетический образец example.wav.
 Реплики подобраны так, чтобы в протоколе были задачи, ответственные и сроки.
 """
 from __future__ import annotations
@@ -110,15 +110,15 @@ def main() -> int:
                      "end": round(start + len(pcm) / 16000.0, 2)})
         print("  %s  %5.1f c  %s" % (who, len(pcm) / 16000.0, text[:52]))
 
-    # третий голос — живой человек из эталонного файла
+    # третий голос — готовый синтетический образец
     human, _sr = audio_io.read_wav(PROJECT / "tests" / "example.wav")
     peak = float(np.max(np.abs(human))) or 1.0
     human = (human / peak * 0.5).astype(np.float32)
     start = sum(len(p) for p in pieces) / 16000.0
     pieces.append(human)
-    plan.append({"who": "C (живой голос)", "text": "(чтение Пушкина)",
+    plan.append({"who": "C (образец)", "text": "(чтение Пушкина)",
                  "start": round(start, 2), "end": round(start + len(human) / 16000.0, 2)})
-    print("  C  %5.1f c  живая человеческая запись" % (len(human) / 16000.0))
+    print("  C  %5.1f c  готовый образец" % (len(human) / 16000.0))
 
     out = np.concatenate(pieces)
     dst = PROJECT / "tests" / "meeting.wav"

@@ -35,7 +35,7 @@ import isolate  # noqa: E402
 isolate.voices()
 isolate.settings()
 
-from hagen import config, diarize  # noqa: E402
+from hagen import config, diar_pyannote, diarize  # noqa: E402
 
 LINES = []
 FAIL = []
@@ -115,11 +115,16 @@ def ratio_now(pipe):
     return pipe.clustering.filter_embeddings(None, segmentations=None)
 
 
+def apply_tuning(pipe):
+    """Ручки из настроек — в пайплайн, как это делает движок перед разметкой."""
+    return diar_pyannote.apply_tuning(pipe, diarize.tuning())
+
+
 reset_settings()
 fp = FakePipe()
-diarize._remember_base(fp)
+diar_pyannote._remember_base(fp)
 config.save({"diarize_window_step_s": None})
-info = diarize.apply_tuning(fp)
+info = apply_tuning(fp)
 check("пусто: шаг как у модели (1 с)", fp._segmentation.step == 1.0, info)
 check("пусто: порог и штраф как у модели",
       fp.params["clustering"]["threshold"] == 0.6 and fp.params["clustering"]["Fb"] == 0.8, fp.params)
@@ -128,7 +133,7 @@ check("пусто: минимум речи как у модели (20 % окна
 
 config.save({"diarize_window_step_s": 2.0, "diarize_cluster_threshold": 0.5,
              "diarize_cluster_fb": 0.4, "diarize_min_voice_s": 1.0})
-info = diarize.apply_tuning(fp)
+info = apply_tuning(fp)
 check("шаг окна 2 с дошёл", fp._segmentation.step == 2.0 and abs(fp.segmentation_step - 0.2) < 1e-9, info)
 check("порог 0,5 дошёл до группировки", fp.params["clustering"]["threshold"] == 0.5, fp.params)
 check("штраф 0,4 дошёл до группировки", fp.params["clustering"]["Fb"] == 0.4, fp.params)
@@ -139,17 +144,17 @@ check("в ответе видно, что применилось",
       info.get("threshold") == 0.5 and info.get("Fb") == 0.4 and info.get("min_voice_s") == 1.0, info)
 
 config.save({"diarize_window_step_s": 1.0})
-diarize.apply_tuning(fp)
+apply_tuning(fp)
 check("шаг окна меняется без перезапуска", fp._segmentation.step == 1.0)
 
 config.save({"diarize_cluster_threshold": None, "diarize_cluster_fb": None, "diarize_min_voice_s": None})
-diarize.apply_tuning(fp)
+apply_tuning(fp)
 check("очистили поля — порог и штраф заводские",
       fp.params["clustering"]["threshold"] == 0.6 and fp.params["clustering"]["Fb"] == 0.8, fp.params)
 check("очистили поля — минимум речи заводской", ratio_now(fp) == 0.2, ratio_now(fp))
 
 config.save({"diarize_cluster_threshold": "мусор", "diarize_min_voice_s": -3})
-diarize.apply_tuning(fp)
+apply_tuning(fp)
 check("мусор в поле — как у модели, без падения",
       fp.params["clustering"]["threshold"] == 0.6 and ratio_now(fp) == 0.2)
 
@@ -165,9 +170,9 @@ class NoClusterParams(FakePipe):
 
 reset_settings()
 fp31 = NoClusterParams()
-diarize._remember_base(fp31)
+diar_pyannote._remember_base(fp31)
 config.save({"diarize_cluster_fb": 0.4})
-diarize.apply_tuning(fp31)
+apply_tuning(fp31)
 check("у модели без штрафа ключ Fb не появляется", "Fb" not in fp31.params["clustering"], fp31.params)
 reset_settings()
 
@@ -226,19 +231,21 @@ check("доля больше трети режет и при старом пра
 reset_settings()
 
 say("")
-say("=== 4. Настоящая модель community-1 ===")
-import numpy as np  # noqa: E402
-
+say("=== 4. Настоящая модель community-1 через pyannote ===")
+# Тот же путь для движка ONNX проверяет t100 (раздел «Ручки»).
 wav = PROJECT / "tests" / "meeting.wav"
 pipe = None
 why = "нет tests\\meeting.wav"
-if wav.exists():
+if not diar_pyannote.installed():
+    why = "pyannote не установлен — в этом релизе разметка идёт через ONNX"
+elif wav.exists():
     # Токена во временных настройках нет, а настоящие проверке читать нельзя.
-    # Скачанная модель грузится с диска и без него — ставим её в пайплайн сами.
+    # Скачанная модель грузится с диска и без него — ставим её в движок сами.
     name = config.DEFAULTS["diarize_model"]
     try:
-        pipe = diarize._load_one(name, "")
-        diarize._pipeline, diarize._pipeline_model = pipe, name
+        pipe = diar_pyannote._load_one(name, "")
+        diar_pyannote.use_pipeline(pipe, name)
+        diarize.use_engine("pyannote")
     except Exception as err:
         why = "модель %s не загрузилась с диска: %s" % (name, str(err)[:120])
 if pipe is None:
@@ -277,6 +284,7 @@ else:
     finally:
         base["filter"] = real_filter
         reset_settings()
+        diarize.use_engine(None)
 
 say("")
 say("=== 5. Интерфейс ===")

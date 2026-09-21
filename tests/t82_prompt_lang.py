@@ -77,8 +77,9 @@ ok("учебный пример есть", "transfer the money" in en)
 ok("в примере назван верный ответ", "must NOT appear" in en)
 
 print("\n=== 6. Переключатель действует на все промпты ===")
-ok("вопрос к стенограмме", "Task: answer the question" in minutes._final_prompt("question", "когда?"))
-ok("подпись вопроса переведена", "User's question:" in minutes._final_prompt("question", "когда?"))
+# «Свой запрос» (20.09): то же поле принимает и вопрос, и заказ документа.
+ok("свой запрос", "Task: carry out the request" in minutes._final_prompt("question", "когда?"))
+ok("подпись просьбы переведена", "User's request:" in minutes._final_prompt("question", "когда?"))
 ok("сам вопрос не тронут", "когда?" in minutes._final_prompt("question", "когда?"))
 ok("видео-промпт", "Task: from the meeting transcript" in minutes.video_prompt("meeting"))
 ok("конспект", "study summary" in minutes.video_prompt("lecture"))

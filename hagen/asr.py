@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """Распознавание речи моделями GigaAM.
 
-Две модели под две задачи:
-  v3_e2e_ctc   — живой эфир, запускается через onnxruntime (быстрый старт, мало памяти)
-  v3_e2e_rnnt  — файлы и «перечитать точнее», запускается через torch,
-                 потому что только этот путь отдаёт отметки времени по словам,
-                 а они нужны, чтобы точно сшить текст с разметкой говорящих.
+Две модели:
+  v3_e2e_ctc   — быстрая, через onnxruntime (быстрый старт, мало памяти), без
+                 отметок времени по словам;
+  v3_e2e_rnnt  — точная, через torch или через onnx-asr (полные или сжатые
+                 веса), с отметками времени по словам: по ним текст точно
+                 сшивается с разметкой говорящих.
+
+Какая модель чем занимается — звонки, голосовой ввод, файлы — выбирает человек
+в «Настройки → Модели» (решение 21.09): одна модель на всё или две. Кто зовёт
+transcribe_live и transcribe_precise, об этом не знает — это решает live_route.
 
 Обе модели «e2e»: сами ставят знаки препинания, заглавные буквы и нормализуют числа.
 Аудио подаём массивом 16 кГц моно float32, без временных файлов.
@@ -78,6 +83,11 @@ class Result:
 
     def __bool__(self) -> bool:
         return bool(self.text)
+
+    def words_at(self, offset: float) -> list[dict[str, Any]]:
+        """Слова со временем от начала записи: offset — где в ней начался кусок."""
+        return [{"text": w.text, "start": offset + w.start, "end": offset + w.end}
+                for w in self.words]
 
 
 def _threads() -> int:
@@ -273,16 +283,38 @@ def preload_precise() -> None:
     свои несколько секунд, модель успевает загрузиться, и распознавание после
     «стоп» не ждёт. Загрузка берёт только _lock, не замок распознавания, так что
     ничему не мешает; повторный вызов во время загрузки просто подождёт её.
+    Грузится модель, выбранная для голосового ввода (live_route).
     """
-    name = config.get("offline_model") or "v3_e2e_rnnt"
-    with _lock:
-        if name in _torch_cache:
-            _torch_used[name] = time.time()
-            return
+    engine = live_route()["voice"]
+    if engine == "fast":
+        name = str(config.get("live_model") or "v3_e2e_ctc")
+        with _lock:
+            if name in _onnx_cache:
+                return
+
+        def load() -> Any:
+            return _load_onnx(name)
+    elif engine in OX_ENGINES:
+        quant = OX_ENGINES[engine]
+        with _lock:
+            if quant in _ox_cache:
+                return
+
+        def load() -> Any:
+            return _load_ox(quant)
+    else:
+        name = _precise_name()
+        with _lock:
+            if name in _torch_cache:
+                _torch_used[name] = time.time()
+                return
+
+        def load() -> Any:
+            return _load_torch(name)
 
     def run() -> None:
         try:
-            _load_torch(name)
+            load()
         except Exception as err:
             log.warning("фоновая загрузка точной модели не удалась: %s", err)
 
@@ -306,15 +338,19 @@ def release_idle(minutes: float | None = None) -> list[str]:
     занятая модель просто доживёт до следующего круга. Ссылку, уже взятую
     чужим потоком, выгрузка не ломает — память освободится, когда тот поток
     закончит.
+
+    Модель, которая служит эфиру (режим одной модели), не выгружается никогда:
+    окно показывало бы «готова», а первая фраза записи ждала бы загрузку.
     """
     limit = idle_minutes() if minutes is None else float(minutes)
     if limit <= 0:
         return []
+    keep = _live_keeps()
     dropped: list[str] = []
     with _lock:
         now = time.time()
         for name, used in list(_torch_used.items()):
-            if now - used < limit * 60.0:
+            if name == keep or now - used < limit * 60.0:
                 continue
             if not _infer_lock.acquire(blocking=False):
                 continue
@@ -353,7 +389,15 @@ def _ensure_janitor() -> None:
         _janitor.start()
 
 
-def _transcribe_torch(pcm: np.ndarray, name: str, word_timestamps: bool = True) -> Result:
+def _transcribe_torch(pcm: np.ndarray, name: str, word_timestamps: bool = True,
+                      threads: int = 0) -> Result:
+    """threads — перед распознаванием поставить torch столько потоков; 0 — не трогать.
+
+    Число потоков у torch одно на процесс, и его переставляют другие: silero-vad
+    при подключении ставит один поток (silero_vad/model.py), разметка говорящих —
+    свои. Без закрепления точная модель считала бы в один поток или в девять —
+    смотря что случилось раньше (замер 18.09).
+    """
     import torch
 
     model = _load_torch(name)
@@ -361,6 +405,8 @@ def _transcribe_torch(pcm: np.ndarray, name: str, word_timestamps: bool = True) 
     wav = torch.from_numpy(arr).unsqueeze(0)
     length = torch.full([1], wav.shape[-1], dtype=torch.long)
     with _infer_lock, torch.inference_mode():
+        if threads > 0 and torch.get_num_threads() != threads:
+            torch.set_num_threads(threads)
         enc, enc_len = model.forward(wav, length)
         text, words = model._decode(enc, enc_len, length, bool(word_timestamps))[0]
     out_words = []
@@ -375,6 +421,11 @@ def _transcribe_torch(pcm: np.ndarray, name: str, word_timestamps: bool = True) 
 #: их отдаёт репозиторий istupakov/parakeet-tdt-0.6b-v2-onnx.
 _EN_FILES = ("encoder-model.int8.onnx", "decoder_joint-model.int8.onnx",
              "nemo128.onnx", "vocab.txt")
+
+
+def english_files() -> list[str]:
+    """Файлы английской модели в EN_DIR — те, что кладёт скачивание."""
+    return list(_EN_FILES) + ["config.json"]
 
 
 def english_available() -> tuple[bool, str]:
@@ -417,7 +468,8 @@ def _load_english():
 
 
 def _words_from_tokens(tokens: list[str] | None, stamps: list[float] | None,
-                       total_s: float) -> list[Word]:
+                       total_s: float, frame_s: float = EN_FRAME_S,
+                       tight: bool = False) -> list[Word]:
     """Собрать слова из потокенных отметок времени.
 
     onnx-asr отдаёт отметки НЕ по словам, а по токенам модели, и слово почти
@@ -425,24 +477,31 @@ def _words_from_tokens(tokens: list[str] | None, stamps: list[float] | None,
     токена: сам пакет при чтении словаря заменяет им маркер SentencePiece «▁»
     (onnx_asr/asr.py, чтение vocab). Поэтому склеиваем так: токен с пробелом
     закрывает предыдущее слово и открывает новое, остальные дописываются.
-    Конец слова — начало следующего; у последнего — плюс шаг сетки.
+    Конец слова — начало следующего; у последнего — плюс шаг сетки frame_s.
+
+    tight — конец слова не дальше его последнего токена плюс шаг сетки. Иначе
+    слово перед паузой растягивается на всю паузу, его середина уезжает, и
+    разметка отдаёт его не тому голосу: на записях 18.09 так было с 2,5 % слов.
     """
     if not tokens or not stamps:
         return []
     out: list[Word] = []
     text = ""
     start = 0.0
+    last = 0.0
     for token, stamp in zip(tokens, stamps):
         piece = str(token)
         if piece.startswith(" ") or not text:
             if text.strip():
-                out.append(Word(text.strip(), start, float(stamp)))
+                end = min(float(stamp), last + frame_s) if tight else float(stamp)
+                out.append(Word(text.strip(), start, max(start, end)))
             text = piece.lstrip()
             start = float(stamp)
         else:
             text += piece
+        last = float(stamp)
     if text.strip():
-        tail = min(float(total_s) if total_s else 0.0, float(stamps[-1]) + EN_FRAME_S)
+        tail = min(float(total_s) if total_s else 0.0, float(stamps[-1]) + frame_s)
         out.append(Word(text.strip(), start, max(start, tail)))
     return out
 
@@ -459,31 +518,363 @@ def _transcribe_english(pcm: np.ndarray) -> Result:
     return Result(text, words)
 
 
+# ------------------------------------------------ точная модель через onnx-asr
+
+#: Та же точная модель v3_e2e_rnnt, но в движке onnx-asr, а не torch. Замер на
+#: записях владельца (18.09): fp32 даёт текст слово в слово как torch, int8 —
+#: 98,1 % слов при трети памяти, а в эфире фраза в 24 с выходит за 0,8 с против
+#: 4,9 с у torch (20.09). Файлы лежат рядом с английской моделью; в сборку
+#: кладётся только рекомендованный вариант (recommended_part).
+OX_DIR = EN_DIR / "gigaam-v3"
+OX_MODEL = "gigaam-v3-e2e-rnnt"
+OX_REPO = "istupakov/gigaam-v3-onnx"
+#: Движок → сжатие весов. None — полные веса (fp32).
+OX_ENGINES: dict[str, str | None] = {"ox_fp32": None, "ox_int8": "int8"}
+#: Шаг сетки отметок времени GigaAM: окно 10 мс × прореживание 4.
+GIGAAM_FRAME_S = 0.04
+_ox_cache: dict[Any, Any] = {}
+
+
+def ox_files(quant: str | None) -> list[str]:
+    """Файлы, без которых точная модель в onnx-asr не поедет. Имена — как в репозитории."""
+    suffix = (".%s" % quant) if quant else ""
+    return ["config.json", "v3_e2e_rnnt_vocab.txt"] + [
+        "v3_e2e_rnnt_%s%s.onnx" % (part, suffix) for part in ("encoder", "decoder", "joint")]
+
+
+def ox_available(quant: str | None) -> tuple[bool, str]:
+    """Готова ли точная модель в onnx-asr. Вторым значением — почему нет."""
+    try:
+        import onnx_asr  # noqa: F401
+    except Exception:
+        return False, "Нет пакета onnx-asr."
+    missing = [n for n in ox_files(quant) if not (OX_DIR / n).exists()]
+    if missing:
+        return False, ("Файлы точной модели для onnx-asr не скачаны (%d из %d). Папка: %s"
+                       % (len(missing), len(ox_files(quant)), OX_DIR))
+    return True, "Готова."
+
+
+def _load_ox(quant: str | None):
+    with _lock:
+        got = _ox_cache.get(quant)
+        if got is not None:
+            return got
+        ok, why = ox_available(quant)
+        if not ok:
+            raise RuntimeError(why)
+        import onnx_asr
+
+        t0 = time.time()
+        model = onnx_asr.load_model(
+            OX_MODEL,
+            path=str(OX_DIR),
+            quantization=quant,
+            sess_options=_onnx_session_options(),
+            providers=["CPUExecutionProvider"],
+        ).with_timestamps()
+        _ox_cache[quant] = model
+        log.info("точная модель через onnx-asr (%s) загружена за %.1f c, потоков %d",
+                 quant or "fp32", time.time() - t0, _threads())
+        return model
+
+
+def _transcribe_ox(pcm: np.ndarray, quant: str | None) -> Result:
+    model = _load_ox(quant)
+    arr = np.ascontiguousarray(np.asarray(pcm, dtype=np.float32).reshape(-1))
+    with _infer_lock:
+        res = model.recognize(arr, sample_rate=SR)
+    words = _words_from_tokens(getattr(res, "tokens", None), getattr(res, "timestamps", None),
+                               arr.shape[0] / float(SR), frame_s=GIGAAM_FRAME_S, tight=True)
+    return Result(str(getattr(res, "text", "") or ""), words)
+
+
 def max_chunk_seconds(lang: str = "ru") -> float:
     """Предел длины куска. У русской и английской моделей он разный."""
     return MAX_CHUNK_EN_S if str(lang).lower() == "en" else MAX_CHUNK_S
+
+
+# ---------------------------------------------------------------- выбор моделей
+
+#: Движки распознавания и скачиваемая часть (needs.PARTS), без которой движок
+#: не поедет:
+#:   fast    — быстрая модель v3_e2e_ctc через ONNX из пакета gigaam;
+#:   torch   — точная v3_e2e_rnnt через torch;
+#:   ox_fp32 / ox_int8 — точная через onnx-asr, полные или сжатые веса.
+ENGINE_PARTS = {"fast": "fast", "torch": "precise",
+                "ox_fp32": "precise_ox_fp32", "ox_int8": "precise_ox_int8"}
+ENGINE_TITLES = {"fast": "быстрая", "torch": "точная (torch)",
+                 "ox_fp32": "точная (onnx-asr, полные веса)",
+                 "ox_int8": "точная (onnx-asr, сжатые веса)"}
+#: Роли: звонки и разговоры (эфир), голосовой ввод (диктовка, голосовые
+#: заметки) и файлы (видео, файлы с диска, «Перечитать точнее»).
+ROLES = ("live", "voice", "files")
+ROLE_TITLES = {"live": "звонки", "voice": "голосовой ввод", "files": "файлы и видео"}
+
+#: Что ставит «Сбросить всё», кладёт сборка для другого человека и советует
+#: подсказка (решение 21.09): одна точная модель на onnx-asr с полными весами —
+#: текст слово в слово как у torch (замер 18.09), а в памяти одна модель
+#: вместо двух.
+RECOMMENDED: dict[str, Any] = {"asr_count": 1, "asr_single": "precise",
+                               "asr_engine": "onnx_asr", "asr_weights": "fp32",
+                               "live_draft": False}
+
+#: Как распознавание устроено в этом запуске программы. Решается один раз — при
+#: прогреве или на первой фразе — и до перезапуска не меняется: иначе посреди
+#: записи фразы пошли бы разными моделями, а в памяти оказались бы обе.
+_live_route: dict[str, Any] | None = None
+#: Свой замок, а не _lock: тот держится всю загрузку модели, и начало записи
+#: ждало бы, пока грузится, например, модель для видео.
+_route_lock = threading.Lock()
+
+
+def _precise_name() -> str:
+    return str(config.get("offline_model") or "v3_e2e_rnnt")
+
+
+def _precise_engine(choice: dict[str, Any] | None = None) -> str:
+    """Движок точной модели: torch или onnx-asr с нужными весами. choice — свой
+    набор параметров вместо настроек."""
+    get = choice.get if choice is not None else config.get
+    if str(get("asr_engine") or "onnx_asr") == "torch":
+        return "torch"
+    return "ox_int8" if str(get("asr_weights") or "fp32") == "int8" else "ox_fp32"
+
+
+def recommended_part() -> str:
+    """Часть, которую ставит «Сбросить всё» и кладёт сборка для другого человека."""
+    return ENGINE_PARTS[_precise_engine(RECOMMENDED)]
+
+
+def chosen() -> dict[str, Any]:
+    """Что выбрано в настройках: движок на каждую роль, черновик и перечитка.
+
+    Одна модель — все роли на ней. Две — звонки и голосовой ввод выбираются
+    отдельно, а файлы всегда идут точной: им важнее качество и время слов, чем
+    скорость. «Перечитать точнее» есть, только когда звонки идут быстрой, —
+    перечитывать той же моделью незачем. Черновик (бегущий текст фразы) — только
+    у быстрой модели: точной он не по силам.
+    """
+    precise = _precise_engine()
+
+    def pick(value: Any) -> str:
+        return precise if str(value) == "precise" else "fast"
+
+    if int(config.get("asr_count") or 1) == 1:
+        engine = pick(config.get("asr_single") or "precise")
+        out = {"live": engine, "voice": engine, "files": engine, "reread": False}
+    else:
+        live = pick(config.get("asr_calls") or "fast")
+        out = {"live": live, "voice": pick(config.get("asr_voice") or "precise"),
+               "files": precise, "reread": live == "fast" and bool(config.get("asr_reread"))}
+    out["drafts"] = out["live"] == "fast" and bool(config.get("live_draft"))
+    return out
+
+
+def _fast_ready() -> bool:
+    name = str(config.get("live_model") or "v3_e2e_ctc")
+    return onnx_ready(name) and (CKPT_DIR / (name + "_tokenizer.model")).exists()
+
+
+def engine_ready(engine: str) -> tuple[bool, str]:
+    """На месте ли файлы движка. Вторым значением — почему нет."""
+    if engine in OX_ENGINES:
+        return ox_available(OX_ENGINES[engine])
+    if engine == "torch":
+        from . import needs
+
+        if not needs.precise_ready():
+            return False, "точная модель не скачана"
+    if engine == "fast" and not _fast_ready():
+        return False, "быстрая модель не скачана"
+    return True, ""
+
+
+def needed_parts(want: dict[str, Any] | None = None) -> list[str]:
+    """Какие скачиваемые части нужны выбору (по умолчанию — тому, что в настройках)."""
+    want = want or chosen()
+    return sorted({ENGINE_PARTS[want[role]] for role in ROLES})
+
+
+def running_parts() -> list[str]:
+    """Какие части держит работающая сейчас программа: их удалять нельзя."""
+    route = _live_route
+    if route is None:
+        return []
+    return sorted({ENGINE_PARTS[route[role]] for role in ROLES})
+
+
+def describe(route: dict[str, Any]) -> str:
+    """Выбор или работающий маршрут словами — для окна и сводки записи."""
+    if route["live"] == route["voice"] == route["files"]:
+        return "Одна модель: " + ENGINE_TITLES[route["live"]]
+    return "Звонки — %s; голосовой ввод — %s; файлы — %s" % tuple(
+        ENGINE_TITLES[route[role]] for role in ROLES)
+
+
+def choice_key(route: dict[str, Any]) -> str:
+    """Чем идёт каждая роль — одной строкой: так сравнивается выбор с работающим."""
+    return ",".join("%s=%s" % (role, route[role]) for role in ROLES)
+
+
+def _fallback(engine: str) -> str:
+    """Чем заменить движок, у которого нет файлов: первым готовым из очереди."""
+    order = (["fast", "torch", "ox_int8", "ox_fp32"] if engine != "fast"
+             else [_precise_engine(), "torch", "ox_int8", "ox_fp32"])
+    for alt in order:
+        if alt != engine and engine_ready(alt)[0]:
+            return alt
+    return "fast"
+
+
+def _pick_live_route() -> dict[str, Any]:
+    """Решить, как пойдёт распознавание в этом запуске.
+
+    Нет файлов нужного движка — роль берёт первый готовый, а причина видна в
+    окне (live_state) и в журнале: запись не должна ломаться ни при каких
+    условиях. Точная модель в torch считает в заданное число потоков: без этого
+    число потоков — какое оставили другие (silero-vad ставит один, разметка —
+    свои), и одна и та же фраза считалась бы то секунду, то пять (замер 18.09).
+    """
+    want = chosen()
+    route = dict(want)
+    notes = []
+    for role in ROLES:
+        ok, why = engine_ready(want[role])
+        if ok:
+            continue
+        alt = _fallback(want[role])
+        route[role] = alt
+        notes.append("%s: %s, пока идут моделью «%s»" % (ROLE_TITLES[role], why,
+                                                        ENGINE_TITLES[alt]))
+    # Галочка видна, только когда быстрая выбрана для звонков. Если быстрая
+    # лишь подменяет недостающую точную, галочка не в силе.
+    route["drafts"] = bool(want["drafts"]) and route["live"] == "fast"
+    route["reread"] = bool(want["reread"]) and route["files"] != route["live"]
+    route["threads"] = _threads()
+    route["title"] = describe(route)
+    route["key"] = choice_key(route)
+    route["why"] = ""
+    if notes:
+        route["why"] = ("Не всё скачано — " + "; ".join(notes)
+                        + ". Скачать: «Настройки → Модели».")
+        log.warning("%s", route["why"])
+    log.info("распознавание: %s", route["title"])
+    return route
+
+
+def live_route() -> dict[str, Any]:
+    """Как идёт распознавание в этом запуске.
+
+    live, voice, files — движки звонков, голосового ввода и файлов; drafts —
+    черновик в эфире; reread — есть ли «Перечитать точнее»; threads — потоки
+    torch; why — почему работает не то, что выбрано.
+    """
+    global _live_route
+    with _route_lock:
+        if _live_route is None:
+            _live_route = _pick_live_route()
+        return dict(_live_route)
+
+
+def _live_fallback(err: Exception) -> None:
+    """Точная модель в эфире отказала: до перезапуска эфир идёт быстрой.
+
+    Лучше фраза быстрой моделью, чем потерянная фраза. Отказ запоминается,
+    чтобы не пробовать точную заново на каждой фразе.
+    """
+    global _live_route
+    why = "Точная модель в эфире не сработала (%s), эфир идёт на быстрой." % str(err)[:200]
+    log.error("%s", why, exc_info=True)
+    with _route_lock:
+        route = dict(_live_route or _pick_live_route())
+        route.update({"live": "fast", "drafts": False, "why": why})
+        _live_route = route
+
+
+def _live_keeps() -> str | None:
+    """Имя torch-модели, которая служит эфиру: её сторож простоя не трогает."""
+    route = _live_route
+    if route and route.get("live") == "torch":
+        return _precise_name()
+    return None
+
+
+def part_for(role: str) -> str:
+    """Какая скачиваемая часть нужна роли в этом запуске."""
+    return ENGINE_PARTS[live_route()[role]]
+
+
+def precise_part() -> str:
+    """Часть, нужная файлам, видео и «Перечитать точнее»."""
+    return part_for("files")
+
+
+def prepare_all() -> list[tuple[str, bool]]:
+    """Подготовить заранее всё, что нужно выбору в настройках (run.py --prepare).
+
+    Каждая часть качается тем же путём, что и кнопка «Скачать нужное»: быстрая
+    — скачивается и переводится в ONNX, точная — только скачивается.
+    """
+    from . import needs
+
+    out = []
+    for key in needed_parts():
+        try:
+            ok = bool(needs.install(key).get("ready"))
+        except Exception as err:
+            log.warning("не подготовлено «%s»: %s", key, err)
+            ok = False
+        out.append((needs.PARTS[key]["title"], ok))
+    return out
+
+
+def _run(engine: str, arr: np.ndarray, words: bool = True) -> Result:
+    """Распознать кусок выбранным движком. Время слов дают все, кроме быстрой."""
+    if engine in OX_ENGINES:
+        return _transcribe_ox(arr, OX_ENGINES[engine])
+    if engine == "torch":
+        return _transcribe_torch(arr, _precise_name(), word_timestamps=words,
+                                 threads=_threads())
+    name = config.get("live_model") or "v3_e2e_ctc"
+    try:
+        return _transcribe_onnx(arr, name)
+    except Exception as err:
+        # Запасной путь через torch — только если веса быстрой модели лежат на
+        # диске: иначе gigaam молча качал бы 420 МБ посреди звонка.
+        if not (CKPT_DIR / (name + ".ckpt")).exists():
+            raise
+        log.warning("ONNX путь не сработал (%s), переключаюсь на torch", err)
+        return _transcribe_torch(arr, name, word_timestamps=False)
 
 
 # ---------------------------------------------------------------- публичный API
 
 
 def transcribe_live(pcm: np.ndarray) -> Result:
-    """Быстрое распознавание для эфира. Кусок не длиннее 24 с."""
-    name = config.get("live_model") or "v3_e2e_ctc"
+    """Распознавание для эфира. Кусок не длиннее 24 с.
+
+    Каким движком — решает live_route: быстрая модель без времени слов или
+    точная со временем слов (тот же экземпляр, что у файлов и диктовки, если
+    роли выбраны одинаково). Вызывающему всё равно, какая модель внутри.
+    """
     arr = np.asarray(pcm, dtype=np.float32).reshape(-1)
     if arr.size < int(0.12 * SR):
         return Result("")
     arr = arr[: int(MAX_CHUNK_S * SR)]
-    try:
-        return _transcribe_onnx(arr, name)
-    except Exception as err:
-        log.warning("ONNX путь не сработал (%s), переключаюсь на torch", err)
-        return _transcribe_torch(arr, name, word_timestamps=False)
+    engine = live_route()["live"]
+    if engine != "fast":
+        try:
+            return _run(engine, arr)
+        except Exception as err:
+            _live_fallback(err)
+    return _run("fast", arr)
 
 
 def transcribe_precise(pcm: np.ndarray, words: bool = True,
-                       lang: str = "ru") -> Result:
-    """Точное распознавание для файлов и кнопки «перечитать точнее».
+                       lang: str = "ru", role: str = "files") -> Result:
+    """Распознавание файлов, «перечитать точнее» (role="files") и голосового
+    ввода (role="voice") — моделью, выбранной для этой роли.
 
     lang="en" уводит в английскую модель. Автоопределения языка нет намеренно:
     в словаре английской модели нет кириллицы, и русская запись дала бы на
@@ -496,15 +887,9 @@ def transcribe_precise(pcm: np.ndarray, words: bool = True,
         return Result("")
     if str(lang).lower() == "en":
         return _transcribe_english(arr[: int(MAX_CHUNK_EN_S * SR)])
-    name = config.get("offline_model") or "v3_e2e_rnnt"
     arr = arr[: int(MAX_CHUNK_S * SR)]
-    if words:
-        return _transcribe_torch(arr, name, word_timestamps=True)
-    try:
-        return _transcribe_onnx(arr, name)
-    except Exception as err:
-        log.warning("ONNX путь не сработал (%s), переключаюсь на torch", err)
-        return _transcribe_torch(arr, name, word_timestamps=False)
+    engine = live_route()["voice" if role == "voice" else "files"]
+    return _run(engine, arr, words=words)
 
 
 def transcribe_spans(
@@ -514,11 +899,13 @@ def transcribe_spans(
     words: bool = True,
     progress=None,
     lang: str = "ru",
+    role: str = "files",
 ) -> list[dict[str, Any]]:
     """Распознать набор участков, вернуть реплики с абсолютным временем.
 
     spans — в отсчётах: [{"start": n, "end": n}, ...]
     lang="en" уводит участки в английскую модель, см. transcribe_precise.
+    role — чья модель: файлов («files») или голосового ввода («voice»).
     """
     arr = np.asarray(pcm, dtype=np.float32).reshape(-1)
     out: list[dict[str, Any]] = []
@@ -530,7 +917,7 @@ def transcribe_spans(
         if b - a < int(0.12 * SR):
             continue
         piece = arr[a:b]
-        res = (transcribe_precise(piece, words=words, lang=lang) if precise
+        res = (transcribe_precise(piece, words=words, lang=lang, role=role) if precise
                else transcribe_live(piece))
         if not res.text:
             continue
@@ -539,10 +926,7 @@ def transcribe_spans(
             "start": off,
             "end": b / float(SR),
             "text": res.text,
-            "words": [
-                {"text": w.text, "start": off + w.start, "end": off + w.end}
-                for w in res.words
-            ],
+            "words": res.words_at(off),
         })
         if progress is not None:
             try:
@@ -560,12 +944,32 @@ _live_state: dict[str, Any] = {"state": "loading", "error": "", "seconds": None}
 
 
 def live_state() -> dict[str, Any]:
-    """Состояние модели эфира: загружается, готова или не загрузилась и почему."""
-    return dict(_live_state)
+    """Состояние модели эфира: загружается, готова или не загрузилась и почему.
+
+    Когда выбор моделей уже сделан (после прогрева), сверху — что работает на
+    деле: models — одной строкой, key — чем идёт каждая роль, reread — есть ли
+    «Перечитать точнее», precise_part — какую часть спрашивать перед ней, и
+    почему работает не то, что выбрано (note): человек должен видеть это в
+    окне, а не искать в журнале.
+    """
+    out = dict(_live_state)
+    route = _live_route
+    if route:
+        out["models"] = route.get("title")
+        out["key"] = route.get("key")
+        out["reread"] = bool(route.get("reread"))
+        out["precise_part"] = ENGINE_PARTS.get(route.get("files")) or "precise"
+        if route.get("why"):
+            out["note"] = route["why"]
+    return out
 
 
 def warmup(live: bool = True, precise: bool = False) -> dict[str, Any]:
-    """Прогреть модели, чтобы первая фраза не ждала загрузку."""
+    """Прогреть модели, чтобы первая фраза не ждала загрузку.
+
+    live греет модель эфира — какая она, решает live_route: в режиме одной
+    модели это точная, и отдельно греть её не нужно.
+    """
     info: dict[str, Any] = {}
     silence = np.zeros(int(0.5 * SR), dtype=np.float32)
     if live:

@@ -465,14 +465,15 @@ import hagen.vad as vad_mod  # noqa: E402
 
 real_precise, real_spans, real_split = (asr_mod.transcribe_precise,
                                         asr_mod.transcribe_spans, vad_mod.split_for_asr)
-asr_mod.transcribe_precise = lambda pcm, words=True, lang="ru": (
-    calls.append(("целиком", words)), asr_mod.Result("коротко"))[1]
+asr_mod.transcribe_precise = lambda pcm, words=True, lang="ru", role="files": (
+    calls.append(("целиком", words, role)), asr_mod.Result("коротко"))[1]
 asr_mod.transcribe_spans = lambda pcm, spans, precise=True, words=True, **kw: (
     calls.append(("по кускам", words)), [{"text": "часть", "start": 0, "end": 1}])[1]
 vad_mod.split_for_asr = lambda pcm, max_s=24.0: [{"start": 0, "end": pcm.size}]
 try:
     dictate.recognise(np.zeros(10 * dictate.SR, dtype=np.float32))
-    check("короткая диктовка идёт целиком", calls == [("целиком", True)], calls)
+    check("короткая диктовка идёт целиком, моделью голосового ввода",
+          calls == [("целиком", True, "voice")], calls)
     # Отметки времени диктовке не нужны, но именно они уводят на torch. При
     # words=False точная модель пошла бы через ONNX, которого в папке нет, и
     # первая диктовка молча ушла бы в многоминутный экспорт модели.

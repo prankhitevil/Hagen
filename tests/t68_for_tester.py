@@ -17,10 +17,17 @@
      остаются;
   5. обычная сборка личное НЕ трогает — режим не включается сам;
   6. .git и .gitignore не копируются только у --for-tester;
+  6в. сборка с разметкой ONNX не берёт ничего, что нужно только pyannote, и
+      пишет свой release.json;
+  6г. в сборку не едут закрытые от git «.local.» файлы, следы прогонов,
+      журналы загрузок и пути этой машины; открытый релиз (--public) — с
+      лицензией GPL и без настроек владельца; сборка для других перед
+      упаковкой проверяется списком личного;
   7. «Условия передачи»: кому, версия, дата, что можно и чего нельзя, про
-     токен HuggingFace и про то, что исходники видны;
+     то, что исходники видны; про токен HuggingFace — только у pyannote;
   8. номер сборки читается из .git без запуска git;
-  9. в «КАК УСТАНОВИТЬ» сказано про токен HuggingFace.
+  9. в «КАК УСТАНОВИТЬ» про токен HuggingFace — только у pyannote, у ONNX —
+     что разметка работает сразу.
 
 Настоящий settings.json не читается: подставляется временный (правило проверок).
 Архив не собирается — это часы работы и гигабайты.
@@ -72,6 +79,7 @@ MINE = {
     "yt_proxy": "http://логин:пароль@proxy:3128",
     "mic_device_index": 3, "far_device_index": 5, "mic_device_name": "Jabra",
     "vault_confirmed": True,
+    "asr_keep_parts": ["english"], "asr_pending_delete": ["fast"],
     "owner_name": "Иван Петров",
     "vault_path": "C:\\Users\\tester\\Documents\\Obsidian",
     "dictate_replacements": [{"from": "вайзэдвайс", "to": "WiseAdvice"}],
@@ -126,6 +134,11 @@ try:
           data["default_category"])
     check("автозапуск не прописывается чужому компьютеру",
           data["autostart_windows"] is False, data["autostart_windows"])
+    from hagen import asr as _asr  # noqa: E402
+
+    check("модели — рекомендованные: другой в архиве нет",
+          all(data.get(k) == v for k, v in _asr.RECOMMENDED.items()),
+          {k: data.get(k) for k in _asr.RECOMMENDED})
 
     say("")
     say("=== 4. Нужное остаётся ===")
@@ -158,25 +171,37 @@ try:
     say("=== 6б. Тяжёлое в сборку не кладём ===")
     from pathlib import Path as _P
 
+    from hagen import asr  # noqa: E402
+
+    # Решение 21.09: из моделей распознавания в архиве одна — рекомендованная
+    # точная на onnx-asr с полными весами; остальное качается по кнопке.
     lean = mp.ignore_for(_P("."), lean=True)
     fat = mp.ignore_for(_P("."), lean=False)
     gig = str(_P("models") / "gigaam")
-    names = ["v3_e2e_rnnt.ckpt", "v3_e2e_ctc.ckpt", "v3_e2e_rnnt_tokenizer.model", "прочее.txt"]
-    check("точная и запасная модели пропускаются",
-          lean(gig, names) == {"v3_e2e_rnnt.ckpt", "v3_e2e_ctc.ckpt", "v3_e2e_rnnt_tokenizer.model"},
-          sorted(lean(gig, names)))
+    names = ["v3_e2e_rnnt.ckpt", "v3_e2e_ctc.ckpt", "v3_e2e_rnnt_tokenizer.model",
+             "v3_e2e_ctc_tokenizer.model", "прочее.txt"]
+    check("torch-веса обеих моделей пропускаются",
+          lean(gig, names) == set(names) - {"прочее.txt"}, sorted(lean(gig, names)))
     check("посторонний файл не трогаем", "прочее.txt" not in lean(gig, names))
-    check("английская модель пропускается",
-          "onnx-asr" in lean(str(_P("models")), ["onnx", "onnx-asr", "hf"]),
-          sorted(lean(str(_P("models")), ["onnx", "onnx-asr", "hf"])))
-    check("быстрая модель и pyannote остаются",
-          not ({"onnx", "hf"} & lean(str(_P("models")), ["onnx", "onnx-asr", "hf"])))
-    check("ненужный ONNX точной модели пропускается",
-          "v3_e2e_rnnt_encoder.onnx" in lean(str(_P("models") / "onnx"),
-                                             ["v3_e2e_ctc.onnx", "v3_e2e_rnnt_encoder.onnx"]))
-    check("быстрая модель в ONNX остаётся",
-          "v3_e2e_ctc.onnx" not in lean(str(_P("models") / "onnx"),
-                                        ["v3_e2e_ctc.onnx", "v3_e2e_rnnt_encoder.onnx"]))
+    models = str(_P("models"))
+    check("папки моделей целиком не пропускаются: решают файлы",
+          not ({"onnx", "onnx-asr", "hf"} & lean(models, ["onnx", "onnx-asr", "hf"])),
+          sorted(lean(models, ["onnx", "onnx-asr", "hf"])))
+    onnx_names = ["v3_e2e_ctc.onnx", "v3_e2e_ctc.yaml", "v3_e2e_rnnt_encoder.onnx"]
+    check("быстрая модель и неиспользуемый ONNX точной пропускаются",
+          lean(str(_P("models") / "onnx"), onnx_names) == set(onnx_names),
+          sorted(lean(str(_P("models") / "onnx"), onnx_names)))
+    en_names = asr.english_files() + ["gigaam-v3"]
+    check("английская модель пропускается, папка точной — нет",
+          lean(str(_P("models") / "onnx-asr"), en_names) == set(asr.english_files()),
+          sorted(lean(str(_P("models") / "onnx-asr"), en_names)))
+    ox = str(_P("models") / "onnx-asr" / "gigaam-v3")
+    full, packed = asr.ox_files(None), asr.ox_files("int8")
+    check("рекомендованная точная модель кладётся целиком",
+          asr.recommended_part() == "precise_ox_fp32" and not (set(full) & lean(ox, full)),
+          (asr.recommended_part(), sorted(lean(ox, full))))
+    check("сжатые веса пропускаются, общие файлы остаются",
+          lean(ox, packed) == set(packed) - set(full), sorted(lean(ox, packed)))
     site = str(_P(".venv") / "Lib" / "site-packages")
     check("playwright пропускается", "playwright" in lean(site, ["playwright", "numpy", "torch"]),
           sorted(lean(site, ["playwright", "numpy", "torch"])))
@@ -185,20 +210,105 @@ try:
     check("с --all-models тяжёлое кладётся", fat(gig, names) == set(), sorted(fat(gig, names)))
     check("ключ --all-models есть", '"--all-models"' in ap_src)
     check("в памятке сказано про докачку",
-          "качается по кнопке" in mp.README and "430 МБ" in mp.README)
+          "качается по кнопке" in mp.README and "одна модель распознавания" in mp.README)
+
+    say("")
+    say("=== 6в. Разметка ONNX: ничего от pyannote ===")
+    by_onnx = mp.ignore_for(_P("."), lean=True, engine="onnx")
+    by_pya = mp.ignore_for(_P("."), lean=True, engine="pyannote")
+    libs = ["pyannote", "lightning", "pandas", "numpy", "torch", "onnxruntime",
+            "huggingface_hub", "PIL", "scipy"]
+    dropped = by_onnx(site, libs)
+    from hagen import diar_pyannote  # noqa: E402
+
+    if diar_pyannote.installed():
+        check("pyannote и его зависимости не кладутся",
+              {"pyannote", "lightning", "pandas"} <= dropped, sorted(dropped))
+    else:
+        say("   (pyannote не установлен — выкидывать нечего)")
+    check("нужное программе остаётся",
+          not ({"numpy", "torch", "onnxruntime", "huggingface_hub", "PIL", "scipy"} & dropped),
+          sorted(dropped))
+    check("у сборки с pyannote он остаётся", "pyannote" not in by_pya(site, libs))
+    hub = str(_P("models") / "hf" / "hub")
+    hub_names = ["models--pyannote--speaker-diarization-community-1",
+                 "models--istupakov--parakeet-tdt-0.6b-v2-onnx"]
+    if (mp.PROJECT / "models" / "hf" / "hub" / hub_names[0]).exists():
+        check("модели pyannote из кэша не кладутся, английская остаётся",
+              by_onnx(hub, hub_names) == {hub_names[0]}, sorted(by_onnx(hub, hub_names)))
+    check("модель разметки ONNX кладётся",
+          not by_onnx(str(_P("models")), ["diar"]) and not by_onnx(str(_P("models") / "diar"),
+                                                                  ["segmentation.onnx"]))
+    check("ключ --diarize есть и release.json пишется в сборку",
+          '"--diarize"' in ap_src and '"release.json"' in ap_src)
+    check("набор пакетов для pyannote едет в сборке",
+          "requirements-pyannote.txt" in mp.TOP_FILES)
+
+    say("")
+    say("=== 6г. Ни следов этой машины, ни локального ===")
+    tools_dir = str(_P("tools"))
+    check("закрытое от git «.local.» не кладётся",
+          lean(tools_dir, ["make_mirror.py", "mirror_check.local.txt"]) == {"mirror_check.local.txt"},
+          sorted(lean(tools_dir, ["make_mirror.py", "mirror_check.local.txt"])))
+    hf_dir = str(_P("models") / "hf")
+    check("журналы и кэш загрузок моделей не кладутся",
+          {"xet", "token"} <= lean(hf_dir, ["xet", "hub", "token"]) and "hub" not in lean(hf_dir, ["hub"]),
+          sorted(lean(hf_dir, ["xet", "hub", "token"])))
+    venv_dir, scripts_dir = str(_P(".venv")), str(_P(".venv") / "Scripts")
+    check("копия pyvenv.cfg и скрипты activate не кладутся, python.exe — да",
+          lean(venv_dir, ["pyvenv.cfg", "pyvenv.cfg.bak"]) == {"pyvenv.cfg.bak"}
+          and {"activate", "Activate.ps1"} <= lean(scripts_dir, ["activate", "Activate.ps1", "python.exe"])
+          and "python.exe" not in lean(scripts_dir, ["python.exe"]))
+    import fnmatch  # noqa: E402
+
+    pats = mp.test_patterns()
+    tested = {n for n in ["t1_x.py", "meeting.wav", "meeting_plan.json", "t8_rec.json", "t1_result.txt"]
+              if any(fnmatch.fnmatch(n, p) for p in pats)}
+    check("проверки — ровно то, что под git: следы прогонов не едут",
+          tested == {"t1_x.py", "meeting.wav", "meeting_plan.json"}, sorted(tested))
+    cfg_dir = TMP / "venvcfg"
+    (cfg_dir / ".venv").mkdir(parents=True)
+    (cfg_dir / ".venv" / "pyvenv.cfg").write_text(
+        "home = C:\\Users\\tester\\Apps\\Hagen\\python\ninclude-system-site-packages = false\n"
+        "version = 3.12.10\nexecutable = C:\\Users\\tester\\Apps\\Hagen\\python\\python.exe\n"
+        "command = C:\\Users\\tester\\Apps\\Hagen\\python\\python.exe -m venv "
+        "C:\\Users\\tester\\Apps\\Hagen\\.venv\n", encoding="utf-8")
+    (cfg_dir / ".venv" / "Scripts").mkdir()
+    script = cfg_dir / ".venv" / "Scripts" / "tool.py"
+    script.write_text("#!%s\\.venv\\Scripts\\python.exe\nprint(1)\n" % mp.machine_paths()[0],
+                      encoding="utf-8")
+    mp.neutral_venv(cfg_dir)
+    cfg_text = (cfg_dir / ".venv" / "pyvenv.cfg").read_text(encoding="utf-8")
+    check("в pyvenv.cfg сборки нет путей этой машины",
+          "Users" not in cfg_text and "home = %s\\python" % mp.NEUTRAL_ROOT in cfg_text
+          and "version = 3.12.10" in cfg_text, cfg_text)
+    script_text = script.read_text(encoding="utf-8")
+    check("в скриптах .venv\\Scripts путь этой машины заменён",
+          script_text.startswith("#!%s\\.venv" % mp.NEUTRAL_ROOT)
+          and not any(p.lower() in script_text.lower() for p in mp.machine_paths()),
+          script_text.splitlines()[0])
+    check("открытый релиз: ключ --public, лицензия GPL остаётся, настроек владельца нет",
+          '"--public"' in ap_src and '"--version"' in ap_src
+          and 'args.public and f == ".gitignore"' in ap_src and "if not args.public:" in ap_src)
+    check("сборка для других проверяется списком личного перед упаковкой",
+          "bad = check_stage(stage)" in ap_src and "if outside:" in ap_src)
 
     say("")
     say("=== 7. Условия передачи ===")
-    terms = mp.TERMS.format(to="Иван Иванов", version="abc1234", date="16.09.2026",
-                            to_contact="Иван Петров")
+    terms = mp.terms_for("pyannote", to="Иван Иванов", version="abc1234", date="16.09.2026",
+                         to_contact="Иван Петров")
+    terms_onnx = mp.terms_for("onnx", to="Иван Иванов", version="abc1234", date="16.09.2026",
+                              to_contact="Иван Петров")
     check("кому передано", "Иван Иванов" in terms)
     check("версия и дата", "abc1234" in terms and "16.09.2026" in terms)
     check("есть «что можно»", "Что можно" in terms)
     check("есть «чего нельзя»", "Чего нельзя" in terms and "третьим лицам" in terms)
     check("сказано, что исходники видны и защита письменная",
           "открытым" in terms and "техническими средствами" in terms)
-    check("сказано про токен HuggingFace и pyannote",
+    check("у pyannote сказано про токен HuggingFace",
           "HuggingFace" in terms and "pyannote" in terms)
+    check("у ONNX про токен ни слова",
+          "HuggingFace" not in terms_onnx and "токен" not in terms_onnx)
     check("сказано, что записи остаются у получателя",
           "остаются на компьютере получателя" in terms)
     check("файл называется по-русски и кладётся в папку",
@@ -214,10 +324,14 @@ try:
 
     say("")
     say("=== 9. Памятка установки ===")
-    check("в памятке сказано про токен HuggingFace",
-          "токен HuggingFace" in mp.README and "pyannote" in mp.README)
-    check("сказано, что без токена запись всё равно работает",
-          "Без него запись и стенограмма" in mp.README)
+    readme_py, readme_onnx = mp.readme_for("pyannote"), mp.readme_for("onnx")
+    check("у pyannote в памятке сказано про токен HuggingFace",
+          "токен HuggingFace" in readme_py and "pyannote" in readme_py)
+    check("у pyannote сказано, что без токена запись всё равно работает",
+          "Без него запись и стенограмма" in readme_py)
+    check("у ONNX токен HuggingFace не требуется, разметка работает сразу",
+          "HuggingFace" not in readme_onnx and "pyannote" not in readme_onnx
+          and "Разметка говорящих работает сразу" in readme_onnx)
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
