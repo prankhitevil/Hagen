@@ -113,11 +113,19 @@ class TrackPipeline:
             _write_silence(self.writer, lag)
             log.info("запись %s: дорожка %s короче другой на %.1f c — выровнял тишиной",
                      rec_id, track, lag / float(SR))
+        # Нахлёст на разрезе длинной фразы — только если модель эфира отдаёт
+        # время слов: фразы сшиваются по нему. У быстрой модели его нет.
+        stitch = asr.live_route().get("live") != "fast"
         self.detector = vad.StreamingPhraseDetector(
             silence_ms=int(config.get("silence_finalize_ms") or 2200),
             max_phrase_s=float(config.get("max_phrase_seconds") or 24.0),
             start_sample=self.writer.frames,
+            overlap_s=vad.OVERLAP_S if stitch else 0.0,
         )
+        #: Где разрезана без паузы текущая фраза (отсчёт) и с какой секунды её
+        #: слова — её, а не предыдущей фразы (точка сшивки).
+        self._joint: int | None = None
+        self._keep_from: float | None = None
 
         self._q: queue.Queue = queue.Queue(maxsize=2000)
         self._stop = threading.Event()
@@ -216,6 +224,7 @@ class TrackPipeline:
             self.on_draft(self.track, "", 0.0)
         self._phrase_start = None
         self._last_draft_text = ""
+        self._joint, self._keep_from = None, None
         _write_silence(self.writer, samples)
         self._total += int(samples)
         self._buf = np.zeros(0, dtype=np.float32)
@@ -239,9 +248,11 @@ class TrackPipeline:
         for ev in events:
             if ev["type"] == "speech_start":
                 self._phrase_start = int(ev["start"])
+                self._joint = ev.get("joint")
                 self._last_draft_text = ""
             elif ev["type"] == "phrase_end":
-                self._finalize(int(ev["start"]), int(ev["end"]), ev.get("reason", "silence"))
+                self._finalize(int(ev["start"]), int(ev["end"]), ev.get("reason", "silence"),
+                               ev.get("cut"))
 
         if self._drafts and self.detector.in_speech and self._phrase_start is not None:
             self._maybe_draft()
@@ -286,8 +297,15 @@ class TrackPipeline:
             if self.on_draft is not None:
                 self.on_draft(self.track, text, start / float(SR))
 
-    def _finalize(self, start: int, end: int, reason: str) -> None:
-        """Закрепить фразу: отдельный финальный проход по всей её длине."""
+    def _finalize(self, start: int, end: int, reason: str, cut: int | None = None) -> None:
+        """Закрепить фразу: отдельный финальный проход по всей её длине.
+
+        Длинная фраза, разрезанная без паузы, сшивается со следующей по
+        времени слов (asr.stitch_point): эта берёт слова до точки сшивки,
+        следующая — после, и слово на разрезе выходит целым и ровно один раз.
+        """
+        joint, keep_from = self._joint, self._keep_from
+        self._joint, self._keep_from = None, None
         start = max(0, start)
         end = min(end, self._total)
         if end - start < int(0.25 * SR):
@@ -299,6 +317,11 @@ class TrackPipeline:
             return
         try:
             res = asr.transcribe_live(piece)
+            if keep_from is not None and joint is not None and not res.words and res.text:
+                # Слов нет — модель эфира на ходу откатилась на быструю: сшить
+                # нечем, берём фразу с самого разреза, без нахлёста.
+                start = int(joint)
+                res = asr.transcribe_live(self._slice(start, end))
         except Exception as err:
             self.error = str(err)
             log.error("не удалось распознать фразу дорожки %s: %s", self.track, err)
@@ -309,6 +332,18 @@ class TrackPipeline:
         # Время слов есть, только если его дала модель эфира (режим одной
         # модели). Отсчитано оно от начала куска, а в реплике — от начала записи.
         words = res.words_at(start / float(SR))
+        seg_start, seg_end = start / float(SR), end / float(SR)
+        if keep_from is not None and words:
+            words = asr.words_after(words, keep_from)
+            text = asr.words_text(words)
+            seg_start = max(seg_start, keep_from)
+        if cut is not None and words:
+            overlap = self.detector.overlap_frames * vad.FRAME / float(SR)
+            point = asr.stitch_point(words, int(cut) / float(SR), overlap)
+            words = asr.words_before(words, point)
+            text = asr.words_text(words)
+            seg_end = point
+            self._keep_from = point
         # Словарь из ручных правок: имена и термины, которые человек уже
         # правил руками, сразу пишем так, как он их поправил (17.09). В словах
         # те же замены, иначе текст и слова разойдутся.
@@ -329,8 +364,8 @@ class TrackPipeline:
 
         seg = store.make_segment(
             track=self.track,
-            start=start / float(SR),
-            end=end / float(SR),
+            start=seg_start,
+            end=seg_end,
             text=text,
         )
         seg["reason"] = reason

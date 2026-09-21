@@ -343,6 +343,25 @@ async def api_storage_reveal(request: Request) -> JSONResponse:
     return JSONResponse({"opened": str(folder)})
 
 
+@app.post("/api/pick-folder")
+async def api_pick_folder(request: Request) -> JSONResponse:
+    """Кнопка «Выбрать…» у поля с папкой: окно выбора, как в Проводнике.
+
+    Путь только возвращается — в поле его кладёт и сохраняет страница, так же
+    как вписанный руками. None — человек закрыл окно, ничего не выбрав.
+    """
+    body = await request.json()
+    title = str((body or {}).get("title") or "Выбор папки").strip()[:120]
+    start = str((body or {}).get("start") or "").strip()[:1000] or None
+    loop = asyncio.get_running_loop()
+    try:
+        path = await loop.run_in_executor(None, platform.shell().pick_folder, title, start)
+    except Exception as err:
+        raise HTTPException(status_code=500, detail="Окно выбора папки не открылось (%s). "
+                                                    "Путь можно вписать в поле." % err) from None
+    return JSONResponse({"path": path})
+
+
 @app.post("/api/storage/purge")
 async def api_storage_purge() -> JSONResponse:
     """«Удалить сейчас» — звук звонков старше срока, не дожидаясь проверки по расписанию."""

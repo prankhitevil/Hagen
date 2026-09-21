@@ -6,6 +6,14 @@
       порога (по умолчанию 2,2 с), адаптируется к фоновому шуму.
   speech_timestamps / split_for_asr — для готовых файлов: нарезка по паузам
       на куски не длиннее 24 с (у модели распознавания предел 25 с).
+
+Разрез без паузы. Когда человек говорит дольше предела без паузы, речь приходится
+резать прямо посреди звука — часто посреди слова: первый кусок кончается на
+«организован…», второй начинается с «…ное», и модель, не слыша начала, пишет
+похожее настоящее слово. Поэтому в таком месте кусок после разреза начинается
+на OVERLAP_S раньше разреза: слово на стыке целиком попадает во второй кусок, а
+распознавание сшивает куски по времени слов (asr.transcribe_spans, живая
+запись — live.py). Где разрез пришёлся на паузу, нахлёста нет.
 """
 from __future__ import annotations
 
@@ -17,6 +25,12 @@ import numpy as np
 SR = 16000
 FRAME = 512           # модель Silero v5 требует ровно 512 отсчётов на 16 кГц
 FRAME_MS = FRAME * 1000.0 / SR   # 32 мс
+
+#: Нахлёст кусков в месте разреза без паузы, секунды. Слово дольше полутора
+#: секунд — редкость, а распознавать полторы секунды дважды почти ничего не стоит.
+OVERLAP_S = 1.5
+#: Стык короче этого — разрез без паузы: поиск речи упёрся в предел длины.
+_JOINT_GAP_S = 0.05
 
 _model = None
 _model_lock = threading.Lock()
@@ -74,11 +88,16 @@ class StreamingPhraseDetector:
         base_threshold: float = 0.50,
         onnx: bool = True,
         start_sample: int = 0,
+        overlap_s: float = 0.0,
     ):
         # свой экземпляр модели на дорожку: состояние не должно пересекаться
         self.model = new_model(onnx=onnx)
         self.silence_frames_needed = max(1, int(round(silence_ms / FRAME_MS)))
         self.max_phrase_frames = max(1, int(round(max_phrase_s * 1000.0 / FRAME_MS)))
+        # Нахлёст при разрезе на пределе длины (см. шапку модуля). Ноль — как
+        # раньше: у быстрой модели нет времени слов, сшить фразы ей нечем.
+        self.overlap_frames = max(0, int(round(float(overlap_s) * 1000.0 / FRAME_MS)))
+        self.overlap_frames = min(self.overlap_frames, self.max_phrase_frames // 2)
         self.base_threshold = float(base_threshold)
 
         self._tail = np.zeros(0, dtype=np.float32)
@@ -193,12 +212,30 @@ class StreamingPhraseDetector:
                         continue
                 # защита от бесконечной фразы: модель не берёт больше 25 с
                 if idx - self._speech_start_frame >= self.max_phrase_frames:
-                    events.append({
+                    cut = (idx + 1) * FRAME
+                    event = {
                         "type": "phrase_end",
                         "start": self._speech_start_frame * FRAME,
-                        "end": (idx + 1) * FRAME,
+                        "end": cut,
                         "reason": "too_long",
-                    })
+                    }
+                    if self.overlap_frames:
+                        # Разрез посреди речи: человек говорит дальше, и следующая
+                        # фраза начинается на нахлёст раньше разреза — слово на
+                        # стыке целиком попадёт в неё. Сшивает фразы live.py.
+                        event["cut"] = cut
+                        events.append(event)
+                        self._speech_start_frame = max(self._speech_start_frame,
+                                                       idx + 1 - self.overlap_frames)
+                        self._last_speech_frame = idx
+                        self._silence_run = 0
+                        events.append({
+                            "type": "speech_start",
+                            "start": self._speech_start_frame * FRAME,
+                            "joint": cut,
+                        })
+                        continue
+                    events.append(event)
                     self._in_speech = False
                     self._speech_run = 0
                     self._silence_run = 0
@@ -267,18 +304,23 @@ def speech_timestamps(
 
 
 def split_for_asr(
-    pcm: np.ndarray, max_s: float = 24.0, merge_gap_s: float = 0.6
+    pcm: np.ndarray, max_s: float = 24.0, merge_gap_s: float = 0.6,
+    overlap_s: float = OVERLAP_S,
 ) -> list[dict[str, float]]:
     """Нарезка для распознавания: куски речи не длиннее max_s.
 
-    Silero сам режет длинную речь по самой длинной внутренней паузе, поэтому
-    слова на стыках не обрубаются. Здесь мы дополнительно склеиваем соседние
-    короткие участки, чтобы не гонять модель на каждое слово отдельно.
+    Silero режет длинную речь по самой длинной внутренней паузе, а если паузы
+    нет — прямо на пределе, посреди слова. Такие места помечаются, и кусок
+    после разреза начинается на overlap_s раньше (mark_joints); чтобы и с
+    нахлёстом кусок не вышел за max_s, Silero режет на overlap_s раньше
+    предела. Ещё мы склеиваем соседние короткие участки, чтобы не гонять модель
+    на каждое слово отдельно.
     """
-    spans = speech_timestamps(pcm, max_speech_s=max_s)
+    overlap_s = max(0.0, float(overlap_s))
+    spans = speech_timestamps(pcm, max_speech_s=max_s - overlap_s)
     if not spans:
         return []
-    max_n = int(max_s * SR)
+    max_n = int((max_s - overlap_s) * SR)
     gap_n = int(merge_gap_s * SR)
     out: list[dict[str, float]] = [dict(spans[0])]
     for sp in spans[1:]:
@@ -291,7 +333,29 @@ def split_for_asr(
     for sp in out:
         sp["start"] = max(0, int(sp["start"]))
         sp["end"] = min(total, int(sp["end"]))
-    return [sp for sp in out if sp["end"] > sp["start"]]
+    return mark_joints([sp for sp in out if sp["end"] > sp["start"]], overlap_s)
+
+
+def mark_joints(spans: list[dict[str, Any]], overlap_s: float = OVERLAP_S) -> list[dict[str, Any]]:
+    """Пометить разрезы без паузы и начать кусок после такого разреза раньше.
+
+    У куска, кончившегося разрезом, — "cut": где был разрез (отсчёт); у
+    следующего — "joint" (тот же отсчёт), а его "start" сдвинут на overlap_s
+    назад, но не раньше начала предыдущего куска. Сшивает куски
+    asr.transcribe_spans.
+    """
+    out = [dict(sp) for sp in spans]
+    over = int(float(overlap_s) * SR)
+    if over <= 0:
+        return out
+    gap = int(_JOINT_GAP_S * SR)
+    for prev, cur in zip(out, out[1:]):
+        if int(cur["start"]) - int(prev["end"]) <= gap:
+            joint = int(cur["start"])
+            prev["cut"] = joint
+            cur["joint"] = joint
+            cur["start"] = max(int(prev["start"]), joint - over)
+    return out
 
 
 def speech_ratio(pcm: np.ndarray) -> float:

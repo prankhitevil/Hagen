@@ -16,8 +16,9 @@ r"""Установка «Hagen» на компьютер с Windows.
     3. кладёт копию Python внутрь папки (узкое правило антивируса, переносимость);
     4. скачивает модель распознавания — по умолчанию одну точную, около 890 МБ;
        остальные выбираются потом в «Настройки → Модели»;
-    5. спрашивает папку хранилища Obsidian (и токен HuggingFace — только в
-       релизе с разметкой через pyannote, см. release.json);
+    5. спрашивает папку хранилища Obsidian — окном выбора, как в Проводнике
+       (и токен HuggingFace — только в релизе с разметкой через pyannote, см.
+       release.json);
     6. создаёт ярлык «Hagen» на рабочем столе и в меню «Пуск»;
     7. печатает файлы, которые нужно разрешить в антивирусе.
 
@@ -100,6 +101,22 @@ def ask(question: str, default: str = "") -> str:
     except EOFError:
         got = ""
     return got or default
+
+
+def pick_folder(title: str, start: str) -> str | None:
+    """Папка окном, как в Проводнике, — тем же, что у кнопки «Выбрать…» в
+    настройках программы. None — окно закрыли или оно не открылось.
+
+    Остальную программу установщик импортировать не может (см. diarize_engine),
+    а окно выбора — может: его модули обходятся стандартной библиотекой Python.
+    """
+    try:
+        from hagen import platform
+
+        return platform.shell().pick_folder(title, start)
+    except Exception as err:
+        say("       Окно выбора папки не открылось: %s" % err)
+        return None
 
 
 # ---------------------------------------------------------------- проверки
@@ -503,7 +520,14 @@ def configure() -> None:
 
     default_vault = data.get("vault_path") or str(Path.home() / "Obsidian")
     say("  Куда складывать стенограммы и протоколы (папка хранилища Obsidian).")
-    vault = ask("Путь к хранилищу", default_vault)
+    say("  Открываю окно выбора папки…")
+    vault = pick_folder("Папка хранилища Obsidian — сюда лягут стенограммы", default_vault)
+    if vault:
+        say("%s хранилище: %s" % (OK, vault))
+    else:
+        say("  Папку не выбрали — впишите путь здесь или нажмите Enter,")
+        say("  чтобы взять предложенный.")
+        vault = ask("Путь к хранилищу", default_vault)
     data["vault_path"] = vault
     data.setdefault("vault_subfolder", "Meetings")
     if not Path(vault).exists():

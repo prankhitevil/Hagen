@@ -45,7 +45,7 @@ isolate.settings()
 
 import numpy as np  # noqa: E402
 
-from hagen import asr, audio_io, config, live, needs, store  # noqa: E402
+from hagen import asr, audio_io, config, live, needs, store, vad  # noqa: E402
 
 LINES = []
 FAIL = []
@@ -303,9 +303,17 @@ try:
     pick()
     segs, drafts, meta = record("одна точная")
     check("реплики есть, черновиков нет", len(segs) >= 2 and not drafts, (len(segs), drafts[:2]))
+    # Речь в meeting.wav без пауз режется на пределе фразы, и фраза после
+    # такого разреза начата на нахлёст раньше реплики (vad.OVERLAP_S), а
+    # подставная модель раскладывает слова по всему куску. Точно сверяем
+    # первую реплику; у остальных — что время слов от начала записи, а не куска.
     check("у каждой реплики — время слов от начала записи",
-          segs and all(len(s.get("words") or []) == 3
-                       and abs(s["words"][0]["start"] - (s["start"] + 0.05)) < 0.01 for s in segs))
+          segs and all(s.get("words") for s in segs)
+          and abs(segs[0]["words"][0]["start"] - (segs[0]["start"] + 0.05)) < 0.01
+          and all(s["start"] - vad.OVERLAP_S - 0.01 <= s["words"][0]["start"] <= s["end"]
+                  for s in segs),
+          [(round(s["start"], 2), [round(w["start"], 2) for w in s.get("words") or []])
+           for s in segs])
     check("замена словаря — и в тексте, и в словах",
           all(s["text"].startswith("Смета-2026") and s["words"][0]["text"] == "Смета-2026"
               for s in segs))

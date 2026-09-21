@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Программа как процесс Windows: консоль, окно ошибки, второй запуск, файлы.
+"""Программа как процесс Windows: консоль, окно ошибки, выбор папки, второй запуск, файлы.
 
 Сюда собраны обращения к Windows, которые жили вне розеток: в `run.py`
 (заголовок и пряталка консоли, окно ошибки, подъём уже открытого окна), в
@@ -9,13 +9,15 @@
 
 Модуль нарочно ничего не берёт из `hagen`: часть его зовётся в самом начале
 запуска, до настройки журнала, и окно ошибки должно показаться даже тогда,
-когда остальная программа не поднялась.
+когда остальная программа не поднялась. Выбор папки зовёт ещё и установщик —
+до того, как появится окружение с библиотеками программы.
 
 Наружу он выходит через двери «Системы» (`system.py`) и «Оболочки» (`shell.py`).
 """
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 #: CREATE_NO_WINDOW: дочерняя программа (ffmpeg, ffprobe, Claude CLI) без
@@ -83,6 +85,45 @@ def show_error(title: str, text: str) -> None:
         ctypes.windll.user32.MessageBoxW(None, str(text), str(title), 0x10)
     except Exception:
         print("%s: %s" % (title, text))
+
+
+#: Окно выбора папки открыто: второе поверх первого только запутает.
+_picking = threading.Lock()
+
+
+def pick_folder(title: str, start: str | None = None) -> str | None:
+    """Выбрать папку окном Windows. None — человек передумал.
+
+    Tk 8.6 показывает системное окно выбора — то же, что в Проводнике, с
+    адресной строкой и быстрым доступом, а не старое дерево папок, как
+    диалог WinForms. tkinter есть и в переносимом Python программы, и в
+    окружении, так что окно одно на установщик и на настройки.
+
+    Окно держится поверх остальных: служба зовёт его из своего потока, и без
+    этого оно могло бы открыться за окном программы.
+    """
+    if not _picking.acquire(blocking=False):
+        raise RuntimeError("уже открыто другое такое окно")
+    try:
+        import tkinter
+        from tkinter import filedialog
+
+        here = Path(os.path.expandvars(str(start or "").strip())).expanduser() if start else None
+        if here is not None and not here.is_absolute():
+            here = None
+        while here is not None and not here.is_dir():
+            here = here.parent if here.parent != here else None
+        root = tkinter.Tk()
+        try:
+            root.withdraw()
+            root.attributes("-topmost", True)
+            got = filedialog.askdirectory(parent=root, title=str(title or "Выбор папки"),
+                                          initialdir=str(here) if here else None)
+        finally:
+            root.destroy()
+        return os.path.normpath(got) if got else None
+    finally:
+        _picking.release()
 
 
 def focus_existing(title: str) -> bool:

@@ -4,8 +4,8 @@
 Что описывает розетка — в `hagen/platform/base.py`, класс `Shell`.
 
 Код лежит рядом: `tray.py` — значок, меню, уведомления с кнопками и
-автозапуск; `splash.py` — заставка при запуске; `app.py` — окно ошибки и подъём
-уже открытого окна программы. Здесь только дверь наружу.
+автозапуск; `splash.py` — заставка при запуске; `app.py` — окно ошибки, выбор
+папки и подъём уже открытого окна программы. Здесь только дверь наружу.
 
 Заставка разговаривает с Windows тем же способом, что и трей, — своё окно и
 свой цикл сообщений, — поэтому она здесь, а не отдельно.
@@ -28,6 +28,7 @@ __all__ = [
     "app_shell",
     "make_notifier",
     "ask_yes_no",
+    "pick_folder",
     "show_error",
     "focus_existing",
     "splash_show",
@@ -82,6 +83,11 @@ def ask_yes_no(title: str, text: str) -> bool:
     from . import tray
 
     return tray.ask_yes_no(title, text)
+
+
+def pick_folder(title: str, start: str | None = None) -> str | None:
+    """Выбрать папку окном системы, как в Проводнике. None — человек передумал."""
+    return app.pick_folder(title, start)
 
 
 def show_error(title: str, text: str) -> None:

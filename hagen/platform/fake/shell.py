@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 __all__ = [
     "icon_paths", "autostart_enabled", "set_autostart", "sync_autostart",
-    "app_shell", "make_notifier", "ask_yes_no", "show_error", "focus_existing",
+    "app_shell", "make_notifier", "ask_yes_no", "pick_folder", "show_error", "focus_existing",
     "splash_show", "splash_close",
 ]
 
@@ -28,6 +28,12 @@ ANSWER = True
 TOASTS: list[dict[str, Any]] = []
 QUESTIONS: list[tuple[str, str]] = []
 
+#: Какую папку «выбрать» в окне выбора: None — человек передумал.
+PICKED: str | None = None
+
+#: Открытые окна выбора папки: (заголовок, где открылось).
+PICKS: list[tuple[str, str | None]] = []
+
 #: Сколько раз поднимали и убирали заставку.
 SPLASH: dict[str, int] = {"shown": 0, "closed": 0}
 
@@ -39,12 +45,14 @@ RUNNING = False
 
 
 def reset() -> None:
-    global AUTOSTART, ANSWER, RUNNING
+    global AUTOSTART, ANSWER, RUNNING, PICKED
     AUTOSTART = False
     ANSWER = True
     RUNNING = False
+    PICKED = None
     TOASTS.clear()
     QUESTIONS.clear()
+    PICKS.clear()
     ERRORS.clear()
     SPLASH["shown"] = 0
     SPLASH["closed"] = 0
@@ -73,6 +81,11 @@ def sync_autostart() -> None:
 def ask_yes_no(title: str, text: str) -> bool:
     QUESTIONS.append((title, text))
     return bool(ANSWER)
+
+
+def pick_folder(title: str, start: str | None = None) -> str | None:
+    PICKS.append((title, start))
+    return PICKED
 
 
 def show_error(title: str, text: str) -> None:

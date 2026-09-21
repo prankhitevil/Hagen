@@ -531,7 +531,9 @@
     <div class="set-panes">
     <div id="t-general" class="tabpane">
       <label class="field">Папка заметок / хранилище
-        <input id="set-vault" type="text">
+        <span class="row dt-row grow"><input id="set-vault" type="text">
+          <button class="ghost small js-pick-folder" type="button" data-for="set-vault"
+                  title="Выбрать папку в окне, как в Проводнике. Путь можно и вписать руками.">Выбрать…</button></span>
         <span class="tiny muted">Стенограммы сохраняются сюда, в подпапку категории.</span>
       </label>
       <label class="field">Подпапка для записей

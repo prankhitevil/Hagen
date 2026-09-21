@@ -892,6 +892,45 @@ def transcribe_precise(pcm: np.ndarray, words: bool = True,
     return _run(engine, arr, words=words)
 
 
+def _center(word: dict[str, Any]) -> float:
+    return (float(word["start"]) + float(word["end"])) / 2.0
+
+
+def stitch_point(words: list[dict[str, Any]], joint: float, overlap: float) -> float:
+    """Где кончается кусок, разрезанный без паузы в момент joint (секунды).
+
+    Следующий кусок начат на overlap раньше разреза, так что последние overlap
+    секунд этого куска распознаны дважды. Точку сшивки ищем в промежутке между
+    словами поближе к середине нахлёста: там у обоих кусков есть звук с обеих
+    сторон. Слово, которое задел разрез, в этот кусок не попадает никогда — его
+    целиком возьмёт следующий. Промежутка нет — середина нахлёста.
+    """
+    target = joint - overlap / 2.0
+    lo, hi = joint - overlap + 0.2, joint - 0.3
+    best: float | None = None
+    for a, b in zip(words, words[1:]):
+        gap = (float(a["end"]) + float(b["start"])) / 2.0
+        if lo <= gap <= hi and (best is None or abs(gap - target) < abs(best - target)):
+            best = gap
+    return best if best is not None else target
+
+
+def words_before(words: list[dict[str, Any]], t: float) -> list[dict[str, Any]]:
+    """Слова, чья середина раньше точки сшивки t, — они остаются первому куску."""
+    return [w for w in words if _center(w) < t]
+
+
+def words_after(words: list[dict[str, Any]], t: float) -> list[dict[str, Any]]:
+    """Слова, чья середина не раньше точки сшивки t, — они достаются второму куску."""
+    return [w for w in words if _center(w) >= t]
+
+
+def words_text(words: list[dict[str, Any]]) -> str:
+    """Текст из слов. Знаки препинания и заглавные у модели внутри слов, так что
+    текст куска, собранный из его слов, совпадает с тем, что дала модель."""
+    return " ".join(str(w.get("text") or "").strip() for w in words if w.get("text")).strip()
+
+
 def transcribe_spans(
     pcm: np.ndarray,
     spans: list[dict[str, float]],
@@ -906,33 +945,63 @@ def transcribe_spans(
     spans — в отсчётах: [{"start": n, "end": n}, ...]
     lang="en" уводит участки в английскую модель, см. transcribe_precise.
     role — чья модель: файлов («files») или голосового ввода («voice»).
+
+    Разрез без паузы (vad.mark_joints): у куска перед разрезом есть "cut", у
+    следующего — "joint", и он начат раньше разреза. Такие куски сшиваются по
+    времени слов: первому остаются слова до точки сшивки (stitch_point),
+    второму — после неё, и слово на стыке выходит целым и ровно один раз. Нет
+    времени слов (быстрая модель) — сшить нечем: второй кусок тогда
+    распознаётся с самого разреза, без нахлёста, как раньше.
     """
     arr = np.asarray(pcm, dtype=np.float32).reshape(-1)
     out: list[dict[str, Any]] = []
     total = max(1, len(spans))
+    keep_from: float | None = None      # точка сшивки с предыдущим куском, секунды
+    prev_words = True                   # были ли слова у предыдущего куска
     for i, sp in enumerate(spans):
         a, b = int(sp["start"]), int(sp["end"])
+        joint = sp.get("joint")
+        if joint is not None and not prev_words:
+            a = int(joint)              # сшить нечем — без нахлёста
         a = max(0, a)
         b = min(arr.shape[0], b)
         if b - a < int(0.12 * SR):
+            keep_from, prev_words = None, True
             continue
         piece = arr[a:b]
         res = (transcribe_precise(piece, words=words, lang=lang, role=role) if precise
                else transcribe_live(piece))
-        if not res.text:
-            continue
         off = a / float(SR)
-        out.append({
-            "start": off,
-            "end": b / float(SR),
-            "text": res.text,
-            "words": res.words_at(off),
-        })
+        text = res.text
+        got = res.words_at(off)
+        start, end = off, b / float(SR)
+        if keep_from is not None and got:
+            got = words_after(got, keep_from)
+            text = words_text(got)
+            start = max(off, keep_from)
+        keep_from = None
+        prev_words = bool(res.words) or not res.text
+        cut = sp.get("cut")
+        if cut is not None and got and i + 1 < len(spans):
+            overlap = (int(cut) - int(spans[i + 1]["start"])) / float(SR)
+            if overlap > 0:
+                keep_from = stitch_point(got, int(cut) / float(SR), overlap)
+                got = words_before(got, keep_from)
+                text = words_text(got)
+                end = keep_from
         if progress is not None:
             try:
                 progress((i + 1) / float(total))
             except Exception:
                 pass
+        if not text:
+            continue
+        out.append({
+            "start": start,
+            "end": end,
+            "text": text,
+            "words": got,
+        })
     return out
 
 

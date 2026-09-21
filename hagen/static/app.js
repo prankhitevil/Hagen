@@ -2787,11 +2787,7 @@ async function openSettings() {
   $('set-cli-model').value = s.claude_cli_model || '';
   $('set-cli-timeout').value = s.claude_timeout_s || 600;
   fillConnections();
-  const v = S.vault || {};
-  $('vault-state').textContent = v.exists
-    ? `папка на месте, заметок: ${v.notes != null ? v.notes : '—'}`
-    : 'папка будет создана при первом сохранении';
-  $('vault-state').className = 'tiny ' + (v.writable === false ? '' : 'muted');
+  paintVaultState();
   $('outlook-state').textContent = S.caps.outlook
     ? 'классический Outlook найден, встречи читаются'
     : 'COM-доступ к Outlook недоступен (возможно, запущен «новый Outlook»)';
@@ -2814,7 +2810,44 @@ async function openSettings() {
   // Поля привязываем при открытии: часть из них (список сервисов, промпты)
   // появляется только теперь.
   bindSettingsFields();
+  bindPickFolder();
   showDialog('dlg-settings');
+}
+
+/* Строка под папкой заметок: на месте ли она и сколько в ней заметок. */
+function paintVaultState() {
+  const v = S.vault || {};
+  $('vault-state').textContent = v.exists
+    ? `папка на месте, заметок: ${v.notes != null ? v.notes : '—'}`
+    : 'папка будет создана при первом сохранении';
+  $('vault-state').className = 'tiny ' + (v.writable === false ? '' : 'muted');
+}
+
+/* Кнопка «Выбрать…» у поля с папкой: окно выбора, как в Проводнике.
+   Выбранный путь ложится в поле и сохраняется так же, как вписанный руками.
+   К другому полю подключается одной разметкой: data-for="<id поля>". */
+function bindPickFolder() {
+  document.querySelectorAll('.js-pick-folder').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const input = $(btn.dataset.for);
+      if (!input) return;
+      const label = btn.closest('.field');
+      const title = ((label && label.firstChild && label.firstChild.textContent) || '').trim();
+      btn.disabled = true;
+      try {
+        const res = await api('/api/pick-folder', {
+          method: 'POST', body: { title: title || 'Выбор папки', start: input.value.trim() } });
+        if (res.path) {
+          input.value = res.path;
+          if (input.closest('#dlg-settings')) await applySettings(input);
+        }
+      } catch (err) { notice(err.message, 'err'); }
+      finally { btn.disabled = false; }
+    });
+  });
 }
 
 /* «Настройки → Основное»: где лежит звук и видео, сколько занимает, что удалится по сроку. */
@@ -3420,6 +3453,7 @@ async function applySettings(from) {
     // Сменили выбор моделей — служба пересчитает, что скачать и что не нужно.
     if (from && /^set-(asr|live-draft)/.test(from.id || '')) await loadAsrModels();
     await loadState();
+    paintVaultState();
     if (S.currentId) await refreshCurrent();
     paintAll();
   } catch (e) { notice(e.message, 'err'); }
