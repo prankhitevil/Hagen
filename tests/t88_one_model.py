@@ -8,7 +8,8 @@ torch) и веса onnx-asr (сжатые или полные). Программ
 
 Что проверяем — распознаватели подставные, поиск речи и дорожки эфира настоящие:
   1. Умолчания — рекомендованное (одна точная, onnx-asr, полные веса); перенос
-     прежнего выбора стенда (asr_preset) и установки без стенда («как было»).
+     прежнего выбора стенда (asr_preset); файл без выбора — в том числе тот,
+     что пишет установщик, — даёт заводское, а не две модели.
   2. Роли: звонки, голосовой ввод и файлы идут своими движками; torch — с
      закреплёнными потоками; выбор держится до перезапуска.
   3. Замена недостающего движка первым готовым, причина видна; отказ точной
@@ -147,7 +148,7 @@ try:
                  "one_torch_2": ("torch", "torch", "torch", False, False),
                  "one_ox_fp32": ("ox_fp32", "ox_fp32", "ox_fp32", False, False),
                  "one_ox_int8": ("ox_int8", "ox_int8", "ox_int8", False, False),
-                 None: ("fast", "torch", "torch", True, True)}
+                 None: ("ox_fp32", "ox_fp32", "ox_fp32", False, False)}
         for preset, (lv, vc, fl, rr, dr) in cases.items():
             raw = {"live_model": "v3_e2e_ctc", "owner_name": "Я"}
             if preset:
@@ -155,9 +156,20 @@ try:
             config.SETTINGS_PATH.write_text(json.dumps(raw), encoding="utf-8")
             config._cache = None
             got = asr.chosen()
-            check("перенос: %s" % (preset or "установка без стенда — «как было»"),
+            check("перенос: %s" % (preset or "без выбора на стенде — заводское"),
                   (got["live"], got["voice"], got["files"], got["reread"], got["drafts"])
                   == (lv, vc, fl, rr, dr), got)
+        # Ровно такой файл пишет установщик: в нём только папка хранилища.
+        # Свежая установка должна показывать ту модель, что скачана.
+        raw = {"vault_path": "C:\\Users\\tester\\Obsidian", "vault_subfolder": "Meetings"}
+        config.SETTINGS_PATH.write_text(json.dumps(raw), encoding="utf-8")
+        config._cache = None
+        got = asr.chosen()
+        check("свежая установка: одна точная модель, onnx-asr, полные веса",
+              (got["live"], got["voice"], got["files"], got["reread"], got["drafts"])
+              == ("ox_fp32", "ox_fp32", "ox_fp32", False, False)
+              and config.get("asr_count") == 1 and config.get("asr_engine") == "onnx_asr"
+              and config.get("asr_weights") == "fp32", got)
         raw = {"live_model": "v3_e2e_ctc", "asr_preset": "current", "asr_count": 1,
                "asr_single": "precise", "asr_engine": "torch"}
         config.SETTINGS_PATH.write_text(json.dumps(raw), encoding="utf-8")
