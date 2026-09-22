@@ -257,7 +257,7 @@ def recognise(pcm: np.ndarray, lang: str = "ru") -> str:
         if not needs.precise_ready():
             raise DictateNeedsModel(
                 "Для набора текста голосом нужна точная модель распознавания (около 430 МБ). "
-                "Скачать: «Настройки → Модели → Части, которые качаются отдельно»."
+                "Скачать: «Настройки → Модели → Загруженные части»."
             )
     elif not needs.ready(part):
         info = needs.PARTS[part]

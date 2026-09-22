@@ -4,7 +4,7 @@
 Решение 16.09: отменять надо не одну правку, а несколько подряд, в
 том числе после выхода из режима правки и возврата в него. Без предела копить
 нельзя — снимок это вся стенограмма записи, поэтому есть глубина и срок
-(«Настройки → Продвинутые»).
+(«Настройки → Тонкие настройки»).
 
 Что проверяем:
   1. правки отменяются по очереди, в обратном порядке, до самого начала;
@@ -266,8 +266,8 @@ check("заводской срок — 30 минут", config.DEFAULTS["edit_und
 html = io.open(PROJECT / "hagen" / "static" / "index.html", encoding="utf-8").read()
 js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
 pane = html[html.find('id="t-advanced"'):]
-check("поле глубины на вкладке «Продвинутые»", 'id="set-undo-steps"' in pane)
-check("поле срока на вкладке «Продвинутые»", 'id="set-undo-minutes"' in pane)
+check("поле глубины на вкладке «Тонкие настройки»", 'id="set-undo-steps"' in pane)
+check("поле срока на вкладке «Тонкие настройки»", 'id="set-undo-minutes"' in pane)
 check("объяснено, почему запас не бесконечный", "копию всей стенограммы" in pane)
 check("у полей есть значок «?» с полной подсказкой",
       pane.count('class="q"') >= 7 and "Пусто — как у модели" in pane)
@@ -294,8 +294,8 @@ check("сказано, что клавиши работают в режиме п
 check("сказано, что Ctrl+Z отменяет любое действие правки",
       "разрез, перенос" in keys and "правку текста" in keys)
 check("сочетание набора текста продублировано", 'id="btn-keys-hotkey"' in keys
-      and keys.count('class="ghost small js-hk"') == 4)
-check("сказано, что сочетание одно на две вкладки", "поменялось и там" in keys)
+      and keys.count('class="js-hk"') == 4)
+check("сказано, что сочетание одно на две вкладки", "то же, что в «Диктовке»" in keys)
 check("кнопка сочетания подключена", "$('btn-keys-hotkey').onclick = captureHotkey" in js)
 check("сочетание хранится одно на обе вкладки",
       "function setHotkey" in js and "'btn-dictate-hotkey', 'btn-keys-hotkey'" in js)

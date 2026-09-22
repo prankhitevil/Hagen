@@ -19,7 +19,32 @@ const V = {
   files: [],             // выбранные файлы, ждут кнопки «Обработать»
   busy: false,           // идёт отправка — второй раз не отправляем
   kindTouched: false,    // тип записи выбран руками — не подсказываем свой
+  catTouched: false,     // категория выбрана руками — тип её больше не меняет
 };
+
+/* Какие поля формы нужны — одна таблица на всю форму: источник и «что
+   сохранить» решают, что показывать. Спрятанное поле в задание не уходит.
+     качество видео — только когда видео скачивается и сохраняется: у файла с
+       диска качать нечего, а при «только текст» и «только звук» видео нет;
+     автоматические субтитры — только у открытой ссылки (это YouTube);
+     «только скачать» — у всего, что скачивается, а не у файла с диска. */
+const V_FIELDS = {
+  'v-height-field': () => ['link', 'gcvh', 'webauth'].includes(V.src) && $('v-store').value === 'video',
+  'v-auto-subs-field': () => V.src === 'link',
+  'v-only-field': () => V.src !== 'files',
+};
+
+function vPaintFields() {
+  Object.entries(V_FIELDS).forEach(([id, show]) => {
+    const el = $(id);
+    if (el) el.classList.toggle('hidden', !show());
+  });
+}
+
+function vShown(id) {
+  const el = $(id);
+  return !!el && !el.classList.contains('hidden');
+}
 
 function vLog(text, level) {
   V.lines.push({ text: String(text), level: level || '' });
@@ -38,10 +63,11 @@ function vOpts() {
     video_kind: $('v-kind').value,
     store_media: $('v-store').value,
     asr_lang: $('v-lang').value,
-    max_height: parseInt($('v-height').value, 10) || 720,
+    // Спрятанное поле не участвует: качество — по умолчанию службы, флажки — нет.
+    max_height: vShown('v-height-field') ? (parseInt($('v-height').value, 10) || 720) : undefined,
     prefer_transcript: $('v-subs').checked,
-    yt_auto_subs: $('v-auto-subs').checked,
-    video_only: $('v-only').checked,
+    yt_auto_subs: vShown('v-auto-subs-field') && $('v-auto-subs').checked,
+    video_only: vShown('v-only-field') && $('v-only').checked,
     make_summary: $('v-summary').checked,
   };
 }
@@ -49,9 +75,9 @@ function vOpts() {
 /* Что тип записи подставляет. Именно ПОДСТАВЛЯЕТ: любое поле можно поменять
    руками, программа не станет возвращать своё. */
 const V_KINDS = {
-  meeting: { store: 'video', diarize: true, doc: 'саммари встречи' },
+  meeting: { store: 'video', diarize: true, doc: 'краткое содержание встречи' },
   lecture: { store: 'none', diarize: false, doc: 'конспект' },
-  interview: { store: 'audio', diarize: true, doc: 'выжимку' },
+  interview: { store: 'audio', diarize: true, doc: 'выжимка' },
   transcript: { store: 'none', diarize: false, doc: '' },
 };
 
@@ -66,10 +92,12 @@ const V_SRC_KIND = {
 function vKindNote() {
   const kind = $('v-kind').value;
   const k = V_KINDS[kind] || V_KINDS.meeting;
-  const parts = [k.diarize ? 'размечу говорящих' : 'говорящих не размечаю'];
-  parts.push(k.doc ? 'сделаю ' + k.doc : 'документ не делаю');
+  // Подсказка — о результате, а не от лица программы.
+  let text;
+  if (k.diarize) text = k.doc ? `Будет разметка голосов и ${k.doc}.` : 'Будет разметка голосов, без документа.';
+  else text = k.doc ? `Без разметки голосов. Будет ${k.doc}.` : 'Без разметки голосов и без документа.';
   const box = $('v-kind-note');
-  if (box) box.textContent = parts.join(', ') + '.';
+  if (box) box.textContent = text;
   const sum = $('v-summary');
   if (sum) {
     sum.disabled = !k.doc;
@@ -82,8 +110,28 @@ function vKindNote() {
 function vApplyKind() {
   const k = V_KINDS[$('v-kind').value] || V_KINDS.meeting;
   $('v-store').value = k.store;
+  vApplyCategory();
   vKindNote();
   vAsrNote();
+  vPaintFields();
+}
+
+/* Категория заметки по умолчанию — от типа записи (решает служба): лекция не
+   должна уезжать во «Встречи». Выбрали руками — тип её больше не трогает. */
+function vApplyCategory() {
+  const byKind = ((V.opts || {}).category_by_kind) || {};
+  const cat = byKind[$('v-kind').value];
+  if (!cat || V.catTouched) return;
+  const sel = $('v-category');
+  // Категории из настроек может не быть в списке (например, «Видео») —
+  // добавляем, иначе список молча показал бы первую попавшуюся.
+  if (![...sel.options].some((o) => o.value === cat)) {
+    const o = document.createElement('option');
+    o.value = cat;
+    o.textContent = cat;
+    sel.appendChild(o);
+  }
+  sel.value = cat;
 }
 
 /* Подсказка о распознавании: где (выбирается в настройках, 21.09), честно про
@@ -113,7 +161,7 @@ function vAsrNote() {
     if (!(o.english && o.english.ready) && window.ensurePart) window.ensurePart('english');
     return;
   }
-  box.textContent = 'Русский распознаётся на этом компьютере: бесплатно и точнее любого облака. '
+  box.textContent = 'Русский распознаётся на этом компьютере, бесплатно. '
     + 'Где распознавать — «Настройки → Модели».';
 }
 
@@ -143,11 +191,12 @@ async function vLoadOptions() {
     vApplyKind();          // «что сохранить» подставляется из типа записи
   }
   vAsrNote();              // где распознавать, меняется в настройках между заходами
-  $('v-assets').textContent = 'Видео и текстовые копии складываются в ' + (V.opts.assets_dir || '');
+  // Куда складываются видео, видно в «Настройки → Общие → Место на диске»:
+  // путь к папке — сведение о хранилище, а не часть формы.
   const web = V.opts.webauth || {};
   $('web-state').textContent = web.ready
     ? 'Готово: браузер установлен.'
-    : (web.why || 'Для сайтов с паролем нужен Playwright.');
+    : (web.why || 'Для сайтов с паролем нужен браузер для входа.');
   vSpState((V.opts.sharepoint || {}).logged_in);
   vAsrNote();
 }
@@ -175,6 +224,8 @@ function vPickSource(name) {
     $('v-kind').value = V_SRC_KIND[name] || 'meeting';
     vApplyKind();
   }
+  vPaintFields();
+  vPaintFiles();
 }
 
 /* Во время записи раздел гаснет: процессор один, и распознавание чужого файла
@@ -210,6 +261,8 @@ function vSize(bytes) {
    сразу, и настройки под ним (язык, где распознавать, качество) применить было
    уже некуда — они читаются в момент отправки. */
 function vPickFiles(files) {
+  // Брошенный файл — это вкладка «Файлы с диска»: её параметры и её кнопка.
+  if (V.src !== 'files') vPickSource('files');
   const add = Array.from(files || []);
   let skipped = 0;
   add.forEach((f) => {
@@ -217,7 +270,7 @@ function vPickFiles(files) {
     if (same) { skipped += 1; return; }
     V.files.push(f);
   });
-  if (skipped) vLog(`Уже в списке, пропустил: ${skipped}`, '');
+  if (skipped) vLog(`Уже в списке, пропущено: ${skipped}`, '');
   vPaintFiles();
 }
 
@@ -230,7 +283,8 @@ function vPaintFiles() {
   const box = $('v-files');
   const row = $('v-files-row');
   if (!box || !row) return;
-  const has = V.files.length > 0;
+  // Список и «Обработать» — только у файлов с диска: у ссылки своя кнопка.
+  const has = V.files.length > 0 && V.src === 'files';
   box.classList.toggle('hidden', !has);
   row.classList.toggle('hidden', !has);
   if (!has) { box.innerHTML = ''; return; }
@@ -264,16 +318,16 @@ async function vProcess() {
       // Перед каждой отправкой сверяемся со списком: «Очистить» и крестик во
       // время работы обязаны отменять то, что ещё не ушло.
       if (!V.files.some((x) => x.name === f.name && x.size === f.size)) {
-        vLog(`«${f.name}» убран из списка — пропускаю`);
+        vLog(`«${f.name}» убран из списка — пропущен`);
         continue;
       }
       const fd = new FormData();
       fd.append('file', f, f.name);
-      vLog(`Загружаю «${f.name}»…`);
+      vLog(`Загружается «${f.name}»…`);
       try {
         await api('/api/media/upload?opts=' + encodeURIComponent(opts),
           { method: 'POST', body: fd });
-        vLog(`«${f.name}» принят, обрабатываю`, 'ok');
+        vLog(`«${f.name}» принят в обработку`, 'ok');
         sent += 1;
         // Запись НЕ открываем: с несколькими файлами экран прыгал бы на
         // последний. Ход работы виден в списке слева и в блоке «В работе».
@@ -292,13 +346,13 @@ async function vProcess() {
     videoPaint(!!(typeof S !== 'undefined' && S.recordingId));
     vPaintFiles();
   }
-  if (sent && !failed.length) notice('Взял в работу: ' + sent, 'ok');
+  if (sent && !failed.length) notice('Взято в работу: ' + sent, 'ok');
 }
 
 async function vProbe() {
   const url = ($('link-url').value || '').trim();
   if (!url) { notice('Вставьте ссылку', 'err'); return null; }
-  $('link-hint').textContent = 'Читаю ссылку…';
+  $('link-hint').textContent = 'Ссылка читается…';
   try {
     const info = await api('/api/media/probe', { method: 'POST', body: { url } });
     V.probed = info;
@@ -326,7 +380,7 @@ async function vSubmitLink() {
   try {
     const res = await api('/api/media/link',
       { method: 'POST', body: Object.assign({ url, info }, vOpts()) });
-    vLog(`Взял в работу: ${(res.meta || {}).title || url}`, 'ok');
+    vLog(`Взято в работу: ${(res.meta || {}).title || url}`, 'ok');
     $('link-url').value = '';
     V.probed = null;
     if (res.rec_id) await window.openRecording(res.rec_id);
@@ -337,7 +391,7 @@ async function vSubmitSource(kind, body) {
   try {
     const res = await api('/api/media/source',
       { method: 'POST', body: Object.assign({ kind }, body, vOpts()) });
-    vLog(`Взял в работу: ${(res.meta || {}).title || kind}`, 'ok');
+    vLog(`Взято в работу: ${(res.meta || {}).title || kind}`, 'ok');
     if (res.rec_id) await window.openRecording(res.rec_id);
   } catch (e) { vLog(e.message, 'err'); notice(e.message, 'err'); }
 }
@@ -548,8 +602,8 @@ async function vSpProcess() {
     V.sp.batch = res.batch;
     V.sp.jobs = (res.started || []).map((s) => s.job_id);
     (res.failed || []).forEach((f) => vLog(f, 'err'));
-    vLog(`SharePoint: взял в работу ${V.sp.jobs.length} из ${picked.length}`, 'ok');
-    notice(`Взял в работу: ${V.sp.jobs.length}. Идут по одной, ход — в «В работе».`, 'ok');
+    vLog(`SharePoint: взято в работу ${V.sp.jobs.length} из ${picked.length}`, 'ok');
+    notice(`Взято в работу: ${V.sp.jobs.length}. Идут по одной, ход — в «В работе».`, 'ok');
     (res.started || []).forEach((s) => {
       const it = picked.find((x) => x.name === s.name);
       if (it) it.processed = { rec_id: s.rec_id, title: s.name, ok: true };
@@ -564,7 +618,7 @@ async function vSpStop() {
   if (!V.sp.batch) return;
   try {
     const res = await api(`/api/sharepoint/batch/${V.sp.batch}/cancel`, { method: 'POST' });
-    notice(`Останавливаю пачку: снято задач ${res.stopped}. Начатая прервётся не сразу.`, '');
+    notice(`Пачка останавливается: снято задач ${res.stopped}. Начатая прервётся не сразу.`, '');
   } catch (e) { notice(e.message, 'err'); }
 }
 
@@ -596,7 +650,12 @@ function videoInit() {
   // «Только скачать» без сохранения видео бессмысленно: скачивать было бы некуда.
   $('v-only').addEventListener('change', () => {
     if ($('v-only').checked) $('v-store').value = 'video';
+    vPaintFields();
   });
+  // «Что сохранить» решает, нужно ли качество видео.
+  $('v-store').addEventListener('change', vPaintFields);
+  // Выбранную руками категорию тип записи больше не меняет.
+  $('v-category').addEventListener('change', () => { V.catTouched = true; });
 
   $('btn-link-probe').onclick = vProbe;
   $('btn-link').onclick = vSubmitLink;

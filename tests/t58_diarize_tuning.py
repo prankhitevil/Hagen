@@ -2,7 +2,7 @@
 """Проверка 58: продвинутые настройки разметки и разрез фразы по длинному куску.
 
 Решения 15.09 после разбора звонка с пятью голосами:
-  * пять ручек в «Настройки → Продвинутые»: шаг окна, порог группировки, штраф
+  * пять ручек в «Настройки → Тонкие настройки»: шаг окна, порог группировки, штраф
     за лишнего говорящего, минимум речи для нового голоса, разрез фразы;
   * пустое поле — как у модели, применяется со следующей разметки без перезапуска;
   * фраза режется, если кусок другого голоса сам по себе не короче порога (2 с),
@@ -290,7 +290,7 @@ say("")
 say("=== 5. Интерфейс ===")
 html = io.open(PROJECT / "hagen" / "static" / "index.html", encoding="utf-8").read()
 js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
-check("вкладка «Продвинутые» есть", 'data-tab="t-advanced"' in html and 'id="t-advanced"' in html)
+check("вкладка «Тонкие настройки» есть", 'data-tab="t-advanced"' in html and 'id="t-advanced"' in html)
 pane = html[html.find('id="t-advanced"'):]
 for fid in ("set-dt-step", "set-dt-threshold", "set-dt-fb", "set-dt-minvoice", "set-dt-split"):
     check("поле %s на вкладке" % fid, 'id="%s"' % fid in pane)

@@ -55,7 +55,7 @@ def available() -> tuple[bool, str]:
     """Готов ли облачный путь, и если нет — почему, человеческим языком."""
     problem = providers.problem("asr")
     if problem:
-        return False, problem + " Настройки → Модели → «Облачное распознавание файлов»."
+        return False, problem + " Настройки → Модели → «Файлы и видео»."
     conn = providers.connection("asr")
     if not conn["model"]:
         return False, "Не указана модель распознавания в настройках."

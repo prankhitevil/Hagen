@@ -28,6 +28,7 @@ __all__ = [
     "delete_shots",
     "shift_shots",
     "hidden_process_flags",
+    "set_process_priority",
     "open_path",
     "open_link",
     "set_console_title",
@@ -58,11 +59,11 @@ def make_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
     return portable.make_shortcuts(folders)
 
 
-def screenshot_folders() -> list[Path]:
+def screenshot_folders(auto: bool = False) -> list[Path]:
     """Куда система сама складывает снимки экрана."""
     from . import shots
 
-    return shots.screenshot_folders()
+    return shots.screenshot_folders(auto)
 
 
 def watch_screenshots(rec_id: str, position_s: Callable[[], float],
@@ -94,6 +95,11 @@ def shift_shots(items: list[dict[str, Any]], offset_s: float) -> list[dict[str, 
 def hidden_process_flags() -> int:
     """Флаги запуска дочерней программы без окна консоли."""
     return app.hidden_process_flags()
+
+
+def set_process_priority(pid: int, level: str) -> bool:
+    """Сколько процессора отдавать своей дочерней программе."""
+    return app.set_process_priority(pid, level)
 
 
 def open_path(path: str | Path) -> None:

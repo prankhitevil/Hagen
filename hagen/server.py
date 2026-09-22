@@ -52,12 +52,29 @@ from .events import EventHub, hub  # noqa: E402  (после импортов м
 sessions = live.SessionManager(on_event=hub.publish)
 
 
+def _live_yield_reason() -> str:
+    """Пока идёт запись, разметка и распознавание файлов стоят (решение 22.09).
+
+    Процессор — звонку: иначе у живой записи запаздывал текст, а запись
+    собеседников не поднималась по минуте. Настройка читается при каждом
+    вопросе: переключили посреди паузы — задача пойдёт через секунду.
+    Разметка в помощнике на паузу не встаёт, но по этому же ответу помощник
+    переходит в режим эффективности.
+    """
+    if config.get("processing_during_recording") == "run":
+        return ""
+    return "идёт запись" if sessions.active_session() is not None else ""
+
+
+jobs.set_yield_rule(_live_yield_reason)
+
+
 def _job_changed(job: dict[str, Any]) -> None:
     public = {
         k: job.get(k) for k in
         ("id", "kind", "title", "rec_id", "status", "progress", "eta_s", "note",
          "error", "cancel_requested", "error_kind", "resets_at", "retry",
-         "created_at", "finished_at")
+         "created_at", "finished_at", "paused")
     }
     # Документ по видео собирается внутри обработки файла: если он упёрся в
     # лимит, повторять надо только сборку документа, а не всю обработку.
@@ -326,7 +343,7 @@ def _start_retention() -> None:
 
 @app.get("/api/storage")
 async def api_storage() -> JSONResponse:
-    """Где лежит звук записей и видео и сколько занимает (для «Настройки → Основное»)."""
+    """Где лежит звук записей и видео и сколько занимает (для «Настройки → Общие»)."""
     from . import storage
 
     loop = asyncio.get_running_loop()
@@ -580,7 +597,9 @@ def _start_call_watcher() -> None:
         meeting = None
         try:
             if config.get("outlook_enabled"):
-                meeting = platform.desktop().current_meeting()
+                # Вместе с другими встречами того же времени: в уведомлении о
+                # звонке будет кнопка переключиться на них (решение 22.09).
+                meeting = platform.desktop().current_meeting(with_alternatives=True)
         except Exception as err:
             log.debug("встречу Outlook прочитать не вышло: %s", err)
         _call_state.update({"active": True, "info": info, "meeting": meeting, "asked": False})
@@ -816,7 +835,7 @@ def _capabilities_fresh() -> dict[str, Any]:
         caps["diarize"] = bool(ok)
         caps["diarize_note"] = why
     except Exception as err:
-        caps["diarize_note"] = "модуль разметки говорящих недоступен: %s" % err
+        caps["diarize_note"] = "модуль разметки голосов недоступен: %s" % err
     try:
         from . import minutes
 
@@ -1068,8 +1087,8 @@ def _start_device_capture(rec_id: str, sess, want_far: bool,
         status["state"] = "ok"
         if got_mic and not got_far and want_far:
             hub.publish({"type": "notice", "level": "err",
-                         "text": "Пишу только микрофон: звук собеседников не открылся. "
-                                 "Пробую подключить его снова в фоне. Проверьте, на "
+                         "text": "Пишется только микрофон: звук собеседников не открылся. "
+                                 "Подключение повторяется в фоне. Проверьте, на "
                                  "какое устройство выводится звонок."})
         else:
             hub.publish({"type": "notice", "level": "ok",
@@ -1709,7 +1728,7 @@ async def api_retranscribe(rec_id: str, request: Request) -> JSONResponse:
         # Текст правок не возвращается — он распознан заново, счётчик обнуляем.
         back = edits_mod.apply_hand_marks(rec_id, hand)
         if back:
-            handle.log("ручные решения о говорящих вернулись на %d реплик" % back)
+            handle.log("ручные решения о голосах вернулись на %d реплик" % back)
         store.update(rec_id, {"edits_count": 0})
         visible = store.sorted_segments(rec_id)
         if not reused:
@@ -1974,7 +1993,7 @@ async def api_document_kinds(rec_id: str = "") -> JSONResponse:
 
 @app.get("/api/prompts")
 async def api_prompts_get() -> JSONResponse:
-    """Инструкции документов для «Настройки → Обработка»."""
+    """Инструкции документов для «Настройки → Документы»."""
     from . import minutes
 
     from . import voices
@@ -2316,7 +2335,16 @@ async def api_devices(request: Request, probe: bool = False) -> JSONResponse:
                         "is_default": bool(d.get("is_default")),
                         "is_communications": bool(d.get("is_communications"))}
                        for d in mics]
-        if not out["mics"]:
+        if out["mics"]:
+            # Какой микрофон подставится, если в списке выбрано «авто»: страница
+            # называет его по имени, а решает это тот же выбор, что и при записи.
+            try:
+                auto = await loop.run_in_executor(None, sound.recommended_input_index)
+            except Exception:
+                auto = None
+            for m in out["mics"]:
+                m["recommended"] = auto is not None and m["index"] == auto
+        else:
             legacy = await loop.run_in_executor(None, sound.list_ffmpeg_devices, True)
             out["mics"] = [{"index": i, "name": d["name"], "alt_name": d["alt_name"],
                             "is_default": i == 0}

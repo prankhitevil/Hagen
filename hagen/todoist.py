@@ -61,7 +61,7 @@ def _require_token() -> None:
     """
     if not configured():
         raise TodoistError(
-            "Токен Todoist не задан. Настройки → Обработка: возьмите личный токен в "
+            "Токен Todoist не задан. Настройки → Документы: возьмите личный токен в "
             "Todoist (Settings → Integrations → Developer) и вставьте его туда."
         )
 
@@ -76,7 +76,7 @@ def _explain(err: Exception) -> str:
     if isinstance(err, httpx.HTTPStatusError):
         code = err.response.status_code
         if code in (401, 403):
-            return ("Todoist не принял токен. Проверьте его в «Настройки → Обработка»: "
+            return ("Todoist не принял токен. Проверьте его в «Настройки → Документы»: "
                     "возможно, он отозван или скопирован не полностью.")
         if code == 404:
             return "Todoist не нашёл проект: возможно, его удалили. Выберите другой."

@@ -48,7 +48,7 @@
          и добавить вторую ссылку было неоткуда — приходилось уходить в
          «Запись» и возвращаться. Кнопка стоит там же, где «Новая запись» в
          другом разделе, поэтому видна и с открытой карточки. -->
-    <button id="btn-video-home" class="primary wide hidden" type="button" title="Вернуться к добавлению: ссылка на видео или файл с диска"><svg aria-hidden="true"><use href="/static/icons.svg#ic-home"></use></svg> Новое видео</button>
+    <button id="btn-video-home" class="primary wide hidden" type="button" title="Вернуться к добавлению: ссылка на видео или файл с диска"><svg aria-hidden="true"><use href="/static/icons.svg#ic-plus"></use></svg> Новое видео</button>
 
     <!-- Отбор и группировка списка (20.09). Живут вместе с проектами и тегами:
          без них отбирать нечего. Отбор — «показать только эти», группировка —
@@ -91,14 +91,15 @@
       <header class="rec-head">
         <div class="rec-head-line">
           <input id="rec-title" class="title-input" type="text" placeholder="Название записи">
+          <!-- Дата и длительность: у новой записи до «Старта» их нет — ни
+               таймера на нулях, ни точки-разделителя без соседей. -->
           <div class="rec-meta">
             <span id="rec-date"></span>
-            <span class="dot">·</span>
+            <span id="rec-dur-dot" class="dot">·</span>
             <span id="rec-duration">00:00:00</span>
-            <!-- Каким вариантом распознавания шла запись (стенд 18.09); цифры — в подсказке. -->
-            <span id="rec-stand" class="hidden"><span class="dot">·</span> <span id="rec-stand-title"></span></span>
           </div>
-          <span id="badge-recording" class="badge-rec hidden">● ИДЁТ ЗАПИСЬ</span>
+          <!-- «Идёт запись» — состояние, а не кнопка: точка и текст, без заливки. -->
+          <span id="badge-recording" class="stat hidden"><span class="dot-st bad blink"></span>идёт запись</span>
           <!-- Меню записи: то, что делают редко, но с самой записью целиком. -->
           <button id="btn-rec-menu" class="icon-btn" type="button"
                   title="Открыть файл заметки, открыть служебную папку, удалить запись"
@@ -122,19 +123,11 @@
            там начал бы писать микрофон и завёл бы новую заметку — это работа
            раздела «Запись», а не обработки готового файла. -->
       <section class="controls" id="live-controls">
-        <!-- Во время записи блок устройств сворачивается в эту строку: уровни живые -->
-        <div class="ctl-summary">
-          <span>Микрофон</span><div class="meter"><div id="meter-mic-mini" class="meter-fill"></div></div>
-          <span>Собеседники</span><div class="meter"><div id="meter-far-mini" class="meter-fill far"></div></div>
-          <span id="ctl-summary-dev" class="tiny muted"></span>
-          <button id="btn-devices-fold" class="icon-btn fold-btn" type="button"
-                  title="Показать выбор устройств" aria-label="Показать выбор устройств"><svg aria-hidden="true"><use href="/static/icons.svg#ic-unfold"></use></svg></button>
-        </div>
         <div class="ctl-row">
           <!-- Старт и Стоп в одной ячейке: видна та, что сейчас работает (по disabled) -->
           <div class="rec-toggle">
             <button id="btn-start" class="rec-btn" title="Начать запись: микрофон и звук собеседников"><svg aria-hidden="true"><use href="/static/icons.svg#ic-dot-rec"></use></svg> Старт</button>
-            <button id="btn-stop" class="stop-btn" disabled title="Остановить запись и дописать стенограмму"><svg aria-hidden="true"><use href="/static/icons.svg#ic-stop"></use></svg> Стоп</button>
+            <button id="btn-stop" class="rec-btn" disabled title="Остановить запись и дописать стенограмму"><svg aria-hidden="true"><use href="/static/icons.svg#ic-stop"></use></svg> Стоп</button>
           </div>
 
           <div class="meters">
@@ -151,6 +144,21 @@
               <span id="far-hint" class="meter-hint"></span>
             </div>
           </div>
+
+          <!-- Во время записи выбор устройств сворачивается в эти строки рядом
+               со «Стоп»: по строке на устройство — что это, имя и живой уровень. -->
+          <div class="ctl-summary">
+            <div class="dev-lines">
+              <div class="dev-line"><span class="meter-label">Микрофон</span>
+                <span id="sum-mic-name" class="dev-name"></span>
+                <div class="meter"><div id="meter-mic-mini" class="meter-fill"></div></div></div>
+              <div id="sum-far-line" class="dev-line"><span class="meter-label">Собеседники</span>
+                <span id="sum-far-name" class="dev-name"></span>
+                <div class="meter"><div id="meter-far-mini" class="meter-fill far"></div></div></div>
+            </div>
+            <button id="btn-devices-fold" class="icon-btn fold-btn" type="button"
+                    title="Показать выбор устройств" aria-label="Показать выбор устройств"><svg aria-hidden="true"><use href="/static/icons.svg#ic-unfold"></use></svg></button>
+          </div>
         </div>
 
         <div class="ctl-row2">
@@ -164,7 +172,11 @@
              только когда звук действительно идёт в динамики. -->
         <div class="ctl-warn">
           <span id="far-warning" class="warn hidden"><svg aria-hidden="true"><use href="/static/icons.svg#ic-warn"></use></svg> В запись попадёт <b>весь</b> звук компьютера: вместе с голосами собеседников — уведомления и музыка.</span>
-          <span id="echo-warning" class="warn hidden"><svg aria-hidden="true"><use href="/static/icons.svg#ic-warn"></use></svg> Звук через <b>динамики</b>: микрофон услышит собеседников — в стенограмме могут появиться «двойники» реплик (программно исправляется, но могут быть погрешности). Использование наушников, гарнитуры или спикерфона эту беду снимают.</span>
+          <span id="echo-warning" class="warn hidden"><svg aria-hidden="true"><use href="/static/icons.svg#ic-warn"></use></svg> Звук через <b>динамики</b>: без наушников собеседники попадут в запись дважды.
+            <button type="button" class="linky js-more" data-more="echo-more">подробнее</button>
+            <span id="echo-more" class="hidden">Микрофон услышит собеседников из колонок, и в стенограмме
+              появятся «двойники» реплик. Это программно исправляется, но могут быть погрешности.
+              С наушниками, гарнитурой или спикерфоном двойников нет.</span></span>
         </div>
       </section>
 
@@ -175,13 +187,18 @@
         <button class="rtab active" data-pane="transcript" type="button">Стенограмма</button>
           <span id="minutes-tabs" class="doc-tabs"></span>
         <button class="rtab" data-pane="props" type="button">Свойства</button>
-        <!-- «Отправить» (20.09): рядом с «+ Документ», потому что отправляют
+        <!-- Действия — справа от вкладок и видом кнопок, а не вкладок: значок
+             «Отправить» среди вкладок читался как ещё одна вкладка.
+             «Отправить» (20.09) — рядом с «+ Документ», потому что отправляют
              обычно то, что только что сделали. Письмо программа открывает, но
-             не отправляет: действие наружу необратимо. -->
-        <button id="btn-share" class="rtab rtab-add" type="button"
-                title="Отправить документы записи: письмом (вложением) или в Telegram. Письмо только откроется — отправите его сами." aria-label="Отправить"><svg aria-hidden="true"><use href="/static/icons.svg#ic-share"></use></svg></button>
-        <button id="btn-add-doc" class="rtab rtab-add" type="button"
-                title="Протокол, саммари, конспект, выжимка или ответ на вопрос по стенограмме. Md-файл заметки перепишется: в нём будут все документы записи и список участников.">+ Документ</button>
+             не отправляет: действие наружу необратимо. «+ Документ» —
+             единственная акцентная кнопка готовой записи. -->
+        <span class="tabs-acts">
+          <button id="btn-share" class="ghost small" type="button"
+                  title="Отправить документы записи: письмом (вложением) или в Telegram. Письмо только откроется — отправите его сами."><svg aria-hidden="true"><use href="/static/icons.svg#ic-share"></use></svg> Отправить</button>
+          <button id="btn-add-doc" class="primary small" type="button"
+                  title="Протокол, краткое содержание, конспект, выжимка или ответ на вопрос по стенограмме. Заметка перепишется: в ней будут все документы записи и список участников."><svg aria-hidden="true"><use href="/static/icons.svg#ic-plus"></use></svg> Документ</button>
+        </span>
       </nav>
 
       <!-- Прокручивается ТОЛЬКО содержимое активной вкладки: шапка, вкладки,
@@ -198,7 +215,7 @@
            итоги разделения голосов: предложить разделить или отменить. -->
       <section id="speaker-alerts" class="speaker-alerts hidden"></section>
       <section id="transcript" class="transcript"></section>
-        <div id="edit-hint" class="tiny muted edit-hint hidden">Режим правки: <b>Alt+щелчок</b> по слову — реплика разрежется перед ним. Выделите слова мышью и нажмите <b>Alt+↑</b> или <b>Alt+↓</b> — они уйдут реплике выше или ниже (начало — вверх, хвост — вниз). <b>Enter</b> — отдать выделенное любому говорящему записи. Выделена вся реплика — Alt+↑/↓ отдадут её соседу целиком. <b>Щелчок по имени</b> меняет говорящего у всей реплики. Двойной щелчок по реплике правит её текст (Enter — сохранить, Escape — отменить). <b>Ctrl+Z</b> — отменить любое из этих действий, можно несколько подряд.</div>
+        <div id="edit-hint" class="tiny muted edit-hint hidden">Режим правки: <b>Alt+щелчок</b> по слову — реплика разрежется перед ним. Выделите слова мышью и нажмите <b>Alt+↑</b> или <b>Alt+↓</b> — они уйдут реплике выше или ниже (начало — вверх, хвост — вниз). <b>Enter</b> — отдать выделенное другому голосу записи. Выделена вся реплика — Alt+↑/↓ отдадут её соседу целиком. <b>Щелчок по имени</b> меняет голос у всей реплики. Двойной щелчок по реплике правит её текст (Enter — сохранить, Escape — отменить). <b>Ctrl+Z</b> — отменить любое из этих действий, можно несколько подряд.</div>
         <div id="diar-progress" class="diar hidden">
           <div class="bar"><div id="diar-bar" class="bar-fill"></div></div>
           <span id="diar-note" class="tiny"></span>
@@ -237,9 +254,13 @@
              Изменения применяются сразу, как в настройках. -->
         <section id="pane-props" class="rec-pane hidden">
           <div class="props-block">
-            <div class="props-title">Запись</div>
+            <div class="grp-title">Запись</div>
+            <!-- Какой моделью шла запись и как она себя вела (стенд 18.09).
+                 Сведение, а не заголовок: в шапке ему не место. -->
+            <div id="rec-stand" class="fb-row tiny muted hidden">Распознавание:
+              <span id="rec-stand-title"></span></div>
             <div class="fb-row">
-              <label class="inline" title="Подпапка в папке заметок, куда ляжет md-файл этой записи">Категория
+              <label class="inline" title="Подпапка в папке заметок, куда ляжет заметка этой записи">Категория
                 <select id="cat-select"></select>
               </label>
               <button id="btn-new-cat" class="ghost small" title="Добавить категорию. Если папка с таким именем уже есть — заметки будут складываться в неё, ничего не перезаписывается."><svg aria-hidden="true"><use href="/static/icons.svg#ic-plus"></use></svg> новая</button>
@@ -251,9 +272,9 @@
             </div>
           </div>
           <div class="props-block" data-feature="obsidian_links">
-            <div class="props-title">Связи в заметках</div>
+            <div class="grp-title">Связи в заметках</div>
         <div class="fb-row">
-          <label class="inline" title="Проект записи. Уходит в шапку md-файла полем project — по нему менеджер заметок фильтрует и собирает подборки. Список пополняется сам: что ввели один раз, дальше подсказывается.">Проект
+          <label class="inline" title="Проект записи. Уходит в шапку заметки полем project — по нему менеджер заметок фильтрует и собирает подборки. Список пополняется сам: что ввели один раз, дальше подсказывается.">Проект
             <input id="rec-project" type="text" class="meta-input" list="dl-projects" placeholder="без проекта" autocomplete="off">
           </label>
           <datalist id="dl-projects"></datalist>
@@ -280,12 +301,12 @@
                не попадают — там речь встречи; в документах учитываются как
                слово автора, в первую очередь. -->
           <div class="props-block" data-feature="dictation">
-            <div class="props-title">Мои заметки</div>
+            <div class="grp-title">Мои заметки</div>
             <div id="notes-list" class="notes-list"></div>
             <div id="notes-hint" class="tiny muted"></div>
           </div>
           <div class="props-block">
-            <div class="props-title">Файлы</div>
+            <div class="grp-title">Файлы</div>
         <div id="paths-box" class="paths hidden"></div>
           </div>
         </section>
@@ -298,24 +319,26 @@
           <button id="btn-undo-edit" class="ghost small hidden" title="Вернуть стенограмму к состоянию до последней ручной правки. Шаг назад один.">Отменить правку</button>
           <button id="btn-copy-transcript" class="ghost small" title="Скопировать всю стенограмму в буфер обмена — например, чтобы вставить в другое окно"><svg aria-hidden="true"><use href="/static/icons.svg#ic-copy"></use></svg> Копировать</button>
           <button id="btn-hide" class="ghost small" title="Скрыть текст или имена — например, чтобы показать снимок экрана"><svg aria-hidden="true"><use href="/static/icons.svg#ic-fold"></use></svg> <span class="lbl">Скрыть</span></button>
-          <span class="fb-sep"></span>
-          <button id="btn-diarize" class="action"><svg aria-hidden="true"><use href="/static/icons.svg#ic-people"></use></svg> Разметить говорящих</button>
+          <!-- Слева — то, что делают с текстом, справа — обработка записи.
+               Удаления здесь нет: оно одно, последним пунктом «⋯» в шапке. -->
+          <span class="fb-spacer"></span>
+          <!-- Заметки ещё нет или она не записалась — только тогда кнопка и
+               видна: заметка, которая есть, обновляется сама. -->
+          <button id="btn-save" class="ghost small keep hidden" title="Записать заметку в папку заметок: документы, под ними стенограмма с именами, список участников."><svg aria-hidden="true"><use href="/static/icons.svg#ic-doc"></use></svg> Сохранить заметку</button>
+          <button id="btn-diarize" class="action"><svg aria-hidden="true"><use href="/static/icons.svg#ic-people"></use></svg> Разметить голоса</button>
           <button id="btn-retry" class="action"><svg aria-hidden="true"><use href="/static/icons.svg#ic-refine"></use></svg> Перечитать точнее</button>
           <button id="btn-echo" class="ghost small" title="Убрать «двойники»: реплики, где микрофон повторил собеседников из динамиков. Занимает секунды и текст не трогает — в отличие от «Перечитать точнее», которое собирает стенограмму заново и стирает ручные правки.">Пересчитать эхо</button>
           <!-- Что не поместилось по ширине окна — здесь (п. 6.3). -->
           <button id="acts-more" class="ghost small icon-only hidden" type="button"
                   title="Остальные действия" aria-label="Остальные действия"><svg aria-hidden="true"><use href="/static/icons.svg#ic-dots"></use></svg></button>
-          <span class="fb-spacer"></span>
-          <button id="btn-delete" class="danger small" title="Удалить: всё, только видео и звук или только из списка программы"><svg aria-hidden="true"><use href="/static/icons.svg#ic-trash"></use></svg> Удалить</button>
-          <button id="btn-save" class="primary" title="Переписать md-файл заметки: документы, под ними стенограмма с именами говорящих, список участников.">Сохранить стенограмму</button>
         </div>
         <div id="act-doc" class="act-group hidden">
-          <button id="btn-copy-minutes" class="ghost small" title="Скопировать документ: как Markdown для заметок, оформленным текстом для Word и Outlook или в разметке Telegram"><svg aria-hidden="true"><use href="/static/icons.svg#ic-copy"></use></svg> Копировать</button>
+          <button id="btn-copy-minutes" class="ghost small" title="Скопировать документ: как Markdown для заметок, оформленным текстом для Word и почты или в разметке Telegram"><svg aria-hidden="true"><use href="/static/icons.svg#ic-copy"></use></svg> Копировать</button>
           <button id="btn-hide-minutes" class="ghost small" title="Спрятать текст документа (вкладки и кнопки остаются)">Скрыть</button>
           <span id="drop-hint" class="tiny muted"></span>
           <button id="btn-drop-redo" class="ghost small hidden" title="Собрать документ заново, не предлагая вычеркнутые пункты. Модель получит их списком с запретом повторять.">Пересобрать без вычеркнутого</button>
           <button id="btn-drop-clear" class="ghost small hidden" title="Снять все отметки: пункты вернутся в заметку">Вернуть всё</button>
-          <button id="btn-tasks-out" class="ghost small" data-feature="todoist" title="Отправить поручения из документа в Todoist. Сначала покажу список, отправлю только после подтверждения.">Поставить задачи</button>
+          <button id="btn-tasks-out" class="ghost small" data-feature="todoist" title="Отправить поручения из документа в Todoist. Сначала будет показан список; отправка — только после подтверждения.">Поставить задачи</button>
         </div>
         <div id="act-props" class="act-group hidden">
           <span class="tiny muted">Изменения применяются сразу.</span>
@@ -342,7 +365,7 @@
           <h2 class="video-title">Обработка готовых видео и аудио</h2>
         </div>
         <div class="tiny muted">
-          Файл или ссылка превращается в текст, с разметкой говорящих и готовым md-файлом заметки.
+          Файл или ссылка превращается в текст — с разметкой голосов и готовой заметкой в Obsidian.
         </div>
       </header>
 
@@ -357,14 +380,6 @@
 
         <div id="src-files" class="src-pane">
           <div id="dropzone" class="dropzone">Перетащите сюда видео, аудио или готовые субтитры (.vtt, .srt)</div>
-          <!-- Файлы ждут здесь, пока не нажата «Обработать»: сначала человек
-               видит, что именно выбрал, и выставляет настройки ниже. -->
-          <div id="v-files" class="file-list hidden"></div>
-          <div id="v-files-row" class="file-row hidden">
-            <button id="btn-process" class="primary" type="button" title="Поставить выбранные файлы в очередь обработки"><svg aria-hidden="true"><use href="/static/icons.svg#ic-play"></use></svg> Обработать</button>
-            <button id="btn-files-clear" class="ghost small" type="button" title="Убрать файлы из списка (с диска ничего не удаляется)">Очистить список</button>
-            <span id="v-files-hint" class="tiny muted"></span>
-          </div>
         </div>
 
         <div id="src-link" class="src-pane hidden">
@@ -384,7 +399,7 @@
             <button id="btn-gcvh" class="primary" type="button" title="Скачать и обработать урок GetCourse">Обработать</button>
           </div>
           <div class="tiny muted">Страница курса разбирается, поток скачивается напрямую.
-            Если вёрстка площадки изменилась — скажу, что именно не нашёл.</div>
+            Если вёрстка площадки изменилась, будет сказано, что именно не найдено.</div>
         </div>
 
         <div id="src-sharepoint" class="src-pane hidden">
@@ -447,7 +462,7 @@
 
       <section class="controls">
         <div class="video-opts">
-          <!-- Тип решает три вещи разом: размечать ли говорящих, какой выйдет
+          <!-- Тип решает три вещи разом: размечать ли голоса, какой выйдет
                документ и что оставить на диске. Подставляется по источнику,
                но любое подставленное поле можно поменять руками. -->
           <label class="field">Тип записи
@@ -471,7 +486,7 @@
               <option value="en">Английский</option>
             </select>
           </label>
-          <label class="field">Качество видео, не выше
+          <label class="field" id="v-height-field">Качество видео, не выше
             <select id="v-height">
               <option value="360">360p</option>
               <option value="480">480p</option>
@@ -487,11 +502,19 @@
         <div id="v-asr-note" class="tiny muted"></div>
         <div class="video-checks">
           <label class="inline"><input type="checkbox" id="v-subs"> брать готовые субтитры, если есть</label>
-          <label class="inline"><input type="checkbox" id="v-auto-subs"> и автоматические субтитры YouTube тоже</label>
-          <label class="inline"><input type="checkbox" id="v-only"> только скачать, не распознавать</label>
-          <label class="inline" title="Если включено — после обработки документ (саммари, конспект) соберётся сам. По умолчанию выключено: документ — кнопкой «Сделать документ» у записи."><input type="checkbox" id="v-summary"> сразу сделать документ</label>
+          <label class="inline" id="v-auto-subs-field"><input type="checkbox" id="v-auto-subs"> и автоматические субтитры YouTube тоже</label>
+          <label class="inline" id="v-only-field"><input type="checkbox" id="v-only"> только скачать, не распознавать</label>
+          <label class="inline" title="Если включено — после обработки документ (краткое содержание, конспект) соберётся сам. По умолчанию выключено: документ — кнопкой «Сделать документ» у записи."><input type="checkbox" id="v-summary"> сразу сделать документ</label>
         </div>
-        <div id="v-assets" class="tiny muted"></div>
+        <!-- Брошенные файлы ждут здесь, под параметрами, пока не нажата
+             «Обработать»: файл бросают раньше, чем выбирают тип и язык, и
+             кнопка стоит после них — как у ссылки. -->
+        <div id="v-files" class="file-list hidden"></div>
+        <div id="v-files-row" class="file-row hidden">
+          <button id="btn-process" class="primary" type="button" title="Поставить выбранные файлы в очередь обработки"><svg aria-hidden="true"><use href="/static/icons.svg#ic-play"></use></svg> Обработать</button>
+          <button id="btn-files-clear" class="ghost small" type="button" title="Убрать файлы из списка (с диска ничего не удаляется)">Очистить список</button>
+          <span id="v-files-hint" class="tiny muted"></span>
+        </div>
       </section>
 
       <section id="video-log" class="transcript video-log"></section>
@@ -512,745 +535,978 @@
   <div class="dlg-head"><b>Настройки</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
   <div class="dlg-body">
 
-    <!-- Разделы настроек — вертикальным списком слева:
-         девять вкладок в две строки читались как склад, а окно было узким,
-         и внутри него прокручивались ещё два уровня. -->
+    <!-- Разделы — списком слева, в порядке частоты; служебные — под линией.
+         У раздела заголовок и группы: одна строка — подпись слева, поле и
+         его состояние справа, подсказка под подписью одной строкой, длиннее —
+         «подробнее». Разрушительное — последней группой раздела, красным. -->
     <nav class="set-nav">
-      <button class="tab active" data-tab="t-general">Основное</button>
-      <button class="tab" data-tab="t-voices">Голоса</button>
-      <button class="tab" data-tab="t-call" data-feature="calls">Звонки</button>
-      <button class="tab" data-tab="t-processing" title="Имя владельца и инструкции для протокола, саммари, конспекта, выжимки">Обработка</button>
-      <button class="tab" data-tab="t-minutes">Модели</button>
+      <button class="tab active" data-tab="t-general" title="О вас, хранилище, место на диске, словарь замен, запуск">Общие</button>
+      <button class="tab" data-tab="t-call" title="Звонки, забытая запись, встречи из календаря, снимки экрана, выключатель микрофона">Запись и звонки</button>
+      <button class="tab" data-tab="t-voices" title="Разметка голосов и база голосов">Голоса</button>
+      <button class="tab" data-tab="t-processing" title="Чем делать документы, задачи в Todoist, виды документов">Документы</button>
       <button class="tab" data-tab="t-dictate" data-feature="dictation" title="Диктовка текста в любое окно по горячей клавише">Диктовка</button>
-      <button class="tab" data-tab="t-view" title="Тема оформления и плотность интерфейса">Вид</button>
-      <button class="tab" data-tab="t-features">Возможности</button>
+      <button class="tab" data-tab="t-minutes" title="Модели распознавания, файлы и видео, загруженные части">Модели</button>
       <button class="tab" data-tab="t-keys" title="Все сочетания клавиш программы в одном месте">Сочетания</button>
-      <button class="tab" data-tab="t-advanced" data-feature="advanced" title="Тонкая настройка распознавания и разметки говорящих">Продвинутые</button>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <button class="tab" data-tab="t-view" title="Тема оформления и размер интерфейса">Вид</button>
+      <button class="tab" data-tab="t-features">Возможности</button>
+      <button class="tab" data-tab="t-advanced" data-feature="advanced" title="Распознавание, разметка голосов, отмена правок, язык инструкций">Тонкие настройки</button>
       <button class="tab" data-tab="t-about" title="Версия программы и обновление">О программе</button>
     </nav>
 
     <div class="set-panes">
+
+    <!-- ================================================ Общие -->
     <div id="t-general" class="tabpane">
-      <label class="field">Папка заметок / хранилище
-        <span class="row dt-row grow"><input id="set-vault" type="text">
-          <button class="ghost small js-pick-folder" type="button" data-for="set-vault"
-                  title="Выбрать папку в окне, как в Проводнике. Путь можно и вписать руками.">Выбрать…</button></span>
-        <span class="tiny muted">Стенограммы сохраняются сюда, в подпапку категории.</span>
-      </label>
-      <label class="field">Подпапка для записей
-        <input id="set-subfolder" type="text">
-      </label>
-      <div id="vault-state" class="tiny"></div>
-      <!-- Где лежит звук и видео и сколько занимает; срок хранения звука звонков -->
-      <div class="box storage-box">
-        <div class="storage-row"><b>Звук записей</b>
-          <span id="storage-audio" class="tiny muted">считаю…</span>
-          <button id="btn-reveal-audio" class="ghost small" type="button" title="Открыть папку, где лежит звук записей">Открыть папку</button></div>
-        <div class="storage-row"><b>Видео</b>
-          <span id="storage-videos" class="tiny muted">считаю…</span>
-          <button id="btn-reveal-videos" class="ghost small" type="button" title="Открыть папку, куда раздел «Видео» складывает видео и звук">Открыть папку</button></div>
-        <label class="inline" title="Звук нужен для «Перечитать точнее», разметки и разделения голосов. После удаления стенограмма, документы и заметка остаются.">Удалять звук звонков старше
-          <input id="set-retention" type="number" min="0" max="3650" step="1" style="width:74px"> дней</label>
-        <div id="storage-due" class="tiny muted"></div>
-      </div>
-                        
-      <div class="field" style="margin-top:12px" id="dict-title">Словарь замен
-        <span class="q" tabindex="0" title="Копятся из ваших правок: поправили слово несколько раз — программа предложит делать так всегда.&#10;Применяются к новому распознанному тексту (запись и «Перечитать точнее»). Готовые стенограммы не переписываются: вы могли править их руками.&#10;Заменяется целым словом, регистр сказанного не важен.">?</span>
-      </div>
-      <div id="fix-suggest" class="hidden"></div>
-      <div id="fix-rules"></div>
-      <label class="field" style="max-width:320px">После скольких одинаковых правок предлагать замену
-        <input id="set-fix-after" type="number" min="1" max="20" step="1">
-      </label>
-      <div class="tiny muted">Журнал правок лежит рядом с записями, на этом компьютере,
-        и в сборку для других людей не попадает: в нём имена и названия.</div>
-      <label class="inline" data-feature="screenshots"><input type="checkbox" id="set-shots"> снимки экрана во время записи — в заметку, в момент разговора</label>
-      <div class="tiny muted">Снимком считается файл, появившийся во время записи в папке «Снимки экрана»
-        (Win+Shift+S сохраняет туда сам). Скопированные картинки не берутся. Снимки лежат рядом
-        с заметкой (папка «Скриншоты» категории); сами картинки в модель не отправляются.</div>
-      <label class="inline" title="Полупрозрачный кружок поверх всех окон, пока идёт запись. Красный — микрофон включён, серый — выключен. Щелчок переключает микрофон Windows: пока он выключен, вас не слышат ни собеседники, ни запись."><input type="checkbox" id="set-mic-pill"> кружок микрофона поверх окон во время записи</label>
-      <label class="inline"><input type="checkbox" id="set-tray"> значок у часов: крестик прячет окно в трей</label>
-      <label class="inline"><input type="checkbox" id="set-autostart-win"> запускать вместе с Windows, сразу в трей</label>
-      <div class="tiny muted">Совсем закрыть программу — правой кнопкой по значку у часов → «Выход».
-        Если значка не видно, он спрятан под стрелкой «^» рядом с часами — его можно перетащить на панель.</div>
-    </div>
+      <h2 class="set-title">Общие</h2>
 
-    <div id="t-voices" class="tabpane hidden">
-      <p class="tiny">База голосов лежит <b>только на этом компьютере</b> и никуда не отправляется.
-        Перед объединением и удалением людей программа сохраняет копию базы.</p>
-            <!-- Всё про голоса в одном разделе (п. 9.3): токен, пороги узнавания
-           и авторазметка переехали сюда из «Основного». -->
-      <label class="field" id="hf-field">Токен HuggingFace (нужен для разметки говорящих)
-        <input id="set-hf" type="password" placeholder="hf_…">
-        <span id="hf-state" class="tiny muted"></span>
-      </label>
-<div class="two">
-        <label class="field">Порог «это точно он», 0–1
-          <input id="set-match" type="number" min="0.3" max="0.99" step="0.01">
-        </label>
-        <label class="field">Порог «похоже на», 0–1
-          <input id="set-suggest" type="number" min="0.2" max="0.9" step="0.01">
-        </label>
-      </div>
-<label class="inline" title="Сразу после «Стоп» разделить собеседников по голосам и подписать знакомых по базе голосов. Занимает процессор на несколько минут."><input type="checkbox" id="set-auto-diarize"> делать разметку голосов автоматически</label>
-      <div class="field">Люди и образцы голоса</div>
-      <div id="voices-dupes"></div>
-      <div id="voices-list" class="voices"></div>
-      <!-- Опасное действие внизу: раньше «Очистить базу голосов» была
-           первым и самым заметным элементом раздела (п. 9.4). -->
-<div class="row voices-tools">
-        <button id="btn-voices-clear" class="danger small" type="button" title="Удалить из базы всех людей и все образцы голоса. Перед этим сохраняется копия — её можно вернуть.">Очистить базу голосов</button>
-        <select id="voices-backup-select" title="Копии базы: делаются перед очисткой, объединением и удалением людей"></select>
-        <button id="btn-voices-restore" class="ghost small" type="button" title="Вернуть базу голосов из выбранной копии. Текущая база перед этим тоже сохранится копией.">Вернуть из копии</button>
-      </div>
-    </div>
-
-    <div id="t-call" class="tabpane hidden">
-      <label class="inline"><input type="checkbox" id="set-watch"> замечать начало звонка</label>
-      <label class="inline"><input type="checkbox" id="set-autostart"> начинать запись автоматически, не спрашивать</label>
-      <div class="two">
-        <label class="field">Звонок закончился — без ответа остановить запись через, секунд
-          <input id="set-call-stop" type="number" min="5" max="600" step="5">
-          <span class="tiny muted">Программа спросит «Остановить?». Не ответили — остановит сама.</span>
-        </label>
-        <label class="field">Новый звонок вскоре после записи — предлагать дописать, если прошло не больше, секунд
-          <input id="set-call-resume" type="number" min="30" max="7200" step="30">
-          <span class="tiny muted">Спросит: дописать звонок в прошлую заметку или оставить новой. 600 с — 10 минут.</span>
-        </label>
-      </div>
-      <!-- Забытая запись (20.09): разговор кончился, а запись идёт. Считаем
-           слова, а не реплики: в тишине распознавание выдаёт однословный мусор
-           с промежутками в четверть часа. -->
-      <div class="two">
-        <label class="field">Спросить «разговор закончился?», если за столько минут сказано меньше слов, минут
-          <span class="row dt-row"><input id="set-idle-min" type="number" min="0" max="240" step="1" placeholder="10">
-            <span class="q" tabindex="0" title="По умолчанию 10 минут. 0 — защита выключена.&#10;Запись 18.09 проработала 1 ч 17 мин, из них разговор — первые шесть минут: её просто забыли остановить. Программа спросит и, не получив ответа, остановит запись сама. «Продолжаю» откладывает следующий вопрос, а не выключает защиту.">?</span></span>
-          <span class="tiny muted">0 — не следить за этим вовсе.</span>
-        </label>
-        <label class="field">Слов за это время, меньше которых — тишина
-          <span class="row dt-row"><input id="set-idle-words" type="number" min="0" max="200" step="1" placeholder="5">
-            <span class="q" tabindex="0" title="По умолчанию 5 слов.&#10;Считаются слова по обеим дорожкам вместе. Именно слова, а не реплики: в тишине распознавание выдаёт однословный мусор («По.», «Т.», «Ава.»), и правило «нет реплик» сбрасывалось бы им снова и снова.">?</span></span>
-          <span class="tiny muted">Одно слово в пять минут — это не разговор.</span>
-        </label>
-      </div>
-      <div class="two">
-        <label class="field">Без ответа остановить забытую запись через, секунд
-          <input id="set-idle-confirm" type="number" min="30" max="3600" step="30">
-          <span class="tiny muted">Совещание бывает с долгими паузами, поэтому сначала вопрос и только потом остановка.</span>
-        </label>
-      </div>
-      <div class="two">
-        <label class="field">Считать звонок началом встречи, если до неё осталось не больше, минут
-          <span class="row dt-row"><input id="set-meeting-ahead" type="number" min="0" max="120" step="1" placeholder="5">
-            <span class="q" tabindex="0" title="По умолчанию 5 минут.&#10;Название записи берётся у встречи из календаря: у идущей — всегда, у будущей — только если до неё осталось не больше этого срока. Закончившаяся встреча имени не даёт. 0 — брать имя только у идущей встречи.">?</span></span>
-          <span class="tiny muted">Имя записи берётся у встречи Outlook. Меньше — реже подхватывается
-            чужая встреча, стоящая следом.</span>
-        </label>
-        <label class="field">Звонок засчитывается, когда микрофон занят не меньше, секунд
-          <span class="row dt-row"><input id="set-call-debounce" type="number" min="0" max="60" step="1" placeholder="3">
-            <span class="q" tabindex="0" title="По умолчанию 3 секунды.&#10;Запись начинается, когда программа звонка держит микрофон столько секунд подряд. Меньше — начало звонка теряется реже, но выше шанс, что запись начнётся от случайного обращения к микрофону. Начало разговора, сказанное с выключенным микрофоном, не запишется при любом значении.">?</span></span>
-          <span class="tiny muted">Меньше — раньше начинается запись, но чаще ложные старты.</span>
-        </label>
-      </div>
-      <label class="inline"><input type="checkbox" id="set-require-mic"> звонок — это программа держит микрофон (громкость не важна)</label>
-      <label class="field">Отслеживаемые программы (через запятую)
-        <textarea id="set-procs" rows="3"></textarea>
-      </label>
-      <label class="inline"><input type="checkbox" id="set-outlook"> брать название и участников встречи из Outlook</label>
-      <div id="outlook-state" class="tiny muted"></div>
-    </div>
-
-    <div id="t-processing" class="tabpane hidden">
-      <label class="field">Как называть меня в стенограмме и документах
-        <input id="set-owner" type="text" maxlength="60" placeholder="Я">
-        <span class="tiny muted">Например «Я» или «Иван П.». Реплики с вашего микрофона будут подписаны
-          этим именем, и модель будет называть вас так же.</span>
-      </label>
       <!-- Своя роль (20.09). Роли остальных ставятся щелчком по имени в
            стенограмме; своя — здесь, рядом с именем: в стенограмме по себе не
            щёлкают. Из них документ понимает, что пообещали мы, а что они. -->
-      <div class="fb-row">
-        <label class="inline" title="Кем вы приходитесь остальным в типичном разговоре: покупатель, поставщик, подрядчик. Документ по этому понимает, чьи обязательства чьи.">Моя сторона
-          <select id="set-owner-side"></select>
-        </label>
-        <label class="inline" title="Ваша должность: руководитель закупок, юрист, генеральный директор. Свободный текст.">Моя должность
-          <input id="set-owner-position" type="text" class="meta-input" maxlength="60" placeholder="не указана">
-        </label>
+      <div class="sgroup">
+        <div class="grp-title">О вас</div>
+        <div class="srow">
+          <div class="slabel">Ваше имя<span class="shint">подпись ваших реплик</span></div>
+          <div class="sctl"><input id="set-owner" class="w-m" type="text" maxlength="60" placeholder="Я"></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Сторона и должность<span class="shint">кто вы в разговоре</span></div>
+          <div class="sctl">
+            <select id="set-owner-side" class="w-m" title="Кем вы приходитесь остальным в типичном разговоре: покупатель, поставщик, подрядчик"></select>
+            <input id="set-owner-position" class="w-m" type="text" maxlength="60" placeholder="должность"
+                   title="Ваша должность: руководитель закупок, юрист, генеральный директор. Свободный текст.">
+          </div>
+        </div>
       </div>
-      <!-- Язык инструкций (17.09). Ответ всегда
-           по-русски; переключается только язык, на котором написаны требования. -->
-      <label class="field">Язык инструкций для модели
-        <select id="set-prompt-lang">
-          <option value="ru">Русский (как сейчас)</option>
-          <option value="en">Английский, ответ всё равно по-русски</option>
-        </select>
-        <span class="tiny muted">Документ в любом случае пишется по-русски, и заголовки разделов
-          остаются русскими. Меняется только язык самих требований. Считается, что модели точнее
-          следуют английским инструкциям, и они дешевле по токенам, но на наших промптах это не
-          замерялось — переключайте, только если качество документов начнёт скакать, и сравните
-          на одной и той же записи. Документ со своей задачей (ниже) переводом не подменяется:
-          ваш текст всегда идёт как есть.</span>
-      </label>
+
+      <div class="sgroup">
+        <div class="grp-title">Хранилище</div>
+        <div class="srow">
+          <div class="slabel">Папка заметок<span class="shint">сюда ложатся заметки</span></div>
+          <div class="sctl"><input id="set-vault" class="w-l" type="text">
+            <button class="ghost small js-pick-folder" type="button" data-for="set-vault"
+                    title="Выбрать папку в окне, как в Проводнике. Путь можно и вписать руками.">Выбрать…</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Подпапка для записей</div>
+          <div class="sctl"><input id="set-subfolder" class="w-m" type="text"><span id="vault-state" class="sstate"></span></div>
+        </div>
+      </div>
+
+      <!-- Где лежит звук и видео и сколько занимает; срок хранения звука звонков. -->
+      <div class="sgroup">
+        <div class="grp-title">Место на диске</div>
+        <div class="srow">
+          <div class="slabel">Звук записей</div>
+          <div class="sctl"><span id="storage-audio" class="sinfo">считается…</span>
+            <button id="btn-reveal-audio" class="ghost small sact" type="button" title="Открыть папку, где лежит звук записей">Открыть папку</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Видео</div>
+          <div class="sctl"><span id="storage-videos" class="sinfo">считается…</span>
+            <button id="btn-reveal-videos" class="ghost small sact" type="button" title="Открыть папку, куда раздел «Видео» складывает видео и звук">Открыть папку</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Удалять звук звонков<span class="shint">стенограммы остаются</span></div>
+          <div class="sctl" title="Звук нужен для «Перечитать точнее», разметки и разделения голосов. После удаления стенограмма, документы и заметка остаются.">
+            <span>старше</span><input id="set-retention" class="w-s" type="number" min="0" max="3650" step="1"><span>дней</span>
+            <span id="storage-due" class="sstate"></span></div>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Обработка во время записи</div>
+        <div class="srow">
+          <div class="slabel">Прошлые записи, пока идёт новая<span class="shint">процессор один ·
+            <button type="button" class="linky js-more" data-more="busy-more">подробнее</button></span></div>
+          <div class="sctl"><select id="set-busy-rec" class="w-l">
+              <option value="background">разметку — отдельной программой с низким приоритетом, остальное — на паузу</option>
+              <option value="pause">ставить на паузу, продолжать после «Стоп»</option>
+              <option value="run">не останавливать — запись и обработка делят процессор</option>
+            </select></div>
+        </div>
+        <div id="busy-more" class="smore hidden">Разметка голосов, «Перечитать точнее» и распознавание
+          файлов занимают почти весь процессор: во время звонка из-за них запаздывает текст и не сразу
+          начинает писаться звук собеседников. Отдельная программа не ждёт конца записи: Windows отдаёт
+          ей процессор после остальных, а пока идёт запись — только экономичные ядра. Документы и
+          скачивание не останавливаются.</div>
+      </div>
+
+      <!-- Словарь замен один на программу (решение 18.09): у каждой замены
+           помечено, где она действует. Список — строками с «убрать» и
+           «+ добавить», без плашек. -->
+      <div class="sgroup" id="dict-title">
+        <div class="grp-title">Словарь замен
+          <span class="q" tabindex="0" title="Копятся из ваших правок: поправили слово несколько раз — программа предложит делать так всегда.&#10;Применяются к новому распознанному тексту (запись и «Перечитать точнее»). Готовые стенограммы не переписываются: вы могли править их руками.&#10;Заменяется целым словом, регистр сказанного не важен.">?</span></div>
+        <div id="fix-suggest" class="hidden"></div>
+        <div id="fix-rules" class="slist"></div>
+        <div class="slist-add">
+          <input id="fix-new-from" class="w-m" type="text" placeholder="как слышит модель" data-bound="1">
+          <span class="muted">→</span>
+          <input id="fix-new-to" class="w-m" type="text" placeholder="как писать" data-bound="1">
+          <button id="btn-fix-add" class="ghost small" type="button">+ добавить</button>
+        </div>
+        <div class="srow">
+          <div class="slabel">Предлагать замену<span class="shint">после стольких правок</span></div>
+          <div class="sctl"><input id="set-fix-after" class="w-s" type="number" min="1" max="20" step="1"></div>
+        </div>
+        <div class="shint">Журнал правок лежит рядом с записями и в сборку для других людей не попадает: в нём имена и названия.</div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Запуск</div>
+        <label class="scheck"><input type="checkbox" id="set-autostart-win"><span>Запускать вместе с Windows, сразу в трей</span></label>
+        <label class="scheck"><input type="checkbox" id="set-tray"><span>Крестик прячет окно в трей
+          <span class="shint">совсем закрыть — правой кнопкой по значку у часов → «Выход» ·
+            <button type="button" class="linky js-more" data-more="tray-more">подробнее</button></span></span></label>
+        <div id="tray-more" class="smore hidden">Если значка у часов не видно, он спрятан под стрелкой
+          «^» рядом с часами — его можно перетащить на панель.</div>
+      </div>
+    </div>
+
+    <!-- ================================================ Запись и звонки -->
+    <div id="t-call" class="tabpane hidden">
+      <h2 class="set-title">Запись и звонки</h2>
+
+      <div class="sgroup" data-feature="calls">
+        <div class="grp-title">Звонки</div>
+        <label class="scheck"><input type="checkbox" id="set-watch"><span>Замечать начало звонка</span></label>
+        <label class="scheck"><input type="checkbox" id="set-autostart"><span>Начинать запись автоматически, не спрашивая</span></label>
+        <div class="srow">
+          <div class="slabel">Звонок закончился<span class="shint">без ответа — остановить через</span></div>
+          <div class="sctl"><input id="set-call-stop" class="w-s" type="number" min="5" max="600" step="5"><span>с</span></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Предлагать дописать<span class="shint">если новый звонок — не позже</span></div>
+          <div class="sctl"><input id="set-call-resume" class="w-s" type="number" min="30" max="7200" step="30"><span>с</span></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Звонок засчитывается<span class="shint">когда микрофон занят не меньше</span></div>
+          <div class="sctl"><input id="set-call-debounce" class="w-s" type="number" min="0" max="60" step="1" placeholder="3"><span>с</span>
+            <span class="q" tabindex="0" title="По умолчанию 3 секунды.&#10;Запись начинается, когда программа звонка держит микрофон столько секунд подряд. Меньше — начало звонка теряется реже, но выше шанс, что запись начнётся от случайного обращения к микрофону. Начало разговора, сказанное с выключенным микрофоном, не запишется при любом значении.">?</span></div>
+        </div>
+        <label class="scheck"><input type="checkbox" id="set-require-mic"><span>Звонок — это программа держит микрофон
+          <span class="shint">громкость не важна</span></span></label>
+        <div class="srow">
+          <div class="slabel">Отслеживаемые программы<span class="shint">через запятую</span></div>
+          <div class="sctl"><textarea id="set-procs" class="w-l" rows="2"></textarea></div>
+        </div>
+      </div>
+
+      <!-- Забытая запись (20.09): разговор кончился, а запись идёт. Считаем
+           слова, а не реплики: в тишине распознавание выдаёт однословный мусор
+           с промежутками в четверть часа. Защита — для любой записи, не только
+           начатой звонком. -->
+      <div class="sgroup">
+        <div class="grp-title">Забытая запись</div>
+        <div class="srow">
+          <div class="slabel">Спросить «разговор закончился?»<span class="shint">через столько минут без слов</span></div>
+          <div class="sctl"><input id="set-idle-min" class="w-s" type="number" min="0" max="240" step="1" placeholder="10"><span>мин</span>
+            <span class="q" tabindex="0" title="По умолчанию 10 минут. 0 — защита выключена.&#10;Запись 18.09 проработала 1 ч 17 мин, из них разговор — первые шесть минут: её просто забыли остановить. Программа спросит и, не получив ответа, остановит запись сама. «Продолжаю» откладывает следующий вопрос, а не выключает защиту.">?</span></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Без слов — это меньше<span class="shint">слов за это время</span></div>
+          <div class="sctl"><input id="set-idle-words" class="w-s" type="number" min="0" max="200" step="1" placeholder="5"><span>слов</span>
+            <span class="q" tabindex="0" title="По умолчанию 5 слов.&#10;Считаются слова по обеим дорожкам вместе. Именно слова, а не реплики: в тишине распознавание выдаёт однословный мусор («По.», «Т.», «Ава.»), и правило «нет реплик» сбрасывалось бы им снова и снова.">?</span></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Без ответа остановить через<span class="shint">сначала всегда вопрос</span></div>
+          <div class="sctl"><input id="set-idle-confirm" class="w-s" type="number" min="30" max="3600" step="30"><span>с</span></div>
+        </div>
+      </div>
+
+      <div class="sgroup" data-feature="outlook">
+        <div class="grp-title">Встречи из календаря</div>
+        <label class="scheck"><input type="checkbox" id="set-outlook"><span>Брать название и участников встречи из календаря
+          <span id="outlook-state" class="shint"></span></span></label>
+        <div class="srow">
+          <div class="slabel">Встреча впереди считается<span class="shint">если до неё не больше</span></div>
+          <div class="sctl"><input id="set-meeting-ahead" class="w-s" type="number" min="0" max="120" step="1" placeholder="5"><span>мин</span>
+            <span class="q" tabindex="0" title="По умолчанию 5 минут.&#10;Название записи берётся у встречи из календаря: у идущей — всегда, у будущей — только если до неё осталось не больше этого срока. Закончившаяся встреча имени не даёт. Меньше — реже подхватывается чужая встреча, стоящая следом. 0 — имя только у идущей встречи.">?</span></div>
+        </div>
+      </div>
+
+      <div class="sgroup" data-feature="screenshots">
+        <div class="grp-title">Снимки экрана</div>
+        <label class="scheck"><input type="checkbox" id="set-shots"><span>Снимки экрана — в заметку, в момент разговора
+          <span class="shint">снимок — файл, появившийся в папке снимков во время записи ·
+            <button type="button" class="linky js-more" data-more="shots-more">подробнее</button></span></span></label>
+        <div id="shots-more" class="smore hidden">Win+Shift+S сохраняет снимки в «Снимки экрана» сам.
+          Скопированные картинки не берутся. Снимки лежат рядом с заметкой (папка «Скриншоты»
+          категории); сами картинки в модель не отправляются.</div>
+        <div class="srow">
+          <div class="slabel">Папки снимков<span class="shint">если программа их не находит</span></div>
+          <div class="sctl sctl-col">
+            <div id="shot-folders-list" class="slist"></div>
+            <!-- Список хранится строками в этом поле; на экране — строками с «убрать». -->
+            <textarea id="set-shot-folders" rows="2" hidden></textarea>
+            <button class="ghost small js-pick-folder" type="button" data-for="set-shot-folders" data-add="line"
+                    title="Выбрать папку в окне, как в Проводнике, и добавить в список">+ добавить папку</button>
+            <span id="shot-folders-state" class="sstate"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sgroup" data-feature="micmute">
+        <div class="grp-title">Выключатель микрофона</div>
+        <label class="scheck"><input type="checkbox" id="set-mic-pill"><span>Кружок микрофона поверх окон во время записи
+          <span class="shint">красный — микрофон включён, серый — выключен; щелчок переключает</span></span></label>
+      </div>
+    </div>
+
+    <!-- ================================================ Голоса -->
+    <div id="t-voices" class="tabpane hidden">
+      <h2 class="set-title">Голоса</h2>
+      <p class="set-lead">База голосов лежит только на этом компьютере и никуда не отправляется.
+        Перед объединением и удалением людей программа сохраняет копию базы.</p>
+
+      <div class="sgroup">
+        <div class="grp-title">Разметка голосов</div>
+        <label class="scheck"><input type="checkbox" id="set-auto-diarize"><span>Размечать голоса автоматически
+          <span class="shint">сразу после «Стоп»: разделить собеседников и подписать знакомых по базе</span></span></label>
+        <div class="srow" id="hf-field">
+          <div class="slabel">Токен HuggingFace<span class="shint">нужен этому выпуску</span></div>
+          <div class="sctl"><input id="set-hf" class="w-m" type="password"><span id="hf-state" class="sstate"></span></div>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Люди и образцы голоса</div>
+        <div class="slist-tools">
+          <input id="voices-filter" class="w-m" type="text" placeholder="найти по имени" autocomplete="off" data-bound="1">
+        </div>
+        <div id="voices-dupes"></div>
+        <div id="voices-list" class="voices"></div>
+      </div>
+
+      <!-- Пороги — тонкая настройка: видны, только когда включены тонкие
+           настройки, и свёрнуты. -->
+      <details class="sgroup sfold" data-feature="advanced">
+        <summary class="grp-title">Точность узнавания</summary>
+        <div class="srow">
+          <div class="slabel">Порог «это точно он»<span class="shint">от 0 до 1</span></div>
+          <div class="sctl"><input id="set-match" class="w-s" type="number" min="0.3" max="0.99" step="0.01"></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Порог «похоже на»<span class="shint">от 0 до 1</span></div>
+          <div class="sctl"><input id="set-suggest" class="w-s" type="number" min="0.2" max="0.9" step="0.01"></div>
+        </div>
+      </details>
+
+      <!-- Опасное — последней группой раздела. -->
+      <div class="sgroup">
+        <div class="grp-title">Копии и сброс</div>
+        <div class="srow">
+          <div class="slabel">Копии базы<span class="shint">делаются перед изменениями</span></div>
+          <div class="sctl"><select id="voices-backup-select" class="w-m" title="Копии базы голосов"></select>
+            <button id="btn-voices-restore" class="ghost small" type="button" title="Вернуть базу голосов из выбранной копии. Текущая база перед этим тоже сохранится копией.">Вернуть из копии</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Очистить базу<span class="shint">копия сохранится</span></div>
+          <div class="sctl"><button id="btn-voices-clear" class="danger small" type="button" title="Удалить из базы всех людей и все образцы голоса. Перед этим сохраняется копия — её можно вернуть.">Очистить базу голосов…</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================ Документы -->
+    <div id="t-processing" class="tabpane hidden">
+      <h2 class="set-title">Документы</h2>
+
+      <div class="sgroup">
+        <div class="grp-title">Чем делать документы</div>
+        <div class="srow">
+          <div class="slabel">Чем делать<span class="shint">протокол, конспект и другие</span></div>
+          <div class="sctl"><select id="set-engine" class="w-m">
+              <option value="claude_cli">Claude на этом компьютере (по вашей подписке)</option>
+              <option value="api">Сторонний сервис по ключу</option>
+            </select><span id="engine-state" class="sstate"></span></div>
+        </div>
+
+        <!-- Поля подписки и поля стороннего сервиса не показываются одновременно:
+             лишние строки на экране сбивают с толку сильнее, чем помогают. -->
+        <div id="cli-fields">
+          <div class="srow">
+            <div class="slabel">Модель</div>
+            <div class="sctl"><select id="set-cli-model" class="w-m">
+                <option value="">По умолчанию (подберётся сама)</option>
+                <option value="haiku">Haiku — быстро и дёшево</option>
+                <option value="sonnet">Sonnet — середина</option>
+                <option value="opus">Opus — точнее всего</option>
+              </select></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Сколько ждать ответа</div>
+            <div class="sctl"><input id="set-cli-timeout" class="w-s" type="number" min="60" max="3600" step="30"><span>с</span></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Связь</div>
+            <div class="sctl"><button id="btn-check-cli" class="ghost small" type="button" title="Найден ли Claude CLI, выполнен ли вход и доходит ли он до серверов Anthropic. Делает один короткий запрос из лимита подписки.">Проверить</button>
+              <span id="cli-check-state" class="sstate"></span></div>
+          </div>
+        </div>
+
+        <!-- Сервис по ключу — адрес, ключ и модель (решение 21.09). Списка
+             сервисов нет: они отличались только адресом, а выбор в списке молча
+             переключал сервис. Как разговаривать, служба узнаёт по адресу. -->
+        <div id="api-fields" class="hidden">
+          <!-- «?» открывает подходящие адреса (список ведёт служба): российские,
+               с бесплатным тарифом и OpenRouter — у каждого кнопка «Копировать». -->
+          <div class="srow">
+            <div class="slabel">Адрес сервиса<span id="api-url-state" class="shint">обычно заканчивается на /v1</span></div>
+            <div class="sctl"><input id="set-api-url" class="w-l" type="text" placeholder="https://polza.ai/api/v1">
+              <span id="btn-services" class="q q-click" tabindex="0" role="button"
+                    title="Подходящие адреса — щёлкните, чтобы открыть список">?</span></div>
+          </div>
+          <div class="ac"><div id="services-pop" class="ac-list services-pop hidden"></div></div>
+          <div class="srow">
+            <div class="slabel">Ключ</div>
+            <div class="sctl"><input id="set-apikey" class="w-m" type="password"><span id="apikey-state" class="sstate"></span></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Модель</div>
+            <div class="sctl"><span class="ac ac-combo w-m">
+                <input id="set-model" type="text" autocomplete="off"
+                       placeholder="начните вводить имя или откройте список">
+                <button type="button" class="ac-arrow" tabindex="-1" title="Показать список моделей">▾</button>
+                <span id="api-models" class="ac-list hidden"></span>
+              </span>
+              <button id="btn-refresh-models" class="ghost small" type="button" title="Спросить у сервиса, какие модели сейчас доступны — подсказка для поля «Модель»">Обновить список моделей</button></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Как разговаривает</div>
+            <div class="sctl"><select id="set-api-kind" class="w-m">
+                <option value="">По адресу</option>
+                <option value="openai">Как OpenAI</option>
+                <option value="anthropic">Как Anthropic</option>
+                <option value="gigachat">Как GigaChat</option>
+                <option value="yandexgpt">Как YandexGPT</option>
+              </select></div>
+          </div>
+          <div class="srow hidden" id="folder-field">
+            <div class="slabel">Идентификатор каталога<span class="shint">нужен YandexGPT</span></div>
+            <div class="sctl"><input id="set-folder" class="w-m" type="text" placeholder="b1g…"></div>
+          </div>
+        </div>
+        <div id="quality-state" class="shint"></div>
+      </div>
+
       <!-- Задачи наружу (17.09): личный токен Todoist. Секрет — наружу отдаётся
            только «задан/не задан» и хвостик. -->
-      <label class="field">Токен Todoist (для кнопки «Поставить задачи»)
-        <input id="set-todoist" type="password" autocomplete="off" placeholder="не задан">
-        <span class="tiny muted">Личный токен: в Todoist откройте Settings → Integrations →
-          Developer и скопируйте «API token». Нужен только для отправки задач; без него всё
-          остальное работает как раньше. Хранится в настройках программы и вычищается из
-          сборки, которую вы отдаёте другому человеку.</span>
-      </label>
-      <div class="tiny muted" style="margin-bottom:10px">Ниже — задача и структура каждого документа.
-        Общие правила (не выдумывать имён, как называть вас), служебный формат ответа и правило
-        про ссылки на снимки экрана добавляются автоматически.</div>
-      <div id="prompt-list"></div>
+      <div class="sgroup" data-feature="todoist">
+        <div class="grp-title">Задачи в Todoist</div>
+        <div class="srow">
+          <div class="slabel">Токен Todoist<span class="shint">для «Поставить задачи» ·
+            <button type="button" class="linky js-more" data-more="todoist-more">подробнее</button></span></div>
+          <div class="sctl"><input id="set-todoist" class="w-m" type="password" autocomplete="off"><span id="todoist-state" class="sstate"></span></div>
+        </div>
+        <div id="todoist-more" class="smore hidden">Личный токен: в Todoist откройте Settings → Integrations →
+          Developer и скопируйте «API token». Нужен только для отправки задач. Хранится в настройках
+          программы и вычищается из сборки, которую вы отдаёте другому человеку. Чтобы убрать
+          сохранённый токен, впишите в поле слово «убрать».</div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Виды документов</div>
+        <div class="shint">Задача и структура каждого документа. Общие правила, формат ответа и ссылки на снимки добавляются сами.</div>
+        <div id="prompt-list" class="slist"></div>
+      </div>
     </div>
 
-    <!-- «Вид»: тема и плотность. Применяются сразу и сохраняются в настройках. -->
-    <div id="t-view" class="tabpane hidden">
-      <div class="field">Тема</div>
-      <div id="theme-grid" class="theme-grid">
-        <button class="theme-card" data-theme-pick="light" type="button" title="Тема «Светлая»">
-          <span class="theme-mini" data-mini="light">
-            <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
-            <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
-              <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
-            </span>
-          </span>
-          <span class="theme-name">Светлая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
-        </button>
-        <button class="theme-card" data-theme-pick="dark" type="button" title="Тема «Тёмная»">
-          <span class="theme-mini" data-mini="dark">
-            <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
-            <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
-              <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
-            </span>
-          </span>
-          <span class="theme-name">Тёмная <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
-        </button>
-        <button class="theme-card" data-theme-pick="warm" type="button" title="Тема «Тёплая»">
-          <span class="theme-mini" data-mini="warm">
-            <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
-            <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
-              <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
-            </span>
-          </span>
-          <span class="theme-name">Тёплая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
-        </button>
-        <!-- Пятая тема (решение 17.09): только серые, цвет один —
-             у полоски выбранной записи, черты вкладки и кольца фокуса. -->
-        <button class="theme-card" data-theme-pick="neutral" type="button" title="Тема «Нейтральная»">
-          <span class="theme-mini" data-mini="neutral">
-            <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
-            <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
-              <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
-            </span>
-          </span>
-          <span class="theme-name">Нейтральная <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
-        </button>
-        <button class="theme-card" data-theme-pick="bright" type="button" title="Тема «Яркая»">
-          <span class="theme-mini" data-mini="bright">
-            <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
-            <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
-              <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
-            </span>
-          </span>
-          <span class="theme-name">Яркая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
-        </button>
-      </div>
-      <div class="field">Размер интерфейса</div>
-      <div id="density-seg" class="density-seg">
-        <button data-density-pick="tiny" type="button" title="Кнопки 24 px, мелкий шрифт">Мелко</button>
-        <button data-density-pick="compact" type="button" title="Кнопки 26 px">Плотно</button>
-        <button data-density-pick="normal" type="button" title="Кнопки 32 px">Обычно</button>
-        <button data-density-pick="large" type="button" title="Кнопки 38 px, крупный шрифт">Крупно</button>
-      </div>
-      <div class="tiny muted" style="margin-top:8px">Меняются шрифты, кнопки и отступы. Цвета и функции — нет.</div>
-    </div>
-
-    <!-- «Диктовка»: горячая клавиша наговаривает текст в любое окно. -->
+    <!-- ================================================ Диктовка -->
     <div id="t-dictate" class="tabpane hidden">
-      <label class="inline"><input type="checkbox" id="set-dictate"> диктовать текст по горячей клавише</label>
-      <div class="tiny muted">Нажали сочетание, сказали фразу — текст встал туда, где стоит курсор:
-        в письмо, в чат, в любое поле. Распознаётся на этом компьютере той же точной моделью,
-        что и «Перечитать точнее». Наружу ничего не уходит.</div>
-      <div class="dictate-memory">
-        <label class="inline" title="Та же модель нужна видео, файлам и «Перечитать точнее» — срок действует для всех">Выгружать точную модель из памяти после
-          <input id="set-precise-idle" type="number" min="0" max="1440" step="5" style="width:64px"> мин простоя</label>
-        <div class="tiny muted">Точная модель вместе с библиотекой занимает около 1,3 ГБ памяти.
-          На старте программы она не загружается: первый раз — когда нажали сочетание, и
-          пока вы говорите, она успевает подняться. После простоя модель выгружается, и
-          следующая фраза снова подождёт пару секунд. Видео, звонки и «Перечитать точнее»
-          загружают её сами, когда нужно, — от галочки выше они не зависят.
-          0 — держать в памяти всё время.</div>
-      </div>
-      <div class="two">
-        <label class="field">Горячая клавиша
-          <button id="btn-dictate-hotkey" class="ghost" type="button"
-                  title="Нажмите кнопку, а затем — нужное сочетание клавиш">Ctrl + Shift + Space</button>
-        </label>
-        <label class="field">Когда останавливать
-          <select id="set-dictate-mode">
-            <option value="smart">Сама: коротко нажал — старт-стоп, держу — пока держу</option>
-            <option value="hold">Пока держу клавишу</option>
-            <option value="toggle">Нажал — начал, нажал — закончил</option>
-          </select>
-        </label>
-      </div>
-      <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
-        <span class="tiny muted">Или сразу:</span>
-        <button class="ghost small js-hk" data-hk="ctrl+win" type="button">Ctrl + Win</button>
-        <button class="ghost small js-hk" data-hk="alt+win" type="button">Alt + Win</button>
-        <button class="ghost small js-hk" data-hk="ctrl+space" type="button">Ctrl + Space</button>
-        <button class="ghost small js-hk" data-hk="alt+q" type="button">Alt + Q</button>
-      </div>
-      <div id="dictate-state" class="tiny muted"></div>
-      <!-- Голосовые заметки (20.09): та же диктовка, но текст ложится в
-           открытую запись. Отдельное сочетание на поручение — решение 20.09. -->
-      <div class="two">
-        <label class="field">Заметка к открытой записи
-          <button id="btn-note-hotkey" class="ghost" type="button" data-hotkey=""
-                  title="Надиктованное ляжет в запись, открытую в окне, разделом «Мои заметки». Записи на экране нет — текст вставится в чужое окно, как обычная диктовка.">не задано</button>
-        </label>
-        <label class="field">Поручение к открытой записи
-          <button id="btn-task-hotkey" class="ghost" type="button" data-hotkey=""
-                  title="То же самое, но заметка помечается поручением. В Todoist она уйдёт кнопкой «Поставить задачи» — сама программа наружу ничего не отправляет.">не задано</button>
-        </label>
-      </div>
-      <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
-        <button id="btn-note-hotkey-clear" class="ghost small" type="button">Убрать сочетание заметки</button>
-        <button id="btn-task-hotkey-clear" class="ghost small" type="button">Убрать сочетание поручения</button>
-      </div>
-      <div class="tiny muted">Заметки в стенограмму не попадают — это ваше слово, сказанное
-        отдельно. В документах они учитываются в первую очередь, выше сказанного на встрече.</div>
-      <!-- Появляется только для сочетаний из одних модификаторов: о таком нужно
-           сказать прямо, а не прятать в справке. -->
-      <div id="dictate-hook-warn" class="tiny hidden" style="margin-top:4px">
-        ⚠ Ctrl+Win и Alt+Win Windows обычным способом не отдаёт: такое сочетание можно
-        поймать, только если программа подписана на все нажатия клавиатуры. Пока выбрано
-        именно оно, подписка включена. Программа смотрит только на Ctrl, Alt, Shift и Win,
-        ничего не запоминает и никуда не отправляет — но антивирус может об этом
-        предупредить. Любое сочетание с обычной клавишей работает без подписки.
-      </div>
-      <div class="two">
-        <label class="field">Язык
-          <select id="set-dictate-lang">
-            <option value="ru">Русский (GigaAM)</option>
-            <option value="en">Английский (Parakeet)</option>
-          </select>
-        </label>
-        <label class="field">Микрофон для диктовки
-          <select id="set-dictate-mic" title="Пусто — тот же микрофон, что и для записи совещаний"></select>
-        </label>
-      </div>
-      <div class="field" style="margin-top:8px">Внешний вид и звуки</div>
-      <label class="inline"><input type="checkbox" id="set-dictate-pill"> показывать капсулу «слушаю»</label>
-      <label class="inline"><input type="checkbox" id="set-dictate-sound"> звуки диктовки: щелчок в начале и в конце</label>
-      <div class="tiny muted">Язык задаётся здесь, а не берётся из раскладки Windows.</div>
-      <label class="inline" title="Сказанное слово «точка» станет знаком «.», «новая строка» — переводом строки"><input type="checkbox" id="set-dictate-marks"> превращать сказанные «точка», «запятая», «новая строка» в знаки</label>
-      <div class="tiny muted">Обычно это не нужно: модель сама ставит знаки препинания и заглавные буквы.
-        Включайте, если диктуете списки и хотите управлять разметкой голосом. Учтите: слово «точка»,
-        сказанное по делу, тоже превратится в знак.</div>
-      <label class="inline" title="Убирает из надиктованного «э-э-э», «ну», «типа» и другие слова из списка ниже"><input type="checkbox" id="set-dictate-fillers"> убирать слова-паразиты</label>
-      <div class="tiny muted">Работает списком на этом компьютере, без интернета и без облачных моделей.
-        Тянущиеся звуки — «э-э-э», «ммм», «а-а-а» — убираются всегда, их перечислять не нужно.
-        Вводное слово уносит с собой свои запятые: «Это, короче, важно» станет «Это важно».
-        <b>Стенограммы звонков это не трогает</b> — там речь остаётся как сказана.</div>
-      <label class="field">Список слов, через запятую
-        <span class="row dt-row"><input id="set-dictate-fillers-list" type="text" style="flex:1"
-               placeholder="ну, вот, типа, как бы, короче">
-          <span class="q" tabindex="0" title="Каждое слово убирается целиком и в любом регистре; можно писать обороты из нескольких слов («как бы», «это самое»).&#10;Осторожно со словами, которые бывают нужны по делу: «вот» уберётся и во «вот документ».&#10;Пустой список не отменяет чистку тянущихся звуков.">?</span></span>
-      </label>
+      <h2 class="set-title">Диктовка</h2>
+      <label class="scheck"><input type="checkbox" id="set-dictate"><span>Диктовать текст по горячей клавише
+        <span class="shint">текст встаёт туда, где стоит курсор; распознаётся на этом компьютере</span></span></label>
 
-      <!-- Словарь замен один на программу (решение 18.09): раньше
-           здесь был второй такой же список, и человек должен был помнить, в
-           каком из двух искать. -->
-      <div class="field" style="margin-top:10px">Замены слов</div>
-      <div class="tiny muted">Имена, названия и термины, которые модель слышит по-своему,
-        живут в общем словаре: <button id="btn-go-dict" class="linky" type="button">открыть
-        словарь замен</button>. У каждой замены помечено, где она действует — в стенограммах,
-        в диктовке или всюду.</div>
-
-      <div class="row" style="margin-top:14px;align-items:center;gap:8px">
-        <div class="field" style="margin:0;flex:1">История диктовок</div>
-        <button id="btn-dictate-history" class="ghost small" type="button">Показать</button>
-        <button id="btn-dictate-forget" class="danger small" type="button"
-                title="Удалить всё надиктованное из истории. Вернуть будет нельзя.">Очистить</button>
+      <div class="sgroup">
+        <div class="grp-title">Сочетания клавиш</div>
+        <div class="srow">
+          <div class="slabel">Диктовка<span class="shint">щёлкните и нажмите сочетание</span></div>
+          <div class="sctl">
+            <!-- Одно поле: щелчок — «нажмите сочетание», стрелка — готовые
+                 сочетания (Ctrl+Win и Alt+Win окно само не поймает). -->
+            <span class="hk-field">
+              <button id="btn-dictate-hotkey" class="hk-btn" type="button"
+                      title="Щёлкните, а затем нажмите нужное сочетание клавиш">Ctrl + Shift + Space</button>
+              <button class="hk-more" type="button" data-menu="hk-menu-dictate" title="Готовые сочетания" aria-label="Готовые сочетания">▾</button>
+              <span id="hk-menu-dictate" class="hk-menu hidden">
+                <button class="js-hk" data-hk="ctrl+win" type="button">Ctrl + Win</button>
+                <button class="js-hk" data-hk="alt+win" type="button">Alt + Win</button>
+                <button class="js-hk" data-hk="ctrl+space" type="button">Ctrl + Space</button>
+                <button class="js-hk" data-hk="alt+q" type="button">Alt + Q</button>
+              </span>
+            </span>
+            <span id="dictate-state" class="sstate"></span>
+          </div>
+        </div>
+        <!-- Появляется только для сочетаний из одних модификаторов: о таком нужно
+             сказать прямо, а не прятать в справке. -->
+        <div id="dictate-hook-warn" class="shint warn-line hidden">⚠ Ctrl+Win и Alt+Win ловятся только
+          подпиской на все нажатия клавиатуры — антивирус может предупредить ·
+          <button type="button" class="linky js-more" data-more="hook-more">подробнее</button>
+          <span id="hook-more" class="hidden">Windows обычным способом такие сочетания не отдаёт. Пока
+            выбрано именно оно, подписка включена. Программа смотрит только на Ctrl, Alt, Shift и Win,
+            ничего не запоминает и никуда не отправляет. Любое сочетание с обычной клавишей работает без
+            подписки.</span></div>
+        <div class="srow">
+          <div class="slabel">Когда останавливать</div>
+          <div class="sctl"><select id="set-dictate-mode" class="w-l">
+              <option value="smart">Само: коротко нажал — старт и стоп, держу — пока держу</option>
+              <option value="hold">Пока держу клавишу</option>
+              <option value="toggle">Нажал — начал, нажал — закончил</option>
+            </select></div>
+        </div>
+        <!-- Голосовые заметки (20.09): та же диктовка, но текст ложится в
+             открытую запись. Отдельное сочетание на поручение — решение 20.09.
+             «Убрать» — только у заданного сочетания. -->
+        <div class="srow">
+          <div class="slabel">Заметка к открытой записи<span class="shint">ляжет в «Мои заметки»</span></div>
+          <div class="sctl">
+            <button id="btn-note-hotkey" class="hk-btn" type="button" data-hotkey=""
+                    title="Надиктованное ляжет в запись, открытую в окне, разделом «Мои заметки». Записи на экране нет — текст вставится в чужое окно, как обычная диктовка.">не задано</button>
+            <button id="btn-note-hotkey-clear" class="ghost small hidden" type="button">убрать</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Поручение к открытой записи<span class="shint">заметка-поручение</span></div>
+          <div class="sctl">
+            <button id="btn-task-hotkey" class="hk-btn" type="button" data-hotkey=""
+                    title="То же самое, но заметка помечается поручением. В Todoist она уйдёт кнопкой «Поставить задачи» — сама программа наружу ничего не отправляет.">не задано</button>
+            <button id="btn-task-hotkey-clear" class="ghost small hidden" type="button">убрать</button></div>
+        </div>
+        <div class="shint">Заметки в стенограмму не попадают; в документах учитываются в первую очередь.</div>
       </div>
-      <div class="tiny muted">Последние 100 диктовок хранятся на этом компьютере, рядом с записями,
-        и никуда не отправляются. Пригодится, если текст вставился не туда или окно закрылось.</div>
-      <div id="dictate-history" class="hidden"></div>
+
+      <div class="sgroup">
+        <div class="grp-title">Язык и микрофон</div>
+        <div class="srow">
+          <div class="slabel">Язык<span class="shint">не по раскладке Windows</span></div>
+          <div class="sctl"><select id="set-dictate-lang" class="w-m">
+              <option value="ru">Русский</option>
+              <option value="en">Английский</option>
+            </select></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Микрофон</div>
+          <div class="sctl"><select id="set-dictate-mic" class="w-m" title="Пусто — тот же микрофон, что и для записи совещаний"></select></div>
+        </div>
+      </div>
+
+      <!-- Срок простоя имеет смысл, только когда точная модель не работает в
+           записи: при одной точной модели на всё она в памяти постоянно. -->
+      <div class="sgroup dictate-memory">
+        <div class="grp-title">Память</div>
+        <div class="srow">
+          <div class="slabel">Выгружать точную модель<span class="shint">после простоя · 0 — держать всё время ·
+            <button type="button" class="linky js-more" data-more="memory-more">подробнее</button></span></div>
+          <div class="sctl" title="Та же модель нужна видео, файлам и «Перечитать точнее» — срок действует для всех">
+            <input id="set-precise-idle" class="w-s" type="number" min="0" max="1440" step="5"><span>мин</span></div>
+        </div>
+        <div id="memory-more" class="smore hidden">Точная модель вместе с библиотекой занимает около 1,3 ГБ
+          памяти. На старте программы она не загружается: первый раз — когда нажали сочетание, и пока
+          вы говорите, она успевает подняться. После простоя модель выгружается, и следующая фраза
+          снова подождёт пару секунд. Видео и «Перечитать точнее» загружают её сами, когда нужно.</div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Внешний вид и звуки</div>
+        <label class="scheck"><input type="checkbox" id="set-dictate-pill"><span>Показывать капсулу «слушаю»</span></label>
+        <label class="scheck"><input type="checkbox" id="set-dictate-sound"><span>Щелчок в начале и в конце диктовки</span></label>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Текст</div>
+        <label class="scheck"><input type="checkbox" id="set-dictate-marks"><span>Превращать сказанные «точка», «запятая», «новая строка» в знаки
+          <span class="shint">обычно не нужно: знаки ставит сама модель ·
+            <button type="button" class="linky js-more" data-more="marks-more">подробнее</button></span></span></label>
+        <div id="marks-more" class="smore hidden">Включайте, если диктуете списки и хотите управлять
+          разметкой голосом. Учтите: слово «точка», сказанное по делу, тоже превратится в знак.</div>
+        <label class="scheck"><input type="checkbox" id="set-dictate-fillers"><span>Убирать слова-паразиты
+          <span class="shint">списком на этом компьютере; стенограммы звонков не трогает ·
+            <button type="button" class="linky js-more" data-more="fillers-more">подробнее</button></span></span></label>
+        <div id="fillers-more" class="smore hidden">Без интернета и без облачных моделей. Тянущиеся
+          звуки — «э-э-э», «ммм», «а-а-а» — убираются всегда, их перечислять не нужно. Вводное слово
+          уносит с собой свои запятые: «Это, короче, важно» станет «Это важно».</div>
+        <div class="srow">
+          <div class="slabel">Список слов<span class="shint">через запятую</span></div>
+          <div class="sctl"><input id="set-dictate-fillers-list" class="w-l" type="text" placeholder="ну, вот, типа, как бы, короче">
+            <span class="q" tabindex="0" title="Каждое слово убирается целиком и в любом регистре; можно писать обороты из нескольких слов («как бы», «это самое»).&#10;Осторожно со словами, которые бывают нужны по делу: «вот» уберётся и во «вот документ».&#10;Пустой список не отменяет чистку тянущихся звуков.">?</span></div>
+        </div>
+        <!-- Словарь замен один на программу (решение 18.09): второго списка у
+             диктовки нет, только дорога к общему. -->
+        <div class="srow">
+          <div class="slabel">Замены слов<span class="shint">один словарь на всё</span></div>
+          <div class="sctl"><button id="btn-go-dict" class="linky" type="button">открыть словарь замен</button></div>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">История диктовок</div>
+        <div class="srow">
+          <div class="slabel">Последние 100 диктовок<span class="shint">лежат только здесь</span></div>
+          <div class="sctl"><button id="btn-dictate-history" class="ghost small" type="button">Показать</button>
+            <button id="btn-dictate-forget" class="danger small" type="button"
+                    title="Удалить всё надиктованное из истории. Вернуть будет нельзя.">Очистить…</button></div>
+        </div>
+        <div id="dictate-history" class="hidden"></div>
+      </div>
     </div>
 
+    <!-- ================================================ Модели -->
     <div id="t-minutes" class="tabpane hidden">
+      <h2 class="set-title">Модели</h2>
+
       <!-- Модели распознавания (решение 21.09): одна или две, какая для чего, на
            каком движке. Что скачать и что не нужно, решает служба
            (/api/asr/models); модели грузятся при запуске, поэтому выбор
-           срабатывает после перезапуска программы. -->
-      <label class="field">Модели для распознавания
-        <span class="row dt-row"><select id="set-asr-count">
-            <option value="1">одна модель на всё</option>
-            <option value="2">две модели</option>
-          </select>
-          <span class="q" tabindex="0" title="Достаточно одной, но при желании можно выбрать две: более быструю (e2e_ctc) — для набора текста и звонков, и более точную (e2e_rnnt). Для окончательного распознавания текста рекомендуется всегда использовать точную модель (e2e_rnnt).">?</span></span>
-      </label>
-      <div class="tiny muted">Рекомендуем одну точную модель на всё: она занимает меньше места на
-        диске и меньше памяти, чем две. Если её скорость не устраивает — выберите быструю. Если не
-        устраивает качество быстрой — поставьте точную для звонков или включите «Перечитать точнее».</div>
-      <div id="row-asr-single" class="two">
-        <label class="field">Модель
-          <select id="set-asr-single">
-            <option value="precise">точная</option>
-            <option value="fast">быстрая</option>
-          </select>
-        </label>
-      </div>
-      <div id="row-asr-two" class="hidden">
-        <div class="two">
-          <label class="field">Звонки и разговоры
-            <select id="set-asr-calls">
-              <option value="fast">быстрая</option>
-              <option value="precise">точная</option>
+           срабатывает после перезапуска программы — об этом говорит подвал. -->
+      <div class="sgroup">
+        <div class="grp-title">Распознавание</div>
+        <div class="srow">
+          <div class="slabel">Модели для распознавания<span class="shint">лучше одна точная ·
+            <button type="button" class="linky js-more" data-more="asr-more">подробнее</button></span></div>
+          <div class="sctl"><select id="set-asr-count" class="w-m">
+              <option value="1">одна модель на всё</option>
+              <option value="2">две модели</option>
             </select>
-          </label>
-          <label class="field">Голосовой ввод
-            <select id="set-asr-voice">
-              <option value="fast">быстрая</option>
-              <option value="precise">точная</option>
-            </select>
-          </label>
+            <span class="q" tabindex="0" title="Достаточно одной, но при желании можно выбрать две: более быструю (e2e_ctc) — для набора текста и звонков, и более точную (e2e_rnnt). Для окончательного распознавания текста рекомендуется всегда использовать точную модель (e2e_rnnt).">?</span></div>
         </div>
-        <label class="inline" title="Кнопка у записи: распознать её заново точной моделью. Есть, только когда звонки идут быстрой — перечитывать той же моделью незачем."><input type="checkbox" id="set-asr-reread"> «Перечитать точнее» у записей (только когда звонки идут быстрой)</label>
-        <div class="tiny muted">Файлы и видео всегда распознаются точной моделью.</div>
-      </div>
-      <label id="row-live-draft" class="inline hidden" title="Пока человек говорит, фраза видна серым и уточняется каждые полторы секунды. Во время звонка занимает 4–5 ядер процессора."><input type="checkbox" id="set-live-draft"> показывать текст фразы по ходу речи</label>
-      <div id="row-asr-engine" class="two">
-        <label class="field">Движок точной модели
-          <span class="row dt-row"><select id="set-asr-engine">
+        <div id="asr-more" class="smore hidden">Одна точная модель занимает меньше места на диске и меньше
+          памяти, чем две. Если её скорость не устраивает — выберите быструю. Если не устраивает качество
+          быстрой — поставьте точную для звонков или включите «Перечитать точнее».</div>
+        <div id="row-asr-single" class="srow">
+          <div class="slabel">Модель</div>
+          <div class="sctl"><select id="set-asr-single" class="w-m">
+              <option value="precise">точная</option>
+              <option value="fast">быстрая</option>
+            </select></div>
+        </div>
+        <div id="row-asr-two" class="hidden">
+          <div class="srow">
+            <div class="slabel">Звонки и разговоры</div>
+            <div class="sctl"><select id="set-asr-calls" class="w-m">
+                <option value="fast">быстрая</option>
+                <option value="precise">точная</option>
+              </select></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Голосовой ввод</div>
+            <div class="sctl"><select id="set-asr-voice" class="w-m">
+                <option value="fast">быстрая</option>
+                <option value="precise">точная</option>
+              </select></div>
+          </div>
+          <label class="scheck" title="Кнопка у записи: распознать её заново точной моделью. Есть, только когда звонки идут быстрой — перечитывать той же моделью незачем."><input type="checkbox" id="set-asr-reread"><span>«Перечитать точнее» у записей
+            <span class="shint">только когда звонки идут быстрой; файлы и видео — всегда точной</span></span></label>
+        </div>
+        <label id="row-live-draft" class="scheck hidden" title="Пока человек говорит, фраза видна серым и уточняется каждые полторы секунды. Во время звонка занимает 4–5 ядер процессора."><input type="checkbox" id="set-live-draft"><span>Показывать текст фразы по ходу речи</span></label>
+        <div id="row-asr-engine" class="srow">
+          <div class="slabel">Движок точной модели</div>
+          <div class="sctl"><select id="set-asr-engine" class="w-m">
               <option value="onnx_asr">onnx-asr</option>
               <option value="torch">torch</option>
             </select>
-            <span class="q" tabindex="0" title="Рекомендуем onnx-asr с полными весами: текст слово в слово как у torch, памяти занимает меньше.&#10;Сжатые веса — вчетверо меньше места и втрое меньше памяти, считают быстрее, но текст чуть хуже: совпадает около 98 % слов. Подойдут, если мало места или памяти.&#10;torch — исходный вариант модели: по скорости примерно как полные веса, памяти занимает больше всех. Оставлен для желающих сравнить.">?</span></span>
-        </label>
-        <label id="row-asr-weights" class="field">Веса
-          <select id="set-asr-weights">
-            <option value="fp32">полные</option>
-            <option value="int8">сжатые</option>
-          </select>
-        </label>
-      </div>
-      <div id="asr-models-notes" class="tiny"></div>
-      <div id="asr-models-download" class="row hidden" style="gap:8px;align-items:center">
-        <button id="btn-asr-download" class="small" type="button">Скачать нужное</button>
-        <span id="asr-download-what" class="tiny muted"></span>
-      </div>
-      <div id="asr-models-unneeded" class="tiny hidden">Этим настройкам не нужно:
-        <span id="asr-unneeded-what"></span>
-        <button id="btn-asr-delete" class="ghost small" type="button">Удалить</button>
-        <button id="btn-asr-keep" class="ghost small" type="button"
-                title="Больше не предлагать удалить эти файлы">Оставить</button>
-      </div>
-      <div id="asr-models-state" class="tiny"></div>
-      <div class="tiny muted">У каждой новой записи рядом с длительностью видно, какой моделью шла
-        запись; наведите — покажет, сколько процессора занимала программа и через сколько секунд
-        после конца речи появлялись фразы. <b>Выбор срабатывает после перезапуска программы.</b></div>
-      <div class="row" style="gap:8px;align-items:center;margin-top:6px">
-        <button id="btn-asr-reset" class="danger small" type="button">Сбросить всё</button>
-        <span class="tiny muted">Оставит одну точную модель (onnx-asr, полные веса) и рекомендованные
-          настройки, остальные модели удалит. Нет точной модели — сначала скачает её.</span>
-      </div>
-
-      <!-- Тяжёлое, чего может не быть в этой папке: качается по требованию. -->
-      <div class="field" style="margin-top:10px">Части, которые качаются отдельно</div>
-      <div class="tiny muted">Чтобы папка программы не весила лишние гигабайты, это скачивается
-        тогда, когда впервые понадобится. Скачанное остаётся в папке программы и переезжает
-        вместе с ней.</div>
-      <div id="needs-list" class="needs"></div>
-
-
-      <label class="field">Чем делать документы — протокол совещания и саммари видео
-        <select id="set-engine">
-          <option value="claude_cli">Claude на этом компьютере (по вашей подписке)</option>
-          <option value="api">Сторонний сервис по ключу</option>
-        </select>
-      </label>
-      <div id="engine-state" class="tiny muted"></div>
-
-      <!-- Поля подписки и поля стороннего сервиса не показываются одновременно:
-           лишние строки на экране сбивают с толку сильнее, чем помогают. -->
-      <div id="cli-fields">
-        <div class="two">
-          <label class="field">Модель
-            <select id="set-cli-model">
-              <option value="">По умолчанию (подберётся сама)</option>
-              <option value="haiku">Haiku — быстро и дёшево</option>
-              <option value="sonnet">Sonnet — середина</option>
-              <option value="opus">Opus — точнее всего</option>
-            </select>
-          </label>
-          <label class="field">Сколько ждать ответа, секунд
-            <input id="set-cli-timeout" type="number" min="60" max="3600" step="30">
-          </label>
+            <span class="q" tabindex="0" title="Рекомендуем onnx-asr с полными весами: текст слово в слово как у torch, памяти занимает меньше.&#10;Сжатые веса — вчетверо меньше места и втрое меньше памяти, считают быстрее, но текст чуть хуже: совпадает около 98 % слов. Подойдут, если мало места или памяти.&#10;torch — исходный вариант модели: по скорости примерно как полные веса, памяти занимает больше всех. Оставлен для желающих сравнить.">?</span></div>
         </div>
-        <div class="btn-row">
-          <button id="btn-check-cli" class="ghost small" type="button" title="Найден ли Claude CLI, выполнен ли вход и доходит ли он до серверов Anthropic. Делает один короткий запрос из лимита подписки.">Проверить</button>
+        <div id="row-asr-weights" class="srow">
+          <div class="slabel">Веса</div>
+          <div class="sctl"><select id="set-asr-weights" class="w-m">
+              <option value="fp32">полные</option>
+              <option value="int8">сжатые</option>
+            </select></div>
         </div>
-        <div id="cli-check-state" class="tiny muted"></div>
+        <div id="asr-models-notes" class="shint"></div>
+        <div id="asr-models-download" class="srow hidden">
+          <div class="slabel">Не хватает</div>
+          <div class="sctl"><button id="btn-asr-download" class="ghost small" type="button">Скачать нужное</button>
+            <span id="asr-download-what" class="sstate"></span></div>
+        </div>
+        <div id="asr-models-state" class="shint"></div>
       </div>
-
-      <!-- Сервис по ключу — адрес, ключ и модель (решение 21.09). Списка
-           сервисов нет: они отличались только адресом, а выбор в списке молча
-           переключал сервис. Как разговаривать, служба узнаёт по адресу. -->
-      <div id="api-fields" class="hidden">
-        <!-- «?» открывает подходящие адреса (список ведёт служба): российские,
-             с бесплатным тарифом и OpenRouter — у каждого кнопка «Копировать». -->
-        <label class="field">Адрес сервиса
-          <span class="row dt-row grow"><input id="set-api-url" type="text" placeholder="https://polza.ai/api/v1">
-            <span id="btn-services" class="q q-click" tabindex="0" role="button"
-                  title="Подходящие адреса — щёлкните, чтобы открыть список">?</span></span>
-          <span id="api-url-state" class="tiny muted">Адрес API, обычно заканчивается на /v1.
-            Только https и только внешний адрес.</span>
-        </label>
-        <div class="ac"><div id="services-pop" class="ac-list services-pop hidden"></div></div>
-        <label class="field">Ключ
-          <input id="set-apikey" type="password" placeholder="вставьте ключ">
-          <span id="apikey-state" class="tiny muted"></span>
-        </label>
-        <label class="field">Модель
-          <span class="ac ac-combo">
-            <input id="set-model" type="text" autocomplete="off"
-                   placeholder="начните вводить имя или откройте список">
-            <button type="button" class="ac-arrow" tabindex="-1" title="Показать список моделей">▾</button>
-            <span id="api-models" class="ac-list hidden"></span>
-          </span>
-        </label>
-        <div class="two">
-          <label class="field">Как разговаривает
-            <select id="set-api-kind">
-              <option value="">По адресу</option>
-              <option value="openai">Как OpenAI</option>
-              <option value="anthropic">Как Anthropic</option>
-              <option value="gigachat">Как GigaChat</option>
-              <option value="yandexgpt">Как YandexGPT</option>
-            </select>
-          </label>
-          <label class="field hidden" id="folder-field">Идентификатор каталога (нужен YandexGPT)
-            <input id="set-folder" type="text" placeholder="b1g…">
-          </label>
-        </div>
-        <div class="btn-row">
-          <button id="btn-refresh-models" class="ghost small" type="button" title="Спросить у сервиса, какие модели сейчас доступны — подсказка для поля «Модель»">Обновить список моделей</button>
-        </div>
-      </div>
-
-      <div id="quality-state" class="tiny muted"></div>
 
       <!-- Где распознавать файлы и видео (решение 21.09: из окна «Видео» сюда).
            Облако — своё подключение: документы часто пишет подписка Claude, а
-           распознаёт агрегатор. -->
-      <label class="field" style="margin-top:14px">Где распознавать файлы и видео
-        <select id="set-asr-files">
-          <option value="local">На этом компьютере (бесплатно)</option>
-          <option value="cloud">В облаке по ключу (платно)</option>
-        </select>
-      </label>
-      <div class="tiny muted">Живой микрофон распознаётся только на этом компьютере — в облако
-        он не попадает никогда.</div>
-      <div id="cloud-asr-fields">
-        <label class="field">Адрес сервиса
-          <input id="set-cloud-asr-url" type="text" placeholder="https://polza.ai/api/v1">
-        </label>
-        <div class="two">
-          <label class="field">Ключ
-            <input id="set-cloud-asr-key" type="password" placeholder="вставьте ключ">
-            <span id="cloud-asr-key-state" class="tiny muted"></span>
-          </label>
-          <label class="field">Модель
-            <span class="ac ac-combo">
-              <input id="set-cloud-asr-model" type="text" autocomplete="off" placeholder="openai/whisper-1">
-              <button type="button" class="ac-arrow" tabindex="-1" title="Показать список моделей">▾</button>
-              <span id="cloud-asr-models" class="ac-list hidden"></span>
-            </span>
-          </label>
+           распознаёт агрегатор. Облачные поля — только при выборе облака. -->
+      <div class="sgroup">
+        <div class="grp-title">Файлы и видео</div>
+        <div class="srow">
+          <div class="slabel">Где распознавать<span class="shint">микрофон — всегда здесь</span></div>
+          <div class="sctl"><select id="set-asr-files" class="w-m">
+              <option value="local">На этом компьютере (бесплатно)</option>
+              <option value="cloud">В облаке по ключу (платно)</option>
+            </select></div>
         </div>
-        <div class="btn-row">
-          <button id="btn-cloud-asr-models" class="ghost small" type="button" title="Спросить у сервиса, какие модели распознавания доступны и почём">Обновить список моделей</button>
+        <div id="cloud-asr-fields">
+          <div class="srow">
+            <div class="slabel">Адрес сервиса</div>
+            <div class="sctl"><input id="set-cloud-asr-url" class="w-l" type="text" placeholder="https://polza.ai/api/v1"></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Ключ</div>
+            <div class="sctl"><input id="set-cloud-asr-key" class="w-m" type="password"><span id="cloud-asr-key-state" class="sstate"></span></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Модель</div>
+            <div class="sctl"><span class="ac ac-combo w-m">
+                <input id="set-cloud-asr-model" type="text" autocomplete="off" placeholder="openai/whisper-1">
+                <button type="button" class="ac-arrow" tabindex="-1" title="Показать список моделей">▾</button>
+                <span id="cloud-asr-models" class="ac-list hidden"></span>
+              </span>
+              <button id="btn-cloud-asr-models" class="ghost small" type="button" title="Спросить у сервиса, какие модели распознавания доступны и почём">Обновить список моделей</button></div>
+          </div>
+          <div id="cloud-asr-state" class="shint"></div>
         </div>
       </div>
-      <div id="cloud-asr-state" class="tiny muted"></div>
+
+      <!-- Тяжёлое, чего может не быть в этой папке: качается по требованию.
+           Части выключенных возможностей служба не отдаёт. -->
+      <div class="sgroup">
+        <div class="grp-title">Загруженные части</div>
+        <div class="shint">Скачиваются, когда впервые понадобятся, и остаются в папке программы.</div>
+        <div id="needs-list" class="needs"></div>
+      </div>
+
+      <div class="sgroup" id="asr-models-unneeded">
+        <div class="grp-title">Место на диске</div>
+        <div class="srow">
+          <div class="slabel">Лишние файлы моделей<span class="shint">этим настройкам не нужны</span></div>
+          <div class="sctl"><span id="asr-unneeded-what" class="sinfo"></span>
+            <button id="btn-asr-delete" class="ghost small" type="button">Удалить</button>
+            <button id="btn-asr-keep" class="ghost small" type="button"
+                    title="Больше не предлагать удалить эти файлы">Оставить</button></div>
+        </div>
+      </div>
+
+      <!-- Опасное — последней группой раздела. -->
+      <div class="sgroup">
+        <div class="grp-title">Сброс</div>
+        <div class="srow">
+          <div class="slabel">Сбросить модели<span class="shint">останется одна точная</span></div>
+          <div class="sctl"><button id="btn-asr-reset" class="danger small" type="button">Сбросить всё…</button></div>
+        </div>
+      </div>
     </div>
 
-    <!-- Продвинутые настройки разметки голосов (решение 15.09). Пустое
-         поле — как у модели; кнопка «по умолчанию» ставит значение программы. -->
+    <!-- ================================================ Сочетания -->
     <!-- Сочетания клавиш в одном месте: правка стенограммы работает клавишами,
          и помнить их по подсказке над стенограммой неудобно (16.09). -->
+    <div id="t-keys" class="tabpane hidden">
+      <h2 class="set-title">Сочетания</h2>
+      <div class="sgroup">
+        <div class="grp-title">Правка стенограммы</div>
+        <div class="shint">Работают, когда над стенограммой нажата кнопка «Править». Вне этого режима клавиши ведут себя как обычно.</div>
+        <table class="keys">
+          <tr><th>Сочетание</th><th>Что делает</th></tr>
+          <tr><td><b>Alt</b> + щелчок по слову</td><td>Разрезать реплику перед этим словом</td></tr>
+          <tr><td><b>Alt</b> + <b>↑</b></td><td>Отдать выделенные слова реплике выше (отдаётся начало реплики)</td></tr>
+          <tr><td><b>Alt</b> + <b>↓</b></td><td>Отдать выделенные слова реплике ниже (отдаётся хвост)</td></tr>
+          <tr><td><b>Enter</b></td><td>Отдать выделенные слова другому голосу записи — появится список</td></tr>
+          <tr><td>Двойной щелчок по реплике</td><td>Править текст реплики</td></tr>
+          <tr><td><b>Enter</b> в правке текста</td><td>Сохранить текст реплики</td></tr>
+          <tr><td><b>Escape</b></td><td>Отменить правку текста, закрыть список или окно</td></tr>
+          <tr><td><b>Ctrl</b> + <b>Z</b></td><td>Отменить последнее действие правки — <b>любое</b>: разрез, перенос
+            соседу, передачу другому голосу, правку текста. Можно несколько подряд</td></tr>
+        </table>
+        <div class="shint" data-feature="advanced">Сколько правок помнит «Отменить» и как долго — «Тонкие настройки».</div>
+      </div>
+
+      <!-- То же сочетание, что и в «Диктовке»: хранится одно, меняется
+           синхронно (решение 16.09). -->
+      <div class="sgroup" data-feature="dictation">
+        <div class="grp-title">Диктовка</div>
+        <div class="srow">
+          <div class="slabel">Набор текста голосом<span class="shint">то же, что в «Диктовке»</span></div>
+          <div class="sctl">
+            <span class="hk-field">
+              <button id="btn-keys-hotkey" class="hk-btn" type="button"
+                      title="Щёлкните, а затем нажмите нужное сочетание клавиш">Ctrl + Shift + Space</button>
+              <button class="hk-more" type="button" data-menu="hk-menu-keys" title="Готовые сочетания" aria-label="Готовые сочетания">▾</button>
+              <span id="hk-menu-keys" class="hk-menu hidden">
+                <button class="js-hk" data-hk="ctrl+win" type="button">Ctrl + Win</button>
+                <button class="js-hk" data-hk="alt+win" type="button">Alt + Win</button>
+                <button class="js-hk" data-hk="ctrl+space" type="button">Ctrl + Space</button>
+                <button class="js-hk" data-hk="alt+q" type="button">Alt + Q</button>
+              </span>
+            </span>
+            <span id="keys-hotkey-state" class="sstate"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================ Вид -->
+    <!-- «Вид»: тема и плотность. Применяются сразу и сохраняются в настройках. -->
+    <div id="t-view" class="tabpane hidden">
+      <h2 class="set-title">Вид</h2>
+      <div class="sgroup">
+        <div class="grp-title">Тема</div>
+        <div id="theme-grid" class="theme-grid">
+          <button class="theme-card" data-theme-pick="light" type="button" title="Тема «Светлая»">
+            <span class="theme-mini" data-mini="light">
+              <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+              <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+              </span>
+            </span>
+            <span class="theme-name">Светлая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
+          </button>
+          <button class="theme-card" data-theme-pick="dark" type="button" title="Тема «Тёмная»">
+            <span class="theme-mini" data-mini="dark">
+              <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+              <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+              </span>
+            </span>
+            <span class="theme-name">Тёмная <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
+          </button>
+          <button class="theme-card" data-theme-pick="warm" type="button" title="Тема «Тёплая»">
+            <span class="theme-mini" data-mini="warm">
+              <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+              <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+              </span>
+            </span>
+            <span class="theme-name">Тёплая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
+          </button>
+          <!-- Пятая тема (решение 17.09): только серые, цвет один —
+               у полоски выбранной записи, черты вкладки и кольца фокуса. -->
+          <button class="theme-card" data-theme-pick="neutral" type="button" title="Тема «Нейтральная»">
+            <span class="theme-mini" data-mini="neutral">
+              <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+              <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+              </span>
+            </span>
+            <span class="theme-name">Нейтральная <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
+          </button>
+          <button class="theme-card" data-theme-pick="bright" type="button" title="Тема «Яркая»">
+            <span class="theme-mini" data-mini="bright">
+              <span class="tm-bar"><i class="tm-dot"></i><i class="tm-dot"></i></span>
+              <span class="tm-body"><i class="tm-line"></i><i class="tm-line short"></i>
+                <span class="tm-dots"><i class="tm-dot rec"></i><i class="tm-dot warn"></i><i class="tm-dot ok"></i></span>
+              </span>
+            </span>
+            <span class="theme-name">Яркая <svg class="tick" aria-hidden="true"><use href="/static/icons.svg#ic-check"></use></svg></span>
+          </button>
+        </div>
+      </div>
+      <div class="sgroup">
+        <div class="grp-title">Размер интерфейса</div>
+        <div id="density-seg" class="density-seg">
+          <button data-density-pick="tiny" type="button" title="Кнопки 24 px, мелкий шрифт">Мелко</button>
+          <button data-density-pick="compact" type="button" title="Кнопки 26 px">Плотно</button>
+          <button data-density-pick="normal" type="button" title="Кнопки 32 px">Обычно</button>
+          <button data-density-pick="large" type="button" title="Кнопки 38 px, крупный шрифт">Крупно</button>
+        </div>
+        <div class="shint">Меняются шрифты, кнопки и отступы. Цвета и функции — нет.</div>
+      </div>
+    </div>
+
+    <!-- ================================================ Возможности -->
     <!-- «Возможности» (п. 9.2, решение 18.09): переключатели, а не
          два режима программы. Выключенная возможность исчезает из интерфейса
          целиком; данные остаются на месте. Основной путь — записать,
          распознать, разметить, сделать документ, сохранить заметку — от
          переключателей не зависит. -->
     <div id="t-features" class="tabpane hidden">
-      <p class="tiny">Ненужное можно убрать с экрана: поля, кнопки и разделы настроек
+      <h2 class="set-title">Возможности</h2>
+      <p class="set-lead">Ненужное можно убрать с экрана: поля, кнопки и разделы настроек
         пропадут, а данные останутся. Включите обратно — всё вернётся.</p>
-      <div id="features-list" class="features"></div>
-      <div class="row" style="margin-top:14px">
+      <div class="slist-tools">
         <button id="btn-features-all" class="ghost small" type="button"
                 title="Включить все возможности сразу">Включить всё</button>
+        <span class="muted">·</span>
+        <button id="btn-features-default" class="ghost small" type="button"
+                title="Вернуть набор возможностей, с которым программа ставится">По умолчанию</button>
       </div>
+      <div id="features-list" class="features"></div>
     </div>
 
-    <div id="t-keys" class="tabpane hidden">
-      <p class="tiny">Сочетания правки стенограммы работают, когда над стенограммой нажата
-        кнопка <b>«Править»</b>. Вне этого режима клавиши ведут себя как обычно.</p>
-
-      <table class="keys">
-        <tr><th>Сочетание</th><th>Что делает</th></tr>
-        <tr><td><b>Alt</b> + щелчок по слову</td><td>Разрезать реплику перед этим словом</td></tr>
-        <tr><td><b>Alt</b> + <b>↑</b></td><td>Отдать выделенные слова реплике выше (отдаётся начало реплики)</td></tr>
-        <tr><td><b>Alt</b> + <b>↓</b></td><td>Отдать выделенные слова реплике ниже (отдаётся хвост)</td></tr>
-        <tr><td><b>Enter</b></td><td>Отдать выделенные слова любому говорящему записи — появится список</td></tr>
-        <tr><td>Двойной щелчок по реплике</td><td>Править текст реплики</td></tr>
-        <tr><td><b>Enter</b> в правке текста</td><td>Сохранить текст реплики</td></tr>
-        <tr><td><b>Escape</b></td><td>Отменить правку текста, закрыть список или окно</td></tr>
-        <tr><td><b>Ctrl</b> + <b>Z</b></td><td>Отменить последнее действие правки — <b>любое</b>: разрез, перенос
-          соседу, передачу другому говорящему, правку текста. Можно несколько подряд</td></tr>
-      </table>
-
-      <p class="tiny muted">Сколько правок помнит «Отменить» и как долго — «Продвинутые».</p>
-
-      <!-- То же сочетание, что и в «Наборе текста»: меняется здесь — меняется там. -->
-      <div class="field">Набор текста голосом
-        <span class="row dt-row"><button id="btn-keys-hotkey" class="ghost" type="button"
-                title="Нажмите кнопку, а затем — нужное сочетание клавиш">Ctrl + Shift + Space</button>
-          <span class="tiny muted">Или сразу:</span>
-          <button class="ghost small js-hk" data-hk="ctrl+win" type="button">Ctrl + Win</button>
-          <button class="ghost small js-hk" data-hk="alt+win" type="button">Alt + Win</button>
-          <button class="ghost small js-hk" data-hk="ctrl+space" type="button">Ctrl + Space</button>
-          <button class="ghost small js-hk" data-hk="alt+q" type="button">Alt + Q</button></span>
-        <span class="tiny muted">Это то же сочетание, что на вкладке «Набор текста»: поменяли здесь —
-          поменялось и там. Диктовка сама по себе включается там же.</span>
-        <div id="keys-hotkey-state" class="tiny muted"></div>
-      </div>
-    </div>
-
+    <!-- ================================================ Тонкие настройки -->
+    <!-- Тонкие настройки (решение 15.09): пустое поле — как у модели; кнопка
+         «по умолчанию» ставит значение программы. Длинное пояснение — в «?». -->
     <div id="t-advanced" class="tabpane hidden">
-      <div class="set-group">Распознавание</div>
-<div class="two">
-        <label class="field">Пауза до закрепления фразы, мс
-          <input id="set-silence" type="number" min="800" max="5000" step="100">
-        </label>
-        <label class="field">Потоков процессора на распознавание
-          <input id="set-threads" type="number" min="2" max="12">
-        </label>
-      </div>
-      <div class="set-group">Разметка говорящих</div>
-      <p class="tiny">Действует со следующей разметки: чтобы сравнить, откройте запись
-        и нажмите «Разметить говорящих». Если стало хуже — «по умолчанию» у каждого поля.</p>
+      <h2 class="set-title">Тонкие настройки</h2>
 
-      <label class="field">Шаг окна, секунды
-        <span class="row dt-row"><input id="set-dt-step" type="number" min="0.25" max="10" step="0.25" placeholder="как у модели"><span class="q" tabindex="0" title="Пусто — как у модели: 1 секунда. Сейчас у программы 2 с.&#10;Модель слушает окном в 10 с и сдвигает его на этот шаг. Меньше — точнее границы и больше шансов заметить короткие реплики, но разметка дольше: 1 с примерно вдвое дольше, чем 2 с.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-dt-step" data-default="2">по умолчанию</button></span>
-        <span class="tiny muted">Модель слушает окном в 10 с и сдвигает его на этот шаг. Меньше — точнее
-          границы и больше шансов заметить короткие реплики, но разметка дольше: 1 с — примерно
-          вдвое дольше, чем 2 с.</span>
-      </label>
-
-      <label class="field">Порог группировки голосов
-        <span class="row dt-row"><input id="set-dt-threshold" type="number" min="0.3" max="0.95" step="0.05" placeholder="как у модели"><span class="q" tabindex="0" title="Пусто — как у модели: 0,6.&#10;Насколько похожие голоса считать одним человеком. Больше — чаще склеивает разных людей в одного. Меньше — чаще делит одного человека на двоих.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-dt-threshold" data-default="">по умолчанию</button></span>
-        <span class="tiny muted">Насколько похожие голоса считать одним человеком. Больше — чаще склеивает
-          разных людей в одного. Меньше — чаще делит одного человека на двоих.</span>
-      </label>
-
-      <label class="field">Штраф за лишнего говорящего
-        <span class="row dt-row"><input id="set-dt-fb" type="number" min="0.05" max="5" step="0.05" placeholder="как у модели"><span class="q" tabindex="0" title="Пусто — как у модели: 0,8.&#10;Больше — тех, кто сказал мало, приклеивает к похожему голосу. Меньше — оставляет их отдельными людьми, но чаще появляются лишние «голоса».">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-dt-fb" data-default="">по умолчанию</button></span>
-        <span class="tiny muted">Больше — тех, кто сказал мало, приклеивает к похожему голосу. Меньше —
-          оставляет их отдельными людьми, но чаще появляются лишние «голоса».</span>
-      </label>
-
-      <label class="field">Минимум речи для нового голоса, секунды
-        <span class="row dt-row"><input id="set-dt-minvoice" type="number" min="0.2" max="10" step="0.1" placeholder="как у модели"><span class="q" tabindex="0" title="Пусто — как у модели: 2 секунды.&#10;Сколько человек должен говорить один внутри 10-секундного окна, чтобы его нашли как нового. Меньше — замечает тех, кто сказал одну фразу, но голос определяется менее надёжно.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-dt-minvoice" data-default="">по умолчанию</button></span>
-        <span class="tiny muted">Сколько человек должен говорить один внутри окна, чтобы его нашли как
-          нового. Меньше — замечает тех, кто сказал одну фразу, но голос определяется менее надёжно.</span>
-      </label>
-
-      <!-- Скачивание по ссылкам: площадки меняют выдачу, и лечится это обновлением. -->
-      <div class="field">Скачивание видео по ссылкам (yt-dlp)
-        <span class="row dt-row"><button id="btn-ytdlp" class="ghost small" type="button"
-                title="Скачать свежий yt-dlp из интернета. Нужно, если ссылки на YouTube и другие площадки перестали открываться">Обновить yt-dlp</button>
-          <span id="ytdlp-state" class="tiny muted"></span></span>
-        <span class="tiny muted">Им качаются видео и звук по ссылкам, YouTube и готовые субтитры
-          источников. Площадки время от времени меняют выдачу — если ссылки перестали открываться,
-          первым делом обновите. На запись, распознавание и документы это не влияет.</span>
+      <div class="sgroup">
+        <div class="grp-title">Распознавание</div>
+        <div class="srow">
+          <div class="slabel">Пауза до закрепления фразы</div>
+          <div class="sctl"><input id="set-silence" class="w-s" type="number" min="800" max="5000" step="100"><span>мс</span></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Потоков процессора</div>
+          <div class="sctl"><input id="set-threads" class="w-s" type="number" min="2" max="12"></div>
+        </div>
       </div>
 
-      <label class="field">Резать фразу, если другой голос в ней звучит не меньше, секунд
-        <span class="row dt-row"><input id="set-dt-split" type="number" min="0" max="30" step="0.5" placeholder="2"><span class="q" tabindex="0" title="По умолчанию 2 секунды.&#10;Фраза, где говорили двое, делится на реплики по говорящим. Меньше — делит чаще, в том числе по ошибке модели. 0 — делить, только если чужая речь больше трети фразы.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-dt-split" data-default="2">по умолчанию</button></span>
-        <span class="tiny muted">Фраза, где говорили двое, делится на реплики по говорящим. Меньше — делит
-          чаще, в том числе по ошибке модели. 0 — делить, только если чужая речь больше трети фразы.</span>
-      </label>
+      <div class="sgroup">
+        <div class="grp-title">Разметка голосов</div>
+        <div class="shint">Действует со следующей разметки: чтобы сравнить, откройте запись и нажмите «Разметить голоса».</div>
+        <div class="srow">
+          <div class="slabel">Шаг окна<span class="shint">меньше — точнее, но дольше</span></div>
+          <div class="sctl"><input id="set-dt-step" class="w-s" type="number" min="0.25" max="10" step="0.25" placeholder="модель"><span>с</span>
+            <span class="q" tabindex="0" title="Пусто — как у модели: 1 секунда. Сейчас у программы 2 с.&#10;Модель слушает окном в 10 с и сдвигает его на этот шаг. Меньше — точнее границы и больше шансов заметить короткие реплики, но разметка дольше: 1 с примерно вдвое дольше, чем 2 с.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-dt-step" data-default="2">по умолчанию</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Порог группировки<span class="shint">больше — склеивает людей</span></div>
+          <div class="sctl"><input id="set-dt-threshold" class="w-s" type="number" min="0.3" max="0.95" step="0.05" placeholder="модель">
+            <span class="q" tabindex="0" title="Пусто — как у модели: 0,6.&#10;Насколько похожие голоса считать одним человеком. Больше — чаще склеивает разных людей в одного. Меньше — чаще делит одного человека на двоих.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-dt-threshold" data-default="">по умолчанию</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Штраф за лишний голос<span class="shint">больше — тихих к похожим</span></div>
+          <div class="sctl"><input id="set-dt-fb" class="w-s" type="number" min="0.05" max="5" step="0.05" placeholder="модель">
+            <span class="q" tabindex="0" title="Пусто — как у модели: 0,8.&#10;Больше — тех, кто сказал мало, приклеивает к похожему голосу. Меньше — оставляет их отдельными людьми, но чаще появляются лишние «голоса».">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-dt-fb" data-default="">по умолчанию</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Минимум речи нового голоса<span class="shint">меньше — ловит короткие</span></div>
+          <div class="sctl"><input id="set-dt-minvoice" class="w-s" type="number" min="0.2" max="10" step="0.1" placeholder="модель"><span>с</span>
+            <span class="q" tabindex="0" title="Пусто — как у модели: 2 секунды.&#10;Сколько человек должен говорить один внутри 10-секундного окна, чтобы его нашли как нового. Меньше — замечает тех, кто сказал одну фразу, но голос определяется менее надёжно.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-dt-minvoice" data-default="">по умолчанию</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Резать фразу по голосам<span class="shint">если чужой голос не короче</span></div>
+          <div class="sctl"><input id="set-dt-split" class="w-s" type="number" min="0" max="30" step="0.5" placeholder="2"><span>с</span>
+            <span class="q" tabindex="0" title="По умолчанию 2 секунды.&#10;Фраза, где говорили двое, делится на реплики по голосам. Меньше — делит чаще, в том числе по ошибке модели. 0 — делить, только если чужая речь больше трети фразы.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-dt-split" data-default="2">по умолчанию</button></div>
+        </div>
+      </div>
 
       <!-- Отмена ручных правок стенограммы: стопка снимков рядом с записью. -->
-      <label class="field">Отмена правок стенограммы: сколько помнить
-        <span class="row dt-row"><input id="set-undo-steps" type="number" min="0" max="200" step="1" placeholder="20"><span class="q" tabindex="0" title="По умолчанию 20 правок.&#10;Сколько последних правок стенограммы можно отменить подряд (Ctrl+Z). Перед каждой правкой программа откладывает копию всей стенограммы записи, поэтому запас не бесконечный: у длинной встречи это сотни килобайт на шаг. 0 — без предела.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-undo-steps" data-default="20">по умолчанию</button></span>
-        <span class="tiny muted">Сколько последних правок можно отменить подряд (Ctrl+Z). Перед каждой
-          правкой программа откладывает копию всей стенограммы записи, поэтому запас не бесконечный:
-          у длинной встречи это сотни килобайт на шаг. 0 — без предела.</span>
-      </label>
+      <div class="sgroup">
+        <div class="grp-title">Отмена правок стенограммы</div>
+        <div class="srow">
+          <div class="slabel">Сколько правок помнить<span class="shint">0 — без предела</span></div>
+          <div class="sctl"><input id="set-undo-steps" class="w-s" type="number" min="0" max="200" step="1" placeholder="20">
+            <span class="q" tabindex="0" title="По умолчанию 20 правок.&#10;Сколько последних правок стенограммы можно отменить подряд (Ctrl+Z). Перед каждой правкой программа откладывает копию всей стенограммы записи, поэтому запас не бесконечный: у длинной встречи это сотни килобайт на шаг. 0 — без предела.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-undo-steps" data-default="20">по умолчанию</button></div>
+        </div>
+        <div class="srow">
+          <div class="slabel">Сколько хранить<span class="shint">0 — пока жива запись</span></div>
+          <div class="sctl"><input id="set-undo-minutes" class="w-s" type="number" min="0" max="1440" step="5" placeholder="30"><span>мин</span>
+            <span class="q" tabindex="0" title="По умолчанию 30 минут.&#10;Через сколько минут отложенная копия выбрасывается, даже если правок было мало. Выход из режима правки запас не сбрасывает: нажали «Готово», вернулись — отменить прежние правки всё ещё можно, пока не вышел срок. 0 — хранить, пока жива запись.">?</span>
+            <button class="ghost small js-dt-reset" type="button" data-for="set-undo-minutes" data-default="30">по умолчанию</button></div>
+        </div>
+      </div>
 
-      <label class="field">Отмена правок стенограммы: срок хранения, минуты
-        <span class="row dt-row"><input id="set-undo-minutes" type="number" min="0" max="1440" step="5" placeholder="30"><span class="q" tabindex="0" title="По умолчанию 30 минут.&#10;Через сколько минут отложенная копия выбрасывается, даже если правок было мало. Выход из режима правки запас не сбрасывает: нажали «Готово», вернулись — отменить прежние правки всё ещё можно, пока не вышел срок. 0 — хранить, пока жива запись.">?</span>
-          <button class="ghost small js-dt-reset" type="button" data-for="set-undo-minutes" data-default="30">по умолчанию</button></span>
-        <span class="tiny muted">Через сколько минут отложенная копия выбрасывается, даже если правок было
-          мало. Выход из режима правки запас не сбрасывает: нажали «Готово», вернулись — отменить
-          прежние правки всё ещё можно, пока не вышел срок. 0 — хранить, пока жива запись.</span>
-      </label>
+      <!-- Язык инструкций (17.09). Ответ всегда по-русски; переключается
+           только язык, на котором написаны требования. -->
+      <div class="sgroup">
+        <div class="grp-title">Документы</div>
+        <div class="srow">
+          <div class="slabel">Язык инструкций для модели<span class="shint">ответ по-русски ·
+            <button type="button" class="linky js-more" data-more="lang-more">подробнее</button></span></div>
+          <div class="sctl"><select id="set-prompt-lang" class="w-m">
+              <option value="ru">Русский (как сейчас)</option>
+              <option value="en">Английский, ответ по-русски</option>
+            </select></div>
+        </div>
+        <div id="lang-more" class="smore hidden">Заголовки разделов остаются русскими, меняется только
+          язык самих требований. Считается, что модели точнее следуют английским инструкциям, и они
+          дешевле по токенам, но на наших промптах это не замерялось — переключайте, только если
+          качество документов начнёт скакать, и сравните на одной и той же записи. Свой запрос
+          переводом не подменяется: ваш текст всегда идёт как есть.</div>
+      </div>
+
+      <!-- Скачивание по ссылкам: площадки меняют выдачу, и лечится это обновлением. -->
+      <div class="sgroup">
+        <div class="grp-title">Скачивание видео по ссылкам</div>
+        <div class="srow">
+          <div class="slabel">yt-dlp<span class="shint">не открываются ссылки — обновите</span></div>
+          <div class="sctl"><button id="btn-ytdlp" class="ghost small" type="button"
+                    title="Скачать свежий yt-dlp из интернета. Нужно, если ссылки на YouTube и другие площадки перестали открываться">Обновить yt-dlp</button>
+            <span id="ytdlp-state" class="sstate"></span></div>
+        </div>
+      </div>
     </div>
 
+    <!-- ================================================ О программе -->
     <!-- О программе: версия и обновление. Проверка — только по кнопке: сама
          программа в интернет не ходит. -->
     <div id="t-about" class="tabpane hidden">
-      <div class="field"><b>Hagen, Your Consigliere</b> — версия <b id="about-version">—</b>
-        <span class="tiny muted">Записи, стенограммы и голоса остаются на этом компьютере.
-          В интернет программа ходит только по вашим кнопкам.</span>
+      <h2 class="set-title">О программе</h2>
+      <div class="sgroup">
+        <div class="srow">
+          <div class="slabel">Hagen, Your Consigliere</div>
+          <div class="sctl"><span class="sinfo">версия <b id="about-version">—</b></span></div>
+        </div>
+        <div class="shint">Записи, стенограммы и голоса остаются на этом компьютере. В интернет программа ходит только по вашим кнопкам.</div>
       </div>
-      <div class="field">Обновление
-        <span class="row dt-row"><button id="btn-upd-check" class="ghost small" type="button"
-                title="Спросить GitHub, есть ли выпуск новее. Сама программа этого не делает никогда">Проверить обновления</button>
-          <button id="btn-upd-file" class="ghost small" type="button"
-                  title="Архив выпуска Hagen-v…-windows.zip, скачанный со страницы релиза. Нужен, если GitHub отсюда не открывается">Установить из файла…</button>
-          <input id="upd-file" type="file" accept=".zip" hidden></span>
-        <span id="upd-state" class="tiny muted"></span>
+      <div class="sgroup">
+        <div class="grp-title">Обновление</div>
+        <!-- В сборке из git кнопок нет: код там обновляется через git. -->
+        <div id="upd-buttons" class="srow">
+          <div class="slabel">Новая версия</div>
+          <div class="sctl"><button id="btn-upd-check" class="ghost small" type="button"
+                    title="Спросить GitHub, есть ли выпуск новее. Сама программа этого не делает никогда">Проверить обновления</button>
+            <button id="btn-upd-file" class="ghost small" type="button"
+                    title="Архив выпуска Hagen-v…-windows.zip, скачанный со страницы релиза. Нужен, если GitHub отсюда не открывается">Установить из файла…</button>
+            <input id="upd-file" type="file" accept=".zip" hidden></div>
+        </div>
+        <div id="upd-state" class="shint"></div>
+        <div id="upd-found" class="box hidden">
+          <div><b id="upd-found-title"></b></div>
+          <div id="upd-notes" class="tiny upd-notes"></div>
+          <button id="btn-upd-get" class="ghost small" type="button"
+                  title="Скачать архив выпуска и то, что поменялось в описи версий: библиотеки, ffmpeg. Пока идёт скачивание, программа работает как обычно">Скачать и подготовить</button>
+        </div>
+        <div id="upd-staged" class="box hidden">
+          <div id="upd-staged-text"></div>
+          <button id="btn-upd-discard" class="ghost small" type="button"
+                  title="Не ставить подготовленное обновление">Отменить обновление</button>
+        </div>
+        <div id="upd-how" class="shint">Обновление скачивается в фоне и ставится при следующем запуске ·
+          <button type="button" class="linky js-more" data-more="upd-more">подробнее</button></div>
+        <div id="upd-more" class="smore hidden">Пока программа работает, скачивается архив выпуска и то,
+          что в нём поменялось; всё сверяется с контрольными суммами. Замена — при следующем запуске, до
+          загрузки остального. Если новая версия дважды не запустится, вернётся прежняя.</div>
       </div>
-      <div id="upd-found" class="box hidden">
-        <div><b id="upd-found-title"></b></div>
-        <div id="upd-notes" class="tiny upd-notes"></div>
-        <span class="row dt-row"><button id="btn-upd-get" class="small" type="button"
-                title="Скачать архив выпуска и то, что поменялось в описи версий: библиотеки, ffmpeg. Пока идёт скачивание, программа работает как обычно">Скачать и подготовить</button></span>
-      </div>
-      <div id="upd-staged" class="box hidden">
-        <div id="upd-staged-text"></div>
-        <span class="row dt-row"><button id="btn-upd-discard" class="ghost small" type="button"
-                title="Не ставить подготовленное обновление">Отменить обновление</button></span>
-      </div>
-      <div class="tiny muted" style="margin-top:12px">Как идёт обновление: пока программа работает,
-        скачивается архив выпуска и то, что в нём поменялось; всё сверяется с контрольными суммами.
-        Замена — при следующем запуске, до загрузки остального. Если новая версия дважды не
-        запустится, вернётся прежняя.</div>
-      <div class="tiny muted" style="margin-top:8px">Лицензия GNU GPL v3. Правообладатель @prankhitevil.
-        Выпуски — <span id="about-repo"></span>.</div>
+      <div class="shint">Лицензия GNU GPL v3. Правообладатель @prankhitevil. Выпуски — <span id="about-repo"></span>.</div>
     </div>
     </div>
   </div>
   <div class="dlg-foot">
-    <!-- Настройки применяются сразу (п. 9.1), поэтому внизу только «Закрыть». -->
-    <span class="tiny muted">Изменения применяются сразу</span>
+    <!-- Настройки применяются сразу (п. 9.1), поэтому внизу только «Закрыть».
+         Если выбор сработает только после перезапуска — подвал говорит это. -->
+    <span id="set-foot-note" class="tiny muted">Изменения применяются сразу</span>
     <span class="fb-spacer"></span>
     <button class="ghost dlg-close">Закрыть</button>
+  </div>
+</div>
+
+<!-- Редактор вида документа (22.09): в настройках — список видов, сам
+     текст задачи правится здесь, в своём окне. -->
+<div id="dlg-prompt" class="dialog nested hidden">
+  <div class="dlg-head"><b id="prompt-title">Вид документа</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
+  <div class="dlg-body">
+    <div id="prompt-hint" class="tiny muted"></div>
+    <textarea id="prompt-text" class="prompt-text" rows="18" data-bound="1"></textarea>
+    <div id="prompt-state" class="tiny muted"></div>
+  </div>
+  <div class="dlg-foot">
+    <button id="btn-prompt-reset" class="ghost" type="button">Вернуть исходный</button>
+    <span class="fb-spacer"></span>
+    <button id="btn-prompt-save" class="primary" type="button">Сохранить</button>
+    <button class="ghost js-prompt-cancel" type="button">Отмена</button>
+  </div>
+</div>
+
+<!-- «Объединить…» человека из базы голосов (22.09): выбор — в окне, а не
+     выпадающим списком в строке. -->
+<div id="dlg-merge" class="dialog small nested hidden">
+  <div class="dlg-head"><b id="merge-title">Объединить</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
+  <div class="dlg-body">
+    <div id="merge-what" class="tiny muted"></div>
+    <label class="field">С кем
+      <input id="merge-filter" type="text" autocomplete="off" placeholder="начните вводить имя" data-bound="1">
+    </label>
+    <div id="merge-list" class="links-list"></div>
+  </div>
+  <div class="dlg-foot">
+    <button id="btn-merge-go" class="primary" type="button" disabled>Объединить</button>
+    <button class="ghost dlg-close" type="button">Отмена</button>
   </div>
 </div>
 
@@ -1291,7 +1547,7 @@
       </div>
       <div class="tpl" data-scope="media">
         <b>Удалить только видео и звук</b>
-        <div class="tiny muted" id="del-media-note">Стенограмма останется — по ней можно сделать протокол или саммари.</div>
+        <div class="tiny muted" id="del-media-note">Стенограмма останется — по ней можно сделать протокол или краткое содержание.</div>
       </div>
       <div class="tpl" data-scope="history">
         <b>Удалить из истории</b>
@@ -1307,7 +1563,7 @@
 <div id="dlg-repass" class="dialog small hidden">
   <div class="dlg-head"><b id="repass-title">Перечитать точнее</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
   <div class="dlg-body">
-    <div class="tiny muted" id="repass-lead">Текст распознается заново точной моделью, и реплики разойдутся по говорящим.</div>
+    <div class="tiny muted" id="repass-lead">Текст распознается заново точной моделью, и реплики разойдутся по голосам.</div>
     <div class="tiny warn hidden" id="repass-edits"></div>
     <div id="repass-ask" class="tpl-list">
       <div class="tpl" data-repass="auto">
@@ -1315,7 +1571,7 @@
         <div class="tiny muted">Обычный путь: программа найдёт голоса сама.</div>
       </div>
       <div class="tpl" data-repass="count">
-        <b>Указать количество говорящих</b>
+        <b>Указать количество голосов</b>
         <div class="tiny muted">Если голоса слились в один или один разделился на несколько.</div>
       </div>
     </div>
@@ -1330,7 +1586,7 @@
   </div>
 </div>
 
-<!-- Кому отдать выделенные слова: список говорящих этой записи, всплывает у
+<!-- Кому отдать выделенные слова: список голосов этой записи, всплывает у
      выделения (правка стенограммы, 16.09). -->
 <div id="give-menu" class="give-menu hidden"></div>
 
@@ -1394,8 +1650,11 @@
 <div id="dlg-share" class="dialog hidden">
   <div class="dlg-head"><b>Отправить</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
   <div class="dlg-body">
-    <div class="tiny muted">Что отправить:</div>
-    <div id="share-list" class="links-list"></div>
+    <!-- Подписи полей — одним стилем с «Куда». Один вариант — просто строкой,
+         без флажка и рамки: снять единственный флажок значило бы «отправить
+         ничего». Флажки — когда вариантов больше одного. -->
+    <div class="field field-lead">Что отправить</div>
+    <div id="share-list" class="share-list"></div>
     <label class="field">Куда
       <select id="share-target">
         <option value="mail">Письмо в почтовой программе</option>
@@ -1413,7 +1672,8 @@
 <div id="dlg-speaker" class="dialog small hidden">
   <div class="dlg-head"><b>Кто это говорит?</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
   <div class="dlg-body">
-    <div id="speaker-current" class="tiny muted"></div>
+    <!-- Кто подписан сейчас — видно в самом поле имени: отдельной строки
+         «Сейчас подписано» над ним нет. -->
     <label class="field">Имя
       <span class="ac">
         <input id="speaker-name" type="text" autocomplete="off" placeholder="Начните вводить фамилию или имя">
@@ -1421,7 +1681,7 @@
       </span>
     </label>
     <div id="speaker-picked" class="tiny muted"></div>
-    <label class="inline" title="Голос этого говорящего попадёт в базу, и в следующих записях его реплики подпишутся сами"><input type="checkbox" id="speaker-remember" checked> запомнить голос, чтобы подписывался сам</label>
+    <label class="inline" title="Этот голос попадёт в базу, и в следующих записях его реплики подпишутся сами"><input type="checkbox" id="speaker-remember" checked> запомнить голос, чтобы подписывался сам</label>
     <div id="speaker-conflict" class="conflict hidden">
       <div class="c-text"></div>
       <div class="c-choices"></div>
@@ -1432,21 +1692,21 @@
          говорит документу, ЧЬИ это обязательства, должность — кем человек
          работает. Обычно роль одна навсегда; галочка делает её разовой. -->
     <div id="speaker-role" class="role-box">
-      <div class="props-title">Роль в разговоре</div>
+      <div class="grp-title">Роль в разговоре</div>
       <div class="fb-row">
         <label class="inline" title="Кем этот человек приходится вам: коллега, покупатель, поставщик. Из этого документ понимает, чьи это обязательства — что пообещали мы, а что они.">Сторона
           <select id="speaker-side"></select>
         </label>
         <label class="inline" title="Кем человек работает: юрист, коммерческий директор, проектный менеджер. Свободный текст.">Должность
-          <input id="speaker-position" type="text" class="meta-input" placeholder="не указана" autocomplete="off">
+          <input id="speaker-position" type="text" class="meta-input" autocomplete="off">
         </label>
       </div>
       <label class="inline tiny" title="Обычно роль у человека одна и действует во всех записях. Отметьте, если в этот раз он выступает иначе: подрядчик по одному проекту бывает партнёром по другому."><input type="checkbox" id="speaker-role-once"> только в этой записи</label>
       <div id="speaker-role-note" class="tiny muted"></div>
     </div>
     <div class="row speaker-split-row">
-      <button id="btn-speaker-split" class="ghost small" type="button" title="Переговорка или несколько человек у одного компьютера: программа заново распознает реплики этого говорящего и разделит их по голосам"><svg aria-hidden="true"><use href="/static/icons.svg#ic-split"></use></svg> Здесь несколько человек — разделить голоса</button>
-      <button id="btn-speaker-unsplit" class="ghost small hidden" type="button" title="Вернуть реплики всех голосов к одному говорящему">Отменить разделение</button>
+      <button id="btn-speaker-split" class="ghost small" type="button" title="Переговорка или несколько человек у одного компьютера: программа заново распознает реплики этого голоса и разделит их по голосам"><svg aria-hidden="true"><use href="/static/icons.svg#ic-split"></use></svg> Здесь несколько человек — разделить голоса</button>
+      <button id="btn-speaker-unsplit" class="ghost small hidden" type="button" title="Вернуть реплики всех голосов к одному">Отменить разделение</button>
     </div>
   </div>
   <div class="dlg-foot">

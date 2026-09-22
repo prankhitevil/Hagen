@@ -154,6 +154,19 @@ def _kind(opts: dict[str, Any]) -> str:
     return kind if kind in KINDS else "meeting"
 
 
+def category_for_kind(kind: str) -> str:
+    """Категория заметки по умолчанию для типа записи.
+
+    Встреча ложится туда же, куда записи встреч; лекция, интервью и
+    расшифровка — в категорию видео. Раньше окно подставляло всем типам
+    первую категорию списка, и лекция уезжала во «Встречи».
+    """
+    video = str(config.get("video_category") or config.get("default_category") or "")
+    if kind == "meeting":
+        return str(config.get("default_category") or video)
+    return video
+
+
 def _store_mode(opts: dict[str, Any]) -> str:
     """Что хранить. Если в задании не сказано — берём из типа записи."""
     mode = str(opts.get("store_media") or "").strip().lower()
@@ -271,7 +284,7 @@ def _segments_from_subs(rec_id: str, path: Path, handle: Any) -> int:
         except Exception as err:
             log.warning("имена из расшифровки не попали в базу голосов: %s", err)
     store.refresh_participants(rec_id)
-    _say(handle, "взят готовый текст: реплик %d, говорящих %d"
+    _say(handle, "взят готовый текст: реплик %d, голосов %d"
          % (len(segs), len(speakers)))
     return len(segs)
 
@@ -593,17 +606,17 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
                     _mark(rec_id, "diarize", "subs")
             else:
                 _mark(rec_id, "diarize", "subs")
-                _say(handle, "имена говорящих взяты из субтитров, разметка не нужна")
+                _say(handle, "имена взяты из субтитров, разметка голосов не нужна")
         elif not KIND_DEFAULTS[_kind(opts)]["diarize"]:
             _mark(rec_id, "diarize", "skip")
-            _say(handle, "тип записи «%s» — говорящих не размечаю" % _kind(opts))
+            _say(handle, "тип записи «%s» — без разметки голосов" % _kind(opts))
         elif _flag(opts, "diarize_auto"):
             fn = hooks.get("queue_diarize")
             if fn is not None:
                 try:
                     fn(rec_id)
                     _mark(rec_id, "diarize", "queued")
-                    _say(handle, "разметка говорящих поставлена в очередь")
+                    _say(handle, "разметка голосов поставлена в очередь")
                 except Exception as err:
                     log.info("разметку не поставил в очередь: %s", err)
 
@@ -625,7 +638,7 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
     # в очередь, — ей дорожка ещё понадобится; уберёт её служба, когда закончит.
     if _store_mode(opts) == "none":
         if _stages(rec_id).get("diarize") == "queued":
-            _say(handle, "звук уберу после разметки говорящих")
+            _say(handle, "звук будет убран после разметки голосов")
         else:
             freed = store.drop_media(rec_id).get("freed_bytes", 0)
             _say(handle, "звук убран, освободилось %.1f МБ" % (freed / 1048576.0))
@@ -642,7 +655,7 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
 def _new_record(title: str, opts: dict[str, Any], source: str,
                 source_name: str = "", extra: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = {
-        "doc_kind": "summary",      # в заметке раздел называется «Саммари»
+        "doc_kind": "summary",      # в заметке раздел называется «Краткое содержание»
         "stages": {},
         "asr_files": asr_where(opts),
         "asr_lang": _lang(opts),
@@ -658,8 +671,7 @@ def _new_record(title: str, opts: dict[str, Any], source: str,
         mode="file",
         source=source,
         source_name=source_name or None,
-        category=str(opts.get("category") or config.get("video_category")
-                     or config.get("default_category")),
+        category=str(opts.get("category") or category_for_kind(_kind(opts))),
         extra=payload,
     )
 
@@ -839,7 +851,7 @@ def submit_summary(rec_id: str, document: str | None = None,
     document = document or str(meta.get("video_kind") or "meeting")
     if document not in ("meeting", "lecture", "interview"):
         document = "meeting"
-    names = {"meeting": "Саммари", "lecture": "Конспект", "interview": "Выжимка"}
+    names = {"meeting": "Краткое содержание", "lecture": "Конспект", "interview": "Выжимка"}
 
     def work(handle: Any) -> dict[str, Any]:
         res = minutes.generate_video_summary(rec_id, handle=handle, document=document,
@@ -872,7 +884,7 @@ def submit_summary(rec_id: str, document: str | None = None,
         _pub({"type": "minutes", "rec_id": rec_id,
               "markdown": res["markdown"], "template": document})
         _pub({"type": "recording", "meta": store.get(rec_id)})
-        done = {"meeting": "Саммари готово", "lecture": "Конспект готов",
+        done = {"meeting": "Краткое содержание готово", "lecture": "Конспект готов",
                 "interview": "Выжимка готова"}
         _pub({"type": "notice", "level": "ok", "text": done.get(document, "Документ готов")})
         return {"markdown_bytes": len(res.get("markdown") or ""),

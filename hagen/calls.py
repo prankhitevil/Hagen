@@ -14,6 +14,10 @@
   что Teams занял микрофон, и узнать «тот же ли это звонок» наверняка не
   может; если Outlook даёт одинаковую тему встречи, это подсказывается.
 
+Решение 22.09: если в календаре в это же время стоит ещё встреча, в
+уведомлении «Идёт звонок — записываю…» есть кнопка «Это «…»» — одним щелчком
+запись переходит на неё: название и участники берутся от неё.
+
 Всё это живёт в службе, а не в окне: окно может быть спрятано в трей или
 закрыто, а запись звонка начаться обязана.
 
@@ -61,6 +65,25 @@ def _title(rec_id: str | None) -> str:
 def _subject(meeting: dict[str, Any] | None) -> str:
     subj = " ".join(str((meeting or {}).get("subject") or "").split()).strip()
     return "" if subj == "Без темы" else subj
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """Тема на кнопке: длинную уведомление Windows обрезало бы на полуслове."""
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _take_alternatives(meeting: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Другие встречи того же времени: из ответа календаря — в вопрос, не в карточку.
+
+    Календарь кладёт их в `alternatives` выбранной встречи. Оттуда их надо
+    забрать: иначе они уехали бы в карточку записи вместе со встречей.
+    Встречи без темы и с той же темой переключать незачем.
+    """
+    if not isinstance(meeting, dict):
+        return []
+    alts = meeting.pop("alternatives", None) or []
+    own = _subject(meeting)
+    return [dict(m) for m in alts if isinstance(m, dict) and _subject(m) and _subject(m) != own]
 
 
 class CallAutomation:
@@ -158,6 +181,7 @@ class CallAutomation:
 
     # ------------------------------------------------ события звонка
     def on_call_start(self, info: dict[str, Any], meeting: dict[str, Any] | None = None) -> None:
+        alternatives = _take_alternatives(meeting)
         with self._lock:
             self.call = {"active": True, "info": dict(info or {}), "meeting": meeting,
                          "since": time.time()}
@@ -198,8 +222,16 @@ class CallAutomation:
                 [("merge", "Дописать в прошлую"), ("new", "Оставить новой")],
                 timeout_s=120, default="new", rec_id=rec_id, prev_id=prev["rec_id"])
         else:
-            self._show("call_started", "Идёт звонок — записываю «%s»." % _title(rec_id),
-                       [("discard", "Не писать")], timeout_s=45, rec_id=rec_id)
+            text = "Идёт звонок — записываю «%s»." % _title(rec_id)
+            buttons = [("discard", "Не писать")]
+            if alternatives:
+                text += " В календаре в это же время: %s." % ", ".join(
+                    "«%s»" % _subject(m) for m in alternatives)
+                buttons += [("meeting-%d" % i, "Это «%s»" % _short(_subject(m)))
+                            for i, m in enumerate(alternatives)]
+            # С выбором встречи вопрос держим дольше: его надо успеть прочитать.
+            self._show("call_started", text, buttons, timeout_s=120 if alternatives else 45,
+                       rec_id=rec_id, alternatives=alternatives)
 
     def on_call_end(self, info: dict[str, Any]) -> None:
         with self._lock:
@@ -375,6 +407,11 @@ class CallAutomation:
                     self.hooks.discard_recording(rec_id)
                     self.linked_rec = None
                     self.notice("Запись звонка отменена и удалена.")
+            elif kind == "call_started" and button.startswith("meeting-"):
+                alts = pr.get("alternatives") or []
+                idx = int(button.split("-", 1)[1])
+                if rec_id and 0 <= idx < len(alts) and self.hooks.active_recording() == rec_id:
+                    self._switch_meeting(rec_id, alts[idx])
             elif kind == "call_ended" and button == "stop":
                 if rec_id and self.hooks.active_recording() == rec_id:
                     self.hooks.stop_recording(rec_id)
@@ -403,6 +440,21 @@ class CallAutomation:
             self.notice("Не получилось: %s" % err, "err")
             return {"ok": False, "reason": str(err)}
         return {"ok": True}
+
+    def _switch_meeting(self, rec_id: str, meeting: dict[str, Any]) -> None:
+        """Запись — на другую встречу того же времени: название и участники от неё.
+
+        Делается то же, что при начале записи со встречей: имя по встрече и
+        сама встреча в карточке — из неё документы берут участников.
+        """
+        title = platform.desktop().suggest_title(meeting) or _subject(meeting)
+        meta = store.update(rec_id, {"title": title, "meeting": meeting})
+        with self._lock:
+            if (self.call or {}).get("active"):
+                self.call["meeting"] = meeting
+        log.info("запись %s переключена на встречу «%s»", rec_id, title)
+        self.hooks.publish({"type": "recording", "meta": meta})
+        self.notice("Запись названа по встрече «%s»." % title)
 
     def state(self) -> dict[str, Any]:
         with self._lock:

@@ -275,7 +275,7 @@ auto.on_call_start({}, None)
 check("звонок через час после записи — без вопроса о склейке",
       auto.prompt is not None and auto.prompt["kind"] == "call_started", auto.prompt and auto.prompt["kind"])
 
-# оба срока — из «Настройки → Звонки» (решение 15.09)
+# оба срока — из «Настройки → Запись и звонки» (решение 15.09)
 OVERRIDES["call_end_confirm_s"] = 7
 auto.linked_rec = svc.active
 auto.on_call_end({"process": "ms-teams.exe"})

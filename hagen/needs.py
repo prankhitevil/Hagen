@@ -279,14 +279,29 @@ PARTS: dict[str, dict[str, Any]] = {
                "вход по коду устройства работает без него.",
         "ready": browser_ready,
         "install": browser_install,
+        # Кому нужна: входу в SharePoint и сайтам по паролю. Обе возможности
+        # выключены — части в списке нет, как и всего остального от них.
+        "features": ("video_sharepoint", "video_password"),
     },
 }
 
 
+def _wanted(part: dict[str, Any]) -> bool:
+    """Нужна ли часть при нынешних возможностях. Без списка — нужна всегда."""
+    feats = part.get("features") or ()
+    return not feats or any(config.feature(f) for f in feats)
+
+
 def state() -> list[dict[str, Any]]:
-    """Что из тяжёлого уже на месте, а что придётся скачать."""
+    """Что из тяжёлого уже на месте, а что придётся скачать.
+
+    Части выключенных возможностей не показываются: выключенная возможность
+    убирает с экрана всё своё, и загружаемые части тоже.
+    """
     out = []
     for key, part in PARTS.items():
+        if not _wanted(part):
+            continue
         try:
             ok = bool(part["ready"]())
         except Exception as err:
@@ -454,7 +469,7 @@ def models_state() -> dict[str, Any]:
     notes = []
     if want["files"] == "fast":
         notes.append("Файлы и видео пойдут быстрой моделью: у неё нет времени слов, и "
-                     "разметка говорящих отдаёт фразу целиком тому, кто говорил дольше.")
+                     "разметка голосов отдаёт фразу целиком тому, кто говорил дольше.")
     state = asr.live_state()
     running_key = state.get("key")
     return {

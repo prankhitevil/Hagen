@@ -86,7 +86,7 @@ QUALITY_TITLES: dict[str, str] = {
 # ---------------------------------------------------------------- шаблоны
 
 #: Виды документов — один список на всё: окно «Сделать документ», редактор
-#: инструкций в настройках («Обработка»), разделы заметки и файлы записи.
+#: инструкций в настройках («Документы»), разделы заметки и файлы записи.
 #: Решение 13.09: одна кнопка «Сделать документ»; «Краткое резюме»
 #: убрано — его перекрывает саммари. У каждого документа свой раздел в заметке
 #: и свой файл, поэтому документы больше не затирают друг друга (раньше вопрос
@@ -99,10 +99,10 @@ DOC_KINDS: dict[str, dict[str, Any]] = {
         "heading": "## Протокол", "file": "minutes.md", "service_lines": False,
     },
     "meeting": {
-        "title": "Саммари встречи",
+        "title": "Краткое содержание встречи",
         "hint": "Читается за две минуты вместо записи: о чём встреча, темы со временем "
                 "начала, в конце — задачи и договорённости.",
-        "heading": "## Саммари", "file": "summary.md", "service_lines": True,
+        "heading": "## Краткое содержание", "file": "summary.md", "service_lines": True,
     },
     "lecture": {
         "title": "Конспект",
@@ -158,7 +158,7 @@ def prompt_lang() -> str:
     английских инструкций: считается, что модели следуют английскому
     системному тексту надёжнее, а токенов на него уходит меньше.
     Проверять это на своих промптах надо живым прогоном, поэтому по умолчанию
-    остаётся «ru», а переключатель лежит в «Настройки → Обработка».
+    остаётся «ru», а переключатель лежит в «Настройки → Тонкие настройки».
 
     Свою «задачу и структуру» документа человек пишет по-русски. Английская
     рамка вокруг русского текста хуже любой однородной, поэтому у документа с
@@ -247,7 +247,7 @@ _TAIL_RULES = (
 )
 
 #: Редактируемая часть инструкции каждого документа: задача и структура.
-#: Правится в «Настройки → Обработка» (config prompt_overrides). Общие правила
+#: Правится в «Настройки → Документы» (config prompt_overrides). Общие правила
 #: (common_rules), служебные строки НАЗВАНИЕ/ПАПКА, правило про снимки экрана и
 #: правило оформления ответа добавляются автоматически и не правятся: поломка
 #: формата сломала бы разбор ответа и сохранение документа.
@@ -1437,7 +1437,7 @@ def models_hint(engine: str | None = None) -> str:
                 "%s" % (strong, tail))
     if fast == strong:
         return "Модель: %s. %s" % (strong, tail)
-    return ("По умолчанию: протокол и саммари — %s, короткие документы и "
+    return ("По умолчанию: протокол и краткое содержание — %s, короткие документы и "
             "промежуточные выжимки — %s. %s" % (strong, fast, tail))
 
 
@@ -1668,12 +1668,12 @@ def _run_engine(engine: str, prompt: str, text: str, timeout: int | None = None,
     if engine == "api":
         problem = providers.problem("docs")
         if problem:
-            raise RuntimeError(problem + " Откройте «Настройки → Модели».")
+            raise RuntimeError(problem + " Откройте «Настройки → Документы».")
         conn = providers.connection("docs")
         model = _model_for(conn["kind"], role)
         if not model:
             raise RuntimeError(
-                "Для %s не указана модель. Откройте «Настройки → Модели» и впишите "
+                "Для %s не указана модель. Откройте «Настройки → Документы» и впишите "
                 "её имя — подскажет кнопка «Обновить список моделей»." % conn["service"]
             )
         fn: Callable[..., str] = CALLS.get(conn["kind"], _call_openai)
@@ -2261,8 +2261,8 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
     if kind not in ("meeting", "lecture", "interview"):
         kind = "meeting"
     prompt = video_prompt(kind, has_shots=_has_shots(rec_id))
-    names = {"meeting": "саммари", "lecture": "конспект", "interview": "выжимка"}
-    what = names.get(kind, "саммари")
+    names = {"meeting": "краткое содержание", "lecture": "конспект", "interview": "выжимка"}
+    what = names.get(kind, "краткое содержание")
 
     target = _target_provider(engine)
     final_model = _model_for(target, "strong")
@@ -2274,7 +2274,7 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
         digests: list[str] = []
         for i, piece in enumerate(chunks, start=1):
             if _cancelled(handle):
-                raise RuntimeError("Сборка саммари отменена.")
+                raise RuntimeError("Сборка документа отменена.")
             _progress(handle, 0.8 * (i - 1) / len(chunks),
                       "выжимка %d из %d" % (i, len(chunks)))
             part = _strip_tail_chatter(

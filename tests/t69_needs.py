@@ -58,9 +58,17 @@ def check(name, ok, detail=""):
     say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
-from hagen import needs  # noqa: E402
+from hagen import config, needs  # noqa: E402
 
 say("=== 1. Список частей ===")
+# Браузер для входа нужен только SharePoint и сайтам по паролю: пока обе
+# возможности выключены, его в списке нет (решение 22.09: выключенная
+# возможность убирает и свои загружаемые части).
+config.set_feature("video_sharepoint", False)
+config.set_feature("video_password", False)
+check("возможности выключены — браузера в списке нет",
+      "browser" not in {p["key"] for p in needs.state()})
+config.set_feature("video_sharepoint", True)
 parts = {p["key"]: p for p in needs.state()}
 # Быстрая модель и два варианта весов onnx-asr — части моделей распознавания,
 # их выбирают в «Настройки → Модели» (решение 21.09).

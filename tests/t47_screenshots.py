@@ -16,6 +16,9 @@
   6. «Удалить всё» убирает файлы снимков; «только видео и звук» — оставляет.
   7. Склейка записей сдвигает время снимков.
   8. Сквозь службу: запись с микрофона → снимок → стоп → заметка с картинкой.
+  9. Папки снимков: список из настроек сильнее догадки, %ПЕРЕМЕННЫЕ% раскрываются,
+     несуществующие пропускаются; догадка находит «Изображения», перенесённые
+     в OneDrive; служба отдаёт странице и то, и другое.
 """
 import io
 import shutil
@@ -268,6 +271,40 @@ try:
         check("в заметке живой записи картинка", sh and ("![[%s|700]]" % sh[0]["file"]) in body)
         cli.delete("/api/recordings/%s?scope=all" % rec, headers=ORIGIN)
         check("живая запись и её снимок убраны", store.get(rec) is None and sh and not Path(sh[0]["path"]).exists())
+
+    say("")
+    say("=== 9. Папки снимков: настройка и догадка ===")
+    import os
+
+    os.environ["T47_ROOT"] = str(TMP)
+    OVERRIDES["screenshot_folders"] = [r"%T47_ROOT%\screens", str(TMP / "нет такой"), "  "]
+    check("список из настроек: переменная раскрыта, несуществующая пропущена",
+          shots.screenshot_folders() == [SHOTS_IN], shots.screenshot_folders())
+    # «Изображения» перенесены (как в OneDrive), своей записи у «Снимков экрана» нет
+    moved = TMP / "OneDrive - Contoso" / "Pictures"
+    (moved / "Screenshots").mkdir(parents=True)
+    _real_shell = shots._shell_folder
+    shots._shell_folder = lambda name: moved if name == "My Pictures" else None
+    try:
+        found = shots.screenshot_folders(auto=True)
+        check("догадка находит «Screenshots» в перенесённых «Изображениях»",
+              moved / "Screenshots" in found, found)
+        check("догадка не смотрит в настройку", SHOTS_IN not in found, found)
+        check("пока список задан, догадка не действует",
+              shots.screenshot_folders() == [SHOTS_IN], shots.screenshot_folders())
+        OVERRIDES["screenshot_folders"] = []
+        check("пустой список — действует догадка", moved / "Screenshots" in shots.screenshot_folders(),
+              shots.screenshot_folders())
+        OVERRIDES["screenshot_folders"] = [str(SHOTS_IN)]
+        with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
+            r = cli.get("/api/screenshots/folders")
+            body = r.json() if r.status_code == 200 else {}
+            check("служба отдаёт, за какими папками следим", body.get("active") == [str(SHOTS_IN)], body)
+            check("служба отдаёт, что нашлось бы само",
+                  str(moved / "Screenshots") in (body.get("auto") or []), body)
+    finally:
+        shots._shell_folder = _real_shell
+        os.environ.pop("T47_ROOT", None)
 finally:
     restore_text(saved_clip)
     config.get = _real_get

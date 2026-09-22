@@ -19,7 +19,7 @@
   6. отбор и группировка работают вместе;
   7. складывание по проектам запоминается в настройках;
   8. сервис по ключу — поля «адрес, ключ, модель» вместо списка сервисов;
-     «где распознавать» — в настройках, облачные поля серые при «на этом
+     «где распознавать» — в настройках, облачных полей нет при «на этом
      компьютере»; модель — выпадающий список с отбором по вводу.
 
 Запуск из корня проекта:  .venv\\Scripts\\python.exe tests\\t91_list_groups.py
@@ -418,25 +418,26 @@ LIST_JS = r"""
   });
 
   // «Где распознавать» переехал из окна «Видео» в настройки (21.09); при
-  // «на этом компьютере» облачные поля серые и не правятся.
+  // «на этом компьютере» облачных полей нет на экране и в сохранении
+  // (решение 22.09: спрятанное поле ни на что не влияет).
   await t('в окне «Видео» выбора «где распознавать» больше нет', () =>
     !document.getElementById('v-where') || 'поле на месте');
-  await t('на этом компьютере — облачные поля серые и не правятся', () => {
+  await t('на этом компьютере — облачных полей нет и в сохранение они не идут', () => {
     document.getElementById('set-asr-files').value = 'local';
     paintConnections();
     const box = document.getElementById('cloud-asr-fields');
-    const els = [...box.querySelectorAll('input, button')];
-    return (box.classList.contains('fields-off') && els.length >= 4 && els.every((el) => el.disabled))
-      || JSON.stringify({cls: box.className, disabled: els.map((el) => el.disabled)});
+    const patch = collectConnections();
+    return (box.classList.contains('hidden') && !('asr_base_url' in patch) && !('asr_model' in patch))
+      || JSON.stringify({cls: box.className, patch});
   });
-  await t('в облаке — правятся, и выбор уходит в настройки', () => {
+  await t('в облаке — поля видны, и выбор уходит в настройки', () => {
     document.getElementById('set-asr-files').value = 'cloud';
     paintConnections();
     const box = document.getElementById('cloud-asr-fields');
     const els = [...box.querySelectorAll('input, button')];
     const patch = collectConnections();
-    return (!box.classList.contains('fields-off') && els.every((el) => !el.disabled)
-      && patch.asr_files === 'cloud') || JSON.stringify({cls: box.className, where: patch.asr_files});
+    return (!box.classList.contains('hidden') && els.every((el) => !el.disabled)
+      && patch.asr_files === 'cloud' && 'asr_base_url' in patch) || JSON.stringify({cls: box.className, where: patch.asr_files});
   });
 
   // Модель — выпадающий список с отбором по вводу.
@@ -515,9 +516,12 @@ def scenario():
                  "window.addEventListener('error', (e) => window.__t91errs.push(e.message));")
     try:
         for _ in range(100):
+            # Ждём, пока страница сама прочтёт состояние: иначе её loadState,
+            # пришедший позже, затирал подставные записи пустым списком службы.
             ready = window.evaluate_js(
                 "typeof S !== 'undefined' && typeof paintSidebar === 'function'"
-                " && !!document.getElementById('flt-project')")
+                " && !!document.getElementById('flt-project')"
+                " && Object.keys(S.settings || {}).length > 0")
             if ready:
                 break
             time.sleep(0.2)

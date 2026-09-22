@@ -47,10 +47,13 @@ MIN_SPEECH_S = 5.0
 # Тишина между склеенными участками речи.
 GAP_S = 0.25
 
-# Веса шагов движка для шкалы прогресса и подписи по-русски.
+# Веса шагов для шкалы прогресса и подписи по-русски. Поиск речи идёт по всей
+# записи, а не по одной речи: на полуторачасовой встрече это две минуты, и без
+# своего места в шкале полоска всё это время стояла на нуле (22.09).
 _STEPS: tuple[tuple[str, float, str], ...] = (
+    ("speech", 0.18, "поиск речи"),
     ("segmentation", 0.35, "разметка речи"),
-    ("speaker_counting", 0.10, "подсчёт говорящих"),
+    ("speaker_counting", 0.10, "подсчёт голосов"),
     ("embeddings", 0.45, "голосовые отпечатки"),
     ("discrete_diarization", 0.10, "сборка разметки"),
 )
@@ -401,7 +404,8 @@ class _Progress:
             self.handle.progress(self.value, note)
         except Exception:
             pass
-        elapsed = time.time() - self.t0
+        # Пока шла запись, задача стояла на паузе — это время в остаток не в счёт.
+        elapsed = time.time() - self.t0 - float(getattr(self.handle, "paused_s", 0.0) or 0.0)
         if self.value > 0.03 and elapsed > 1.0:
             eta = max(0.0, elapsed / self.value - elapsed)
             try:
@@ -444,14 +448,17 @@ def diarize_pcm(
     if total <= 0:
         return empty
 
-    # --- шаг 1: где вообще речь
-    if handle is not None:
-        try:
-            handle.progress(0.0, "поиск речи")
-        except Exception:
-            pass
+    # --- шаг 1: где вообще речь. Пауза на время записи может прийти и сюда,
+    # посреди поиска речи: общая модель поиска речи при этом занята, но во время
+    # записи она никому не нужна — у живой записи свои модели на каждую дорожку,
+    # а диктовка во время записи спит.
+    hook = _Progress(handle, time.time()) if handle is not None else None
+    if hook is not None:
+        hook("speech", completed=0, total=100)
     try:
-        spans = vad.speech_timestamps(arr)
+        spans = vad.speech_timestamps(arr, progress=_speech_progress(hook) if hook else None)
+    except DiarizeCancelled:
+        raise
     except Exception as err:
         log.warning("VAD не сработал (%s), размечаю запись целиком", err)
         spans = [{"start": 0, "end": total}]
@@ -480,7 +487,6 @@ def diarize_pcm(
 
     # --- шаг 3: движок по склейке. Ручки читаем здесь, а не при загрузке:
     # настройки могли поменять после неё.
-    hook = _Progress(handle, time.time()) if handle is not None else None
     t_apply = time.time()
     out = eng.run(glued, min_speakers=min_speakers, max_speakers=max_speakers,
                   tuning=tuning(), hook=hook)
@@ -515,6 +521,24 @@ def diarize_pcm(
     return result
 
 
+def _speech_progress(hook: _Progress) -> Callable[[float], None]:
+    """Ход поиска речи — в шкалу разметки.
+
+    Поиск речи сообщает ход на каждое окно в 32 мс, на полуторачасовой записи
+    это под двести тысяч раз. Дальше передаём раз на процент: полоске этого
+    хватает, и отмена задачи проверяется так же часто.
+    """
+    last = [-1]
+
+    def report(percent: float) -> None:
+        whole = int(percent)
+        if whole != last[0]:
+            last[0] = whole
+            hook("speech", completed=whole, total=100)
+
+    return report
+
+
 def _handle_note(handle: Any, note: str) -> None:
     if handle is None:
         return
@@ -522,6 +546,49 @@ def _handle_note(handle: Any, note: str) -> None:
         handle.log(note)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- где считать
+
+
+def runs_in_helper() -> bool:
+    """Размечать отдельной программой с низким приоритетом (решение 22.09).
+
+    Так выбрано в настройке «пока идёт новая запись»; по умолчанию — да.
+    """
+    return config.get("processing_during_recording") == "background"
+
+
+def diarize_track(path: str | Any, min_speakers: int | None = None,
+                  max_speakers: int | None = None, handle: Any = None,
+                  isolated: bool = False) -> dict[str, Any]:
+    """Разметить дорожку-файл: в самой программе или помощником.
+
+    `isolated` — помощником (`diarize_worker`). Не запустился — размечаем
+    здесь, и тогда на время записи задача встаёт на паузу, как остальная
+    тяжёлая работа. Когда помощник закончил, задача снова считается «здесь»:
+    сохранение результата и голоса идут в самой программе.
+    """
+    from . import audio_io
+
+    est = estimate_seconds(audio_io.wav_duration(path))
+    if handle is not None:
+        handle.eta(est)
+        handle.log("примерная оценка: %.0f мин" % (est / 60.0))
+    if isolated:
+        from . import diarize_worker
+
+        try:
+            return diarize_worker.run(path, min_speakers, max_speakers, handle)
+        except diarize_worker.NotStarted as err:
+            log.warning("помощник разметки не запустился (%s) — размечаю в самой программе", err)
+            _handle_note(handle, "помощник не запустился — размечаю в самой программе")
+        finally:
+            if handle is not None and hasattr(handle, "where"):
+                handle.where = "here"
+    pcm, sr = audio_io.read_wav(path)
+    return diarize_pcm(pcm, sr=sr, min_speakers=min_speakers, max_speakers=max_speakers,
+                       handle=handle)
 
 
 def estimate_seconds(pcm_or_duration: Any, speech_ratio: float | None = None) -> float:

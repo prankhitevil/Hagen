@@ -337,12 +337,12 @@ check("блок прячется у видеозаписи и у готовой 
 check("«Стоп» считается по факту записи",
       "$('btn-stop').disabled = !S.recordingId || S.starting" in appjs, True)
 check("значок записи тоже по факту записи",
-      "!(S.recordingId && $('chk-far').checked)" in appjs, True)
+      "!(S.recordingId && (!m || m.id === S.recordingId))" in appjs, True)
 check("пустое событие записи не ломает страницу",
       "if (!m || !m.id) break;" in appjs, True)
 check("настройки видео не сбрасываются", "const first = V.opts === null" in videojs, True)
 check("убранный файл не уходит в работу",
-      "убран из списка — пропускаю" in videojs, True)
+      "убран из списка — пропущен" in videojs, True)
 
 check("диалог удаления есть", 'id="dlg-delete"' in html, True)
 for scope in ("all", "media", "history"):

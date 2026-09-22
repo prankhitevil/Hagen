@@ -188,13 +188,36 @@ def create(
     rec_dir(rec_id).mkdir(parents=True, exist_ok=True)
     _write_json(paths(rec_id)["meta"], meta)
     _write_json(paths(rec_id)["transcript"], {"segments": []})
+    return _with_flags(meta)
+
+
+#: Запись короче этого считается несостоявшейся: звука в ней нет (22.09).
+EMPTY_MIN_S = 1.0
+
+
+def is_empty(meta: dict[str, Any]) -> bool:
+    """Запись не состоялась: живая, остановлена, а звука меньше секунды.
+
+    Один признак на список и на открытие записи. Видео сюда не попадают: у
+    файла с субтитрами звука может не быть вовсе, а текст есть. Запись, у
+    которой звук удалили руками, тоже не пустая — стенограмма осталась.
+    """
+    return (meta.get("source", "live") == "live" and meta.get("status") == "recorded"
+            and not meta.get("media_removed")
+            and float(meta.get("duration_s") or 0.0) < EMPTY_MIN_S)
+
+
+def _with_flags(meta: Any) -> Any:
+    """Признаки, которые считаются из самой записи, а не хранятся в ней."""
+    if isinstance(meta, dict) and meta.get("id"):
+        meta["empty"] = is_empty(meta)
     return meta
 
 
 def get(rec_id: str) -> dict[str, Any] | None:
     if not _valid_id(rec_id):
         return None
-    return _read_json(paths(rec_id)["meta"], None)
+    return _with_flags(_read_json(paths(rec_id)["meta"], None))
 
 
 def update(rec_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
@@ -205,9 +228,10 @@ def update(rec_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         if meta is None:
             return None
         meta.update(patch)
+        meta.pop("empty", None)           # признак считается, а не хранится
         meta["updated_at"] = _now_iso()
         _write_json(paths(rec_id)["meta"], meta)
-        return meta
+        return _with_flags(meta)
 
 
 def list_all() -> list[dict[str, Any]]:
@@ -218,7 +242,7 @@ def list_all() -> list[dict[str, Any]]:
             continue
         meta = _read_json(d / "meta.json", None)
         if isinstance(meta, dict) and meta.get("id"):
-            items.append(meta)
+            items.append(_with_flags(meta))
     items.sort(key=lambda m: str(m.get("created_at") or ""), reverse=True)
     return items
 

@@ -51,6 +51,7 @@ NEEDS: dict[str, str] = {
     "t89_one_model_real": "точная модель",
     "t9_voices": "модели распознавания и разметки говорящих",
     "t100_diar_onnx": "модель разметки говорящих",
+    "t107_diarize_helper": "модель разметки говорящих",
     "t44_claude_limit": "Claude CLI",
     # звук, устройства Windows, окна
     "t6_loopback_capture": "звуковые устройства",

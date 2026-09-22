@@ -30,6 +30,60 @@ def hidden_process_flags() -> int:
     return NO_WINDOW
 
 
+#: Классы приоритета Windows для уровней розетки.
+_PRIORITY_CLASSES = {"normal": 0x0020, "low": 0x4000, "lowest": 0x0040}
+_PROCESS_SET_INFORMATION = 0x0200
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_POWER_THROTTLING = 4                 # ProcessPowerThrottling
+_THROTTLE_EXECUTION_SPEED = 0x1               # EcoQoS: экономичные ядра, пониженная частота
+
+
+def set_process_priority(pid: int, level: str) -> bool:
+    """Приоритет своей дочерней программы, на ходу.
+
+    "lowest" — то же, что «Режим эффективности» в Диспетчере задач: низший
+    класс приоритета и EcoQoS. На других уровнях EcoQoS выключаем явно: иначе
+    Windows могла бы сама решить, что программа без окна — фоновая.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    cls = _PRIORITY_CLASSES.get(str(level))
+    if cls is None:
+        raise ValueError("неизвестный уровень приоритета: %s" % level)
+
+    class _Throttling(ctypes.Structure):
+        _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                    ("StateMask", wintypes.ULONG)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Типы задаём каждой функции: без них ctypes обрезает 64-битный описатель.
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.SetPriorityClass.restype = wintypes.BOOL
+    k32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                          wintypes.DWORD]
+    k32.SetProcessInformation.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
+    handle = k32.OpenProcess(_PROCESS_SET_INFORMATION | _PROCESS_QUERY_LIMITED_INFORMATION,
+                             False, int(pid))
+    if not handle:
+        return False
+    try:
+        ok = bool(k32.SetPriorityClass(handle, cls))
+        eco = _THROTTLE_EXECUTION_SPEED if level == "lowest" else 0
+        state = _Throttling(1, _THROTTLE_EXECUTION_SPEED, eco)
+        # EcoQoS есть с Windows 10 1709; где его нет — обходимся приоритетом.
+        k32.SetProcessInformation(handle, _PROCESS_POWER_THROTTLING, ctypes.byref(state),
+                                  ctypes.sizeof(state))
+        return ok
+    finally:
+        k32.CloseHandle(handle)
+
+
 def open_path(path: str | Path) -> None:
     """Открыть файл или папку программой, которая стоит для них по умолчанию."""
     os.startfile(str(path))       # noqa: S606 — путь всегда свой, проверен вызывающим

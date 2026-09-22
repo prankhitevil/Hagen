@@ -89,8 +89,16 @@ def compose_mail(subject: str, body: str,
 
 
 def current_meeting(window_minutes: int | None = None,
-                    start_outlook: bool = False) -> dict[str, Any] | None:
-    return dict(MEETING) if MEETING else None
+                    start_outlook: bool = False,
+                    with_alternatives: bool = False) -> dict[str, Any] | None:
+    """Встреча из MEETING. Другие встречи — из её `alternatives`, только по просьбе."""
+    if not MEETING:
+        return None
+    out = dict(MEETING)
+    alts = [dict(m) for m in out.pop("alternatives", None) or []]
+    if with_alternatives:
+        out["alternatives"] = alts
+    return out
 
 
 def suggest_title(meeting: dict[str, Any] | None) -> str:

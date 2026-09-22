@@ -6,6 +6,7 @@ import json
 import re
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,12 @@ DEFAULTS: dict[str, Any] = {
     # Звук звонков хранится бессрочно; N > 0 — удалять звук записей с микрофона
     # старше N дней (текст и документы остаются). Решение 13.09.
     "audio_retention_days": 0,
+    # Что делать с разметкой, «перечитать точнее» и распознаванием файлов, пока
+    # идёт запись (решения 22.09): "background" — разметка идёт отдельной
+    # программой с низким приоритетом, остальное встаёт на паузу; "pause" —
+    # всё встаёт и продолжается после «Стоп»; "run" — не останавливать,
+    # запись и обработка делят процессор.
+    "processing_during_recording": "background",
     # --- трей (решения 13.09) ---
     "tray_enabled": True,        # значок у часов; крестик окна прячет в трей
     "autostart_windows": True,   # ярлык в «Автозагрузке», запуск сразу в трей
@@ -240,7 +247,9 @@ DEFAULTS: dict[str, Any] = {
     # --- снимки экрана во время записи (решение 13.09) ---
     # В сейф рядом с заметкой, в стенограмму по времени. Модели не показываются.
     "screenshots_enabled": True,
-    "screenshot_folders": [],      # пусто = папка «Снимки экрана» Windows и Яндекс.Диск
+    # Где искать снимки, по строке; %ПЕРЕМЕННЫЕ% раскрываются. Пусто = ищем сами:
+    # «Снимки экрана» Windows (и в перенесённых «Изображениях»), Яндекс.Диск.
+    "screenshot_folders": [],
     # Брать ли картинки из буфера обмена. Решение 13.09: нет — любая
     # скопированная картинка попадала бы в заметку; снимок — только файл в папке.
     "screenshots_from_clipboard": False,
@@ -473,7 +482,7 @@ DEFAULTS: dict[str, Any] = {
         "video_getcourse": False,  # источник видео: GetCourse
         "video_sharepoint": False, # источник видео: SharePoint и Teams
         "video_password": False,   # источник видео: сайт по паролю
-        "advanced": False,         # раздел «Продвинутые»
+        "advanced": False,         # раздел «Тонкие настройки»
     },
     "todoist_token": "",
     # Проект Todoist по умолчанию: {"id": "...", "name": "..."} или пусто.
@@ -625,6 +634,11 @@ def atomic_json(path: Path, payload: Any, indent: int = 2) -> None:
     потом подменяем им старый одним `os.replace`. Без `fsync` подмена имени
     попадает на диск раньше содержимого, и при потере питания на месте
     настроек или базы голосов остаётся пустой файл.
+
+    Windows не даёт подменить файл, пока его кто-то читает — окно программы,
+    соседний поток, антивирус: «Отказано в доступе». Чтение короткое, поэтому
+    подмену повторяем до двух секунд. Без этого 22.09, пока шла разметка и
+    чтение замедлилось, остановка звонка не записала карточку и заметку.
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -632,7 +646,15 @@ def atomic_json(path: Path, payload: Any, indent: int = 2) -> None:
         json.dump(payload, fh, ensure_ascii=False, indent=indent)
         fh.flush()
         os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 def save(patch: dict[str, Any]) -> dict[str, Any]:
@@ -768,6 +790,9 @@ def public() -> dict[str, Any]:
 
     out["diarize_engine"] = diarize.engine_name()
     out["diarize_needs_token"] = diarize.needs_token()
+    # Набор возможностей по умолчанию — для кнопки «По умолчанию» в
+    # «Возможностях»: какой он, знает только этот реестр.
+    out["features_default"] = dict(DEFAULTS["features"])
     return out
 
 

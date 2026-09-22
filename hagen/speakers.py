@@ -136,7 +136,7 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
         raise LookupError("Запись не найдена")
     segs = segments_of(rec_id, key)
     if not segs:
-        raise LookupError("Такого говорящего в записи нет")
+        raise LookupError("Такого голоса в записи нет")
     emb = embedding_for(rec_id, key)
     out: dict[str, Any] = {"target": None, "conflict": None, "notes": [],
                            "remember": bool(remember), "has_voice": emb is not None,
@@ -241,19 +241,19 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
             same = alike is None or alike >= match_thr
             out["conflict"] = {
                 "kind": "same_in_record", "other_key": others[0], "score": alike,
-                "text": "В этой записи «%s» уже подписан у другого говорящего. %s" % (tgt["name"], why),
-                "choices": [_choice("merge", "Это один человек — объединить говорящих", same),
+                "text": "В этой записи «%s» уже подписан у другого голоса. %s" % (tgt["name"], why),
+                "choices": [_choice("merge", "Это один человек — объединить голоса", same),
                             _choice("namesake", "Это тёзка — отдельный человек", not same),
-                            _choice("keep_both", "Оставить двух говорящих с этим именем")]}
+                            _choice("keep_both", "Оставить два голоса с этим именем")]}
             return out
 
     if emb is not None:
         for p in voices.samples_from(rec_id, key):
             if p["id"] != tgt.get("id"):
-                out["notes"].append("Голос этого говорящего был сохранён у «%s» — уберу его оттуда."
+                out["notes"].append("Этот голос был сохранён у «%s» — оттуда он будет убран."
                                     % p["name"])
     if emb is None and out["remember"]:
-        out["notes"].append("Голос этого говорящего ещё не размечен — запомню только имя.")
+        out["notes"].append("Этот голос ещё не размечен — запомнится только имя.")
     return out
 
 
@@ -593,7 +593,7 @@ def add_offered_sample(rec_id: str, key: str) -> dict[str, Any]:
         raise LookupError("Человек не найден")
     emb = embedding_for(rec_id, key)
     if emb is None:
-        raise ValueError("Отпечаток голоса этого говорящего не сохранился — разметьте говорящих заново.")
+        raise ValueError("Отпечаток этого голоса не сохранился — разметьте голоса заново.")
     res = voices.add_sample(None, emb, person_id=person["id"], rec_id=rec_id, speaker_key=key)
     _set_entry(rec_id, key, sample_offer=False)
     if not res.get("added"):
@@ -630,7 +630,7 @@ def split_speaker(rec_id: str, key: str, handle: Any = None,
         raise LookupError("Запись не найдена")
     mine = segments_of(rec_id, key, include_echo=False)
     if not mine:
-        raise LookupError("Такого говорящего в записи нет")
+        raise LookupError("Такого голоса в записи нет")
     track = str(mine[0].get("track"))
     wav = store.track_path(rec_id, track)
     if not wav.exists():

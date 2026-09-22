@@ -1035,8 +1035,27 @@ def _scan_window(
     return out
 
 
+#: Сколько других встреч того же времени отдавать вместе с выбранной.
+MAX_ALTERNATIVES = 2
+
+
+def order_meetings(candidates: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Встречи-кандидаты по порядку: первой — та, что начинается ближе к звонку.
+
+    Решение 22.09. Раньше идущая всегда была важнее будущей, и звонок в 14:59
+    получил имя встречи, стоявшей в календаре 14:30–15:30, хотя та кончилась в
+    14:51, а в 15:00 начиналась другая: встречи в календаре часто стоят
+    внахлёст, а кончаются раньше. Начало за 11 секунд ближе, чем начало
+    полчаса назад. Ошибиться так можно, опоздав на идущую встречу, когда
+    следующая вот-вот начнётся, — на этот случай вторая встреча отдаётся
+    вместе с первой, и человек переключит её одной кнопкой.
+    """
+    return sorted(candidates, key=lambda d: abs((d["_start_dt"] - now).total_seconds()))
+
+
 def current_meeting(
-    window_minutes: int | None = None, start_outlook: bool = False
+    window_minutes: int | None = None, start_outlook: bool = False,
+    with_alternatives: bool = False,
 ) -> dict[str, Any] | None:
     """Встреча, которая идёт сейчас или начнётся в ближайшие window_minutes.
 
@@ -1044,6 +1063,9 @@ def current_meeting(
     Пусто — берём «за сколько минут до встречи считать звонок её началом» из
     настроек звонков (решение 16.09; было жёстко ±15 минут, и звонок
     за девять минут до планёрки получал её название).
+
+    ``with_alternatives`` — положить в ответ ``alternatives``: другие встречи,
+    которые тоже подходят по времени (порядок — `order_meetings`).
 
     По умолчанию Outlook НЕ запускаем: если его нет в памяти, возвращаем None.
     ``start_outlook=True`` разрешает Dispatch, который поднимет Outlook сам.
@@ -1095,19 +1117,19 @@ def current_meeting(
             log.debug("подходящей встречи в календаре нет")
             return None
 
-        # идущая сейчас важнее будущей; среди равных — та, что ближе по времени
-        candidates.sort(
-            key=lambda d: (
-                0 if d["ongoing"] else 1,
-                abs((d["_start_dt"] - now).total_seconds()),
-            )
-        )
-        best = candidates[0]
-        best.pop("_start_dt", None)
-        best.pop("_end_dt", None)
+        ordered = order_meetings(candidates, now)
+        for d in ordered:
+            d.pop("_start_dt", None)
+            d.pop("_end_dt", None)
+        best, others = ordered[0], ordered[1:1 + MAX_ALTERNATIVES]
         log.info(
             "встреча из Outlook: %r, участников %d", best.get("subject"), best.get("n_attendees")
         )
+        if others:
+            log.info("в это же время в календаре ещё: %s",
+                     ", ".join(repr(d.get("subject")) for d in others))
+        if with_alternatives:
+            best["alternatives"] = others
         return best
     except Exception as err:
         log.warning("не удалось прочитать встречу из Outlook: %s", err)

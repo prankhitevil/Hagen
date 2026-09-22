@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import audio_io, config, jobs, platform, store
+from .. import config, jobs, platform, store
 from ..events import hub
 from .deps import refresh_note, refresh_note_async
 
@@ -59,22 +59,24 @@ def queue_diarize(rec_id: str, min_speakers=None, max_speakers=None) -> str:
     names_mode = meta.get("transcript_source") == "subs" and any(
         isinstance(i, dict) and i.get("name") for i in (meta.get("speakers") or {}).values())
 
+    from .. import diarize as diarize_door
+
+    # Где считать, решается при постановке в очередь: разметка в помощнике
+    # начинается и во время записи — уступать ей нечего, приоритет у неё и так
+    # низкий (решение 22.09).
+    isolated = diarize_door.runs_in_helper()
+
     def work(handle) -> dict[str, Any]:
         from .. import diarize, voices
         from .. import speakers as spk
 
         handle.log("читаю дорожку %s" % target)
-        pcm, sr = audio_io.read_wav(store.track_path(rec_id, target))
         store.update(rec_id, {"diarize_status": "running", "diarize_progress": 0.0})
         hub.publish({"type": "recording", "meta": store.get(rec_id)})
 
-        est = diarize.estimate_seconds(pcm)
-        handle.eta(est)
-        handle.log("примерная оценка: %.0f мин" % (est / 60.0))
-
-        result = diarize.diarize_pcm(
-            pcm, sr=sr, min_speakers=min_speakers, max_speakers=max_speakers,
-            handle=handle,
+        result = diarize.diarize_track(
+            store.track_path(rec_id, target), min_speakers=min_speakers,
+            max_speakers=max_speakers, handle=handle, isolated=isolated,
         )
         diarize.save_result(rec_id, result)
 
@@ -160,7 +162,7 @@ def queue_diarize(rec_id: str, min_speakers=None, max_speakers=None) -> str:
         hub.publish({"type": "segments", "rec_id": rec_id,
                      "segments": store.sorted_segments(rec_id)})
         hub.publish({"type": "notice", "level": "ok",
-                     "text": "Говорящие размечены: «%s»" % (meta_now or {}).get("title", "")})
+                     "text": "Голоса размечены: «%s»" % (meta_now or {}).get("title", "")})
         refresh_note(rec_id, "разметка голосов")
         return {
             "speakers": len(result.get("labels") or []),
@@ -169,8 +171,9 @@ def queue_diarize(rec_id: str, min_speakers=None, max_speakers=None) -> str:
             "elapsed_s": result.get("elapsed_s"),
         }
 
-    title = "Разметка говорящих: %s" % meta.get("title")
-    job_id = jobs.submit("diarize", work, title, rec_id=rec_id)
+    title = "Разметка голосов: %s" % meta.get("title")
+    job_id = jobs.submit("diarize", work, title, rec_id=rec_id,
+                         extra={"where": "helper"} if isolated else None)
     store.update(rec_id, {"diarize_status": "queued"})
     hub.publish({"type": "recording", "meta": store.get(rec_id)})
     return job_id
@@ -201,7 +204,7 @@ async def api_speaker(rec_id: str, request: Request) -> JSONResponse:
     name = str(body.get("name") or "").strip()
     decision = body.get("decision") if isinstance(body.get("decision"), dict) else {}
     if not key:
-        raise HTTPException(status_code=400, detail="Не указан говорящий")
+        raise HTTPException(status_code=400, detail="Не указан голос")
     remember = bool(body.get("remember", True))
     loop = asyncio.get_running_loop()
     try:
@@ -258,7 +261,7 @@ def queue_split(rec_id: str, key: str, want_voices: int = 0) -> str:
     if meta is None:
         raise HTTPException(status_code=404, detail="Запись не найдена")
     if not speakers.segments_of(rec_id, key):
-        raise HTTPException(status_code=404, detail="Такого говорящего в записи нет")
+        raise HTTPException(status_code=404, detail="Такого голоса в записи нет")
     track = speakers.track_of(rec_id, key) or ""
     if not store.track_path(rec_id, track).exists():
         raise HTTPException(status_code=400,
@@ -393,7 +396,7 @@ async def api_speaker_add_sample(rec_id: str, request: Request) -> JSONResponse:
     body = await request.json()
     key = str(body.get("speaker_key") or "").strip()
     if not key:
-        raise HTTPException(status_code=400, detail="Не указан говорящий")
+        raise HTTPException(status_code=400, detail="Не указан голос")
     try:
         res = speakers.add_offered_sample(rec_id, key)
     except LookupError as err:

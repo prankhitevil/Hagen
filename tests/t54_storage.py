@@ -20,6 +20,9 @@ sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
 
 isolate.voices()
+# И настоящие настройки: проверка ждёт заводской срок хранения звука (0), а на
+# машине, где срок задан, краснела не по делу.
+isolate.settings()
 
 LINES = []
 FAIL = []

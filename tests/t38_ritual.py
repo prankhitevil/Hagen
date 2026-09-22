@@ -199,7 +199,7 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
         check("таблица задач на месте", "| Задача |" in md, True)
 
     say("")
-    say("=== 5. «Сохранить стенограмму» ===")
+    say("=== 5. «Сохранить заметку» ===")
     saved = cli.post("/api/recordings/%s/save" % rec_id, headers=ORIGIN, json={})
     check("сохранение прошло", saved.status_code, 200)
     if saved.status_code == 200:

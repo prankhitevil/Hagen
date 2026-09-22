@@ -84,7 +84,38 @@ _fns: dict[str, Callable[["JobHandle"], Any]] = {}
 #: чему угодно, а считает процессор всё равно одну запись за раз.
 _heavy_pass = threading.BoundedSemaphore(1)
 
+#: Кому уступает тяжёлый счёт (решение 22.09). Разметка, «перечитать точнее» и
+#: распознавание файлов делили процессор с живой записью звонка, и у звонка
+#: запаздывал текст, не поднималась запись собеседников. Правило ставит служба:
+#: оно отвечает, почему сейчас считать нельзя («идёт запись»), или пустой
+#: строкой. Задача с пропуском на тяжёлый счёт ждёт на ближайшем отчёте о ходе,
+#: новая — не начинается.
+_yield_rule: Callable[[], str] | None = None
+YIELD_POLL_S = 1.0
+
 MAX_KEEP = 60
+
+
+def set_yield_rule(rule: Callable[[], str] | None) -> None:
+    """Задать, кому уступает тяжёлый счёт. None — никому."""
+    global _yield_rule
+    _yield_rule = rule
+
+
+def yield_reason() -> str:
+    """Почему тяжёлому счёту сейчас надо уступить («идёт запись») или пусто.
+
+    Нужна и тому, кто считает в отдельной программе: уступать ему нечего, но
+    по этому ответу он понижает ей приоритет.
+    """
+    rule = _yield_rule
+    if rule is None:
+        return ""
+    try:
+        return str(rule() or "")
+    except Exception:
+        log.debug("правило паузы тяжёлого счёта упало", exc_info=True)
+        return ""
 
 
 def lane_of(kind: str) -> str:
@@ -113,6 +144,23 @@ class JobHandle:
     def __init__(self, job_id: str):
         self.job_id = job_id
         self._last_push = 0.0
+        self._heavy = False
+        #: Сколько секунд задача простояла, уступая записи: в оценку остатка
+        #: это время не входит.
+        self.paused_s = 0.0
+
+    @property
+    def where(self) -> str:
+        """Где идёт счёт задачи: "here" — в самой программе, "helper" — в
+        отдельной программе с низким приоритетом. Пока в помощнике, задача не
+        встаёт на паузу: кому уступать, решает Windows по приоритету."""
+        with _lock:
+            job = _jobs.get(self.job_id) or {}
+            return str(job.get("where") or "here")
+
+    @where.setter
+    def where(self, value: str) -> None:
+        self._patch({"where": str(value)})
 
     def _patch(self, patch: dict[str, Any], force: bool = False) -> None:
         now = time.time()
@@ -141,6 +189,36 @@ class JobHandle:
         if note:
             patch["note"] = note
         self._patch(patch)
+        if self._heavy:
+            self.yield_to_live()
+
+    def yield_to_live(self) -> None:
+        """Постоять, пока тяжёлому счёту есть кому уступить (решение 22.09).
+
+        Зовётся из отчёта о ходе, поэтому задача встаёт там, где и так
+        останавливается сообщить о себе: у разметки — после каждой пачки
+        кусков, раз в несколько секунд.
+        Возвращается сразу, если уступать некому, задачу отменили или её счёт
+        идёт в помощнике: отмену задача проверит сама, как обычно.
+        """
+        reason = yield_reason()
+        if not reason or self.cancelled or self.where == "helper":
+            return
+        t0 = time.time()
+        with _lock:
+            job = _jobs.get(self.job_id) or {}
+            before = {"note": job.get("note"), "eta_s": job.get("eta_s")}
+        log.info("[%s] пауза: %s", self.job_id[:8], reason)
+        self._patch({"paused": True, "note": "на паузе, пока %s" % reason, "eta_s": None},
+                    force=True)
+        while reason and not self.cancelled:
+            time.sleep(YIELD_POLL_S)
+            reason = yield_reason()
+        waited = time.time() - t0
+        self.paused_s += waited
+        log.info("[%s] пауза кончилась через %.0f c", self.job_id[:8], waited)
+        self._patch({"paused": False, "note": before["note"] or "выполняется",
+                     "eta_s": before["eta_s"]}, force=True)
 
     def eta(self, seconds: float | None) -> None:
         self._patch({"eta_s": None if seconds is None else max(0.0, round(float(seconds), 1))})
@@ -169,7 +247,11 @@ class JobHandle:
         процессоре: скачали ролик — и распознаём. Пока пропуск занят соседней
         записью, здесь честно пишем, что стоим в очереди, — иначе человек видел
         бы «идёт обработка» и недоумевал, почему ничего не происходит.
+
+        Пока идёт запись, тяжёлый счёт не начинается, а начатый встаёт на
+        паузу на ближайшем отчёте о ходе (`yield_to_live`).
         """
+        self.yield_to_live()
         if _heavy_pass.acquire(blocking=False):
             taken = True
         else:
@@ -177,9 +259,11 @@ class JobHandle:
                 self.log(note)
             _heavy_pass.acquire()
             taken = True
+        self._heavy = True
         try:
             yield
         finally:
+            self._heavy = False
             if taken:
                 try:
                     _heavy_pass.release()

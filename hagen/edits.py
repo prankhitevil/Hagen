@@ -319,7 +319,7 @@ def assign_speaker(rec_id: str, seg_id: str, first: int, last: int, speaker_key:
     key = str(speaker_key or "").strip()
     who = next((s for s in speakers_of(rec_id) if s["key"] == key), None)
     if who is None:
-        raise EditError("Такого говорящего в этой записи нет.")
+        raise EditError("Такого голоса в этой записи нет.")
     if key == str(seg.get("speaker_key") or ""):
         raise EditError("Эти слова и так за этим человеком.")
 

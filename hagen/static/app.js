@@ -153,8 +153,8 @@ function paintMeters() {
   if (!rec) return;
   // Обрыв устройства важнее «тишины»: сторож службы уже переподключает его,
   // и человек должен видеть это, а не гадать, почему полоска замерла.
-  $('mic-hint').textContent = S.micLost ? 'переподключаю…' : (S.micSilent ? 'тихо' : '');
-  $('far-hint').textContent = S.farLost ? 'переподключаю…'
+  $('mic-hint').textContent = S.micLost ? 'переподключается…' : (S.micSilent ? 'тихо' : '');
+  $('far-hint').textContent = S.farLost ? 'переподключается…'
     : ((S.farOn && S.farSilent) ? 'тишина — не то устройство?' : '');
   $('far-hint').title = S.farLost
     ? 'Звук собеседников прервался. Программа подключает его заново, перерыв в стенограмме будет тишиной.'
@@ -247,15 +247,43 @@ function bindRecItems(box) {
         togglePicked(id);
         return;
       }
+      if (el.dataset.empty) return;      // пустую запись не открываем
       S.selected = [];
       openRecording(id);
     };
   });
+  box.querySelectorAll('.js-empty-del').forEach((b) => {
+    b.onclick = (ev) => { ev.stopPropagation(); deleteEmpty(b.dataset.id); };
+  });
+}
+
+/* Удалить запись, которая не состоялась. Звука и текста в ней нет, поэтому
+   вопрос один — «удалить?», без выбора объёма, как у обычной записи. */
+async function deleteEmpty(id) {
+  const m = (S.recordings || []).find((x) => x.id === id)
+    || (S.current && S.current.meta && S.current.meta.id === id ? S.current.meta : {});
+  if (!confirm(`Удалить «${m.title || id}»? Звука в этой записи нет.`)) return;
+  try {
+    await api(`/api/recordings/${id}?scope=all`, { method: 'DELETE' });
+    S.selected = (S.selected || []).filter((x) => x !== id);
+    if (S.currentId === id) { S.current = null; S.currentId = null; }
+    await loadState();
+    notice('Пустая запись удалена', 'ok');
+  } catch (e) { notice(e.message, 'err'); }
 }
 
 /* Одна строка списка. Вынесена отдельно, потому что рисуется из двух мест:
    плоским списком и внутри папки проекта. */
 function recItemHtml(m) {
+  // Запись не состоялась — звука нет (признак считает служба). Строка другого
+  // вида: причина и одно действие. Открывать в ней нечего, поэтому щелчок по
+  // строке её не открывает; Ctrl+щелчок, как и везде, отмечает.
+  if (m.empty) {
+    return `<div class="rec-item empty-rec${m.id === S.currentId ? ' active' : ''}${isPicked(m.id) ? ' picked' : ''}" data-id="${m.id}" data-empty="1">
+      <div class="rec-item-title"><span class="nm">${esc(m.title)}</span></div>
+      <div class="rec-item-note"><span>не записалось — звука нет</span><span class="fb-spacer"></span>
+        <button type="button" class="danger small js-empty-del" data-id="${esc(m.id)}">Удалить</button></div></div>`;
+  }
   const isRec = m.status === 'recording';
   // Вторая строка — дата, длительность и участники.
   // Категорию в каждой строке не повторяем: она одна почти у всех записей
@@ -269,10 +297,12 @@ function recItemHtml(m) {
     who = String(v.mine || v.others);
     whoHint = `голосов в записи: ${who}`;
   }
-  const sub = [fmtDate(m.created_at), isRec ? fmtClock(m.duration_s) : fmtDur(m.duration_s),
-    who ? `<span title="${esc(whoHint)}">${who}</span>` : ''].filter(Boolean).join(' · ');
+  // Длительность — одним форматом с шапкой записи, и у идущей записи тоже.
+  const sub = [fmtDate(m.created_at), `<span class="js-dur">${fmtDur(m.duration_s)}</span>`,
+    who ? `<span class="who-count" title="${esc(whoHint)}"><svg aria-hidden="true"><use href="/static/icons.svg#ic-people"></use></svg>${who}</span>` : '']
+    .filter(Boolean).join(' · ');
   // Третья строка — только исключения: обычное состояние ничего не сообщает,
-  // а «✓ говорящие» у каждой записи просто занимало место.
+  // а «✓ голоса размечены» у каждой записи просто занимало место.
   let note = '';
   if (isRec) note = '<span class="dot-st bad"></span>идёт запись';
   else if (m.diarize_status === 'running' || m.diarize_status === 'queued') {
@@ -282,7 +312,7 @@ function recItemHtml(m) {
   } else if (m.status === 'stopped') {
     note = '<span class="dot-st bad"></span>обработка остановлена';
   } else if (m.status === 'recorded' && !m.diarized && m.duration_s) {
-    note = '<span class="dot-st none"></span>говорящие не размечены';
+    note = '<span class="dot-st none"></span>голоса не размечены';
   }
   return `<div class="rec-item${m.id === S.currentId ? ' active' : ''}${isPicked(m.id) ? ' picked' : ''}" data-id="${m.id}">
       <div class="rec-item-title"><span class="nm">${esc(m.title)}</span></div>
@@ -386,6 +416,8 @@ function jobLine(j) {
   const pct = Math.round((j.progress || 0) * 100);
   const head = j.title || 'задача';
   if (j.status === 'queued') return head + ' · в очереди';
+  // Пауза на время записи (22.09): причину пишет служба в пометке задачи.
+  if (j.paused) return `${head}${pct > 0 ? ` · ${pct} %` : ''} · ${j.note || 'на паузе'}`;
   // Процент — только там, где он настоящий. У одного вызова модели прогресса
   // нет, и «0 %» рядом с работающей задачей выглядит как поломка.
   return pct > 0 ? `${head} · ${pct} %${jobEta(j)}` : head + ' · идёт';
@@ -404,11 +436,11 @@ function paintJobs() {
     // держим только до её первого ответа: иначе надпись слетала бы обратно на
     // крестик при следующем опросе, будто нажатия не было.
     const stop = (j.cancel_requested || j.cancel_asked)
-      ? '<span class="tiny muted job-stop">останавливаю…</span>'
+      ? '<span class="tiny muted job-stop">останавливается…</span>'
       : `<button class="icon-btn job-stop js-stop-job" data-id="${esc(j.id)}" title="Остановить" aria-label="Остановить" type="button"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button>`;
     return `<div class="job"><div class="job-title"><span>${esc(j.title)}</span>${stop}</div>
       <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
-      <div class="job-note">${esc(jobLine(j))}${j.note ? ' — ' + esc(j.note) : ''}</div></div>`;
+      <div class="job-note">${esc(jobLine(j))}${j.note && !j.paused ? ' — ' + esc(j.note) : ''}</div></div>`;
   }).join('');
   $('jobs-list').querySelectorAll('.js-stop-job').forEach((b) => {
     b.onclick = () => stopJob(b.dataset.id);
@@ -433,7 +465,7 @@ function paintDocAlert() {
   const cloudEng = ((S.caps && S.caps.engines) || []).find((e) => e.key === 'api') || {};
   const cloud = cloudEng.ready
     ? `<button class="primary small js-doc-cloud" title="Текст стенограммы уйдёт в ${esc(cloudEng.provider_title || 'выбранный сервис')} по вашему ключу"><svg aria-hidden="true"><use href="/static/icons.svg#ic-cloud"></use></svg> Собрать через облако (${esc(cloudEng.provider_title || 'по ключу')})</button>`
-    : '<button class="ghost small js-doc-settings"><svg aria-hidden="true"><use href="/static/icons.svg#ic-cloud"></use></svg> Настроить облако — ключ в «Настройки → Модели»</button>';
+    : '<button class="ghost small js-doc-settings"><svg aria-hidden="true"><use href="/static/icons.svg#ic-cloud"></use></svg> Настроить облако — ключ в «Настройки → Документы»</button>';
   box.innerHTML = `<div>⛔ ${esc(last.error || last.note || 'Подписка Claude упёрлась в лимит.')}</div>
     <div class="btn-row">${cloud}
       <button class="ghost small js-doc-again">Повторить через Claude</button>
@@ -445,7 +477,7 @@ function paintDocAlert() {
     hide();
     try {
       await api(last.retry.url, { method: 'POST', body: body });
-      notice(engine === 'api' ? 'Собираю через облако…' : 'Пробую снова через Claude…', 'ok');
+      notice(engine === 'api' ? 'Документ собирается через облако…' : 'Повтор через Claude…', 'ok');
     } catch (e) { notice(e.message, 'err'); S.docAlertHidden = null; paintDocAlert(); }
   };
   const q = (sel) => box.querySelector(sel);
@@ -462,7 +494,7 @@ async function stopJob(jobId) {
   if (job) { job.cancel_asked = true; paintJobs(); }
   try {
     const res = await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
-    if (res && res.cancelled) notice('Останавливаю. Долгие шаги прервутся не сразу.', '');
+    if (res && res.cancelled) notice('Задача останавливается. Долгие шаги прервутся не сразу.', '');
     else notice('Эта задача уже завершилась', '');
   } catch (e) {
     if (job) job.cancel_asked = false;
@@ -509,7 +541,7 @@ function speakerColor(seg, slots) {
 
 function speakerClass(seg) {
   // Цвет владельца — только у реплик, которые и правда его: дорожка микрофона
-  // и говорящий «me». Сосед по кабинету («me~1»), реплика, отданная другому
+  // и голос «me». Сосед по кабинету («me~1»), реплика, отданная другому
   // человеку руками, и эхо, узнанное по голосу, — это уже не «я», и красить их
   // цветом владельца нельзя (17.09: одно имя оказывалось двух цветов, а два
   // разных имени — одного).
@@ -518,15 +550,15 @@ function speakerClass(seg) {
 
 function capsRows() {
   const c = S.caps || {};
-  if (!Object.keys(c).length) return '<div class="tiny muted">проверяю готовность…</div>';
+  if (!Object.keys(c).length) return '<div class="tiny muted">готовность проверяется…</div>';
   const rows = [];
   rows.push('<div>Распознавание речи: <b>локально, GigaAM</b></div>');
-  rows.push('<div>Разметка говорящих: ' + (c.diarize
+  rows.push('<div>Разметка голосов: ' + (c.diarize
     ? '<b>готова</b>'
     : '<b>не готова</b> — ' + esc(c.diarize_note || '')) + '</div>');
   rows.push('<div>Протокол: ' + (c.claude_cli
     ? '<b>Claude CLI найден</b>' : 'нужен ключ API или Claude CLI') + '</div>');
-  rows.push('<div>Встреча из Outlook: ' + (c.outlook ? '<b>доступна</b>' : 'недоступна') + '</div>');
+  rows.push('<div>Встреча из календаря: ' + (c.outlook ? '<b>доступна</b>' : 'недоступна') + '</div>');
   rows.push('<div>Замечать звонки: ' + (c.call_detect ? '<b>включено</b>' : 'выключено') + '</div>');
   rows.push('<div>Хранилище: ' + esc((S.vault && S.vault.root) || '') + '</div>');
   return rows.join('');
@@ -564,7 +596,7 @@ function selectedWords() {
   return { id: line.dataset.id, first: Math.min(...nums), last: Math.max(...nums) };
 }
 
-// Выделенное можно отдать не только соседу: Enter показывает всех говорящих
+// Выделенное можно отдать не только соседу: Enter показывает все голоса
 // записи, и кусок уходит выбранному (решение 16.09).
 function hideGiveMenu() {
   const box = $('give-menu');
@@ -576,7 +608,7 @@ function hideGiveMenu() {
 async function openGiveMenu(pick, anchor) {
   pick = pick || selectedWords();
   if (!pick) {
-    notice('Сначала выделите слова в реплике — их и отдам выбранному человеку.');
+    notice('Сначала выделите слова в реплике — они уйдут выбранному голосу.');
     return;
   }
   const line = document.querySelector(`.line[data-id="${pick.id}"]`);
@@ -615,7 +647,7 @@ async function giveWords(pick, key) {
       body: { segment_id: pick.id, first: pick.first, last: pick.last, speaker_key: key },
     });
     if (S.current) { S.current.segments = res.segments || []; paintTranscript(); }
-    notice(`Отдал: ${res.to}`);
+    notice(`Отдано: ${res.to}`);
     refreshUndo();
   } catch (err) {
     notice(String(err.message || err), 'err');
@@ -625,7 +657,7 @@ async function giveWords(pick, key) {
 async function moveWords(where) {
   const pick = selectedWords();
   if (!pick) {
-    notice('Сначала выделите слова в реплике — их и передам соседу.');
+    notice('Сначала выделите слова в реплике — они уйдут соседу.');
     return;
   }
   try {
@@ -634,7 +666,7 @@ async function moveWords(where) {
       body: { segment_id: pick.id, first: pick.first, last: pick.last, where: where },
     });
     if (S.current) { S.current.segments = res.segments || []; paintTranscript(); }
-    notice(`Передал: ${res.to || (where === 'prev' ? 'соседу выше' : 'соседу ниже')}`);
+    notice(`Передано: ${res.to || (where === 'prev' ? 'соседу выше' : 'соседу ниже')}`);
     refreshUndo();
   } catch (err) {
     notice(String(err.message || err), 'err');
@@ -703,7 +735,7 @@ async function refreshUndo() {
   if (info.what) {
     btn.textContent = info.steps > 1 ? `Отменить правку (${info.steps})` : 'Отменить правку';
     btn.title = `Ctrl+Z — отменить последнее действие правки, сейчас это «${info.what}».`
-      + ` Шагов назад в запасе: ${info.steps}. Глубина и срок — «Настройки → Продвинутые».`;
+      + ` Шагов назад в запасе: ${info.steps}. Глубина и срок — «Настройки → Тонкие настройки».`;
   }
 }
 
@@ -714,7 +746,7 @@ async function splitPhrase(segId, wordIndex) {
     });
     if (S.current) { S.current.segments = res.segments || []; paintTranscript(); }
     if (res.exact === false) {
-      notice('Разрезал. Время слов неизвестно — границу поставил на глаз, по длине слов.');
+      notice('Реплика разрезана. Время слов неизвестно — граница поставлена на глаз, по длине слов.');
     }
     refreshUndo();
   } catch (err) {
@@ -727,8 +759,8 @@ async function undoEdit() {
     const res = await api(`/api/recordings/${S.currentId}/transcript/undo`, { method: 'POST' });
     if (S.current) { S.current.segments = res.segments || []; paintTranscript(); }
     notice(res.steps_left
-      ? `Отменил: ${res.what}. Ещё шагов назад: ${res.steps_left}`
-      : `Отменил: ${res.what}`);
+      ? `Отменено: ${res.what}. Ещё шагов назад: ${res.steps_left}`
+      : `Отменено: ${res.what}`);
   } catch (err) {
     notice(String(err.message || err), 'err');
   }
@@ -739,18 +771,38 @@ function paintTranscript() {
   const box = $('transcript');
   const segs = (S.current && S.current.segments) || [];
   if (!S.current) {
-    // запись не выбрана: вместо пустоты показываем, что готово к работе
+    // Запись не выбрана: вместо пустоты — что готово к работе, и если что-то
+    // мешает начать, то что именно и кнопка, которая это снимает.
+    const block = startBlocker();
     box.innerHTML =
       '<div class="tr-empty">' +
       '<div class="empty-icon"><svg aria-hidden="true"><use href="/static/icons.svg#ic-mic"></use></svg></div>' +
-      '<h3 style="margin:8px 0 4px;color:var(--text)">Готов к записи</h3>' +
-      '<p>Нажмите <b>«● Старт»</b>, чтобы начать, или перетащите видео- либо аудиофайл.</p>' +
+      `<h3 style="margin:8px 0 4px;color:var(--text)">${S.starting ? 'Включаются устройства…' : 'Готов к записи'}</h3>` +
+      (S.starting ? ''
+        : (block ? `<p>${esc(block.text)} · <button type="button" class="linky js-unblock">${esc(block.btn)}</button></p>`
+          : '<p>Нажмите «Старт» или перетащите файл</p>')) +
       '<div class="caps" style="max-width:560px;margin:16px auto 0">' + capsRows() + '</div>' +
       '</div>';
+    const unblock = box.querySelector('.js-unblock');
+    if (unblock) unblock.onclick = block.act;
+    return;
+  }
+  if (!segs.length && (S.current.meta || {}).empty) {
+    // Тот же признак, что и в списке: запись не состоялась.
+    box.innerHTML = '<div class="tr-empty">Не записалось — звука нет. '
+      + `<button type="button" class="danger small js-empty-del" data-id="${esc(S.currentId)}">Удалить</button></div>`;
+    box.querySelector('.js-empty-del').onclick = () => deleteEmpty(S.currentId);
     return;
   }
   if (!segs.length) {
-    box.innerHTML = '<div class="tr-empty">Пока ничего не распознано. Нажмите «Старт» и говорите.</div>';
+    // Подсказка — из состояния: во время записи «Старт» уже нажат.
+    const m = S.current.meta || {};
+    const live = S.recordingId && S.recordingId === S.currentId;
+    const opening = live && (S.captureStatus || {}).state === 'starting';
+    const fresh = (m.source || 'live') === 'live' && recIsFresh(m);
+    box.innerHTML = `<div class="tr-empty">${opening ? 'Включаются устройства…'
+      : (live ? 'Слушаю — текст появится через несколько секунд'
+        : (fresh ? 'Нажмите «Старт», чтобы начать запись.' : 'Текста пока нет.'))}</div>`;
     return;
   }
   const asked = new Set();
@@ -761,7 +813,7 @@ function paintTranscript() {
   // Прокручивать к новой реплике только если человек и так был внизу: тот, кто
   // отлистал вверх перечитать, не должен сбрасываться каждой фразой.
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  // Имя — только при смене говорящего, таймкод — у первого куска абзаца.
+  // Имя — только при смене голоса, таймкод — у первого куска абзаца.
   // Раньше одно имя повторялось десятками строк подряд, а
   // глазу не за что было зацепиться. Сами реплики остаются отдельными: по ним
   // работают правка, разрез и перенос слов.
@@ -819,7 +871,7 @@ function paintTranscript() {
       e.stopPropagation();
       const key = el.dataset.key || el.closest('.line').dataset.key;
       const line = el.closest('.line');
-      // В режиме правки щелчок по имени меняет говорящего У ЭТОЙ реплики
+      // В режиме правки щелчок по имени меняет голос У ЭТОЙ реплики
       // целиком (17.09): эхо колонок приписывает владельцу чужие фразы от
       // первого до последнего слова, и выделять их мышью незачем.
       if (S.editMode && line) {
@@ -874,14 +926,46 @@ function paintButtons() {
   // развернули кнопкой — остаётся развёрнутым до конца этой записи.
   if (!S.recordingId) S.devicesUnfolded = false;
   $('live-controls').classList.toggle('folded', !!S.recordingId && !S.devicesUnfolded);
-  const devName = (id) => { const o = $(id).selectedOptions && $(id).selectedOptions[0]; return o ? o.textContent : ''; };
-  $('ctl-summary-dev').textContent = [devName('mic-select'), $('chk-far').checked ? devName('far-select') : '']
-    .filter(Boolean).join(' · ');
+  // Свёрнутые устройства — по строке на каждое: имя и уровень.
+  const farOn = $('chk-far').checked;
+  $('sum-mic-name').textContent = devLabel('mic-select');
+  $('sum-mic-name').title = devLabel('mic-select');
+  $('sum-far-name').textContent = devLabel('far-select');
+  $('sum-far-name').title = devLabel('far-select');
+  $('sum-far-line').classList.toggle('hidden', !farOn);
   $('rec-mode').disabled = busy;
   $('chk-far').disabled = busy;
+  // «Идёт запись» — у той записи, что пишется, и на пустом экране во время записи.
   $('badge-recording').classList.toggle('hidden',
-    !(S.recordingId && $('chk-far').checked));
+    !(S.recordingId && (!m || m.id === S.recordingId)));
+  // Что мешает начать — из состояния; пока помеха есть, «Старт» неактивен.
+  if (startBlocker()) $('btn-start').disabled = true;
+  // Главное действие экрана новой записи — «Старт», поэтому «Новая запись» на
+  // нём обычная кнопка. На готовой записи она снова главная: с неё начинают.
+  const onNew = S.mode === 'video' ? !S.showRecord : (!m || recIsFresh(m));
+  ['btn-new', 'btn-video-home'].forEach((id) => {
+    $(id).classList.toggle('primary', !onNew);
+    $(id).classList.toggle('ghost', onNew);
+  });
   return isRec;
+}
+
+/* Имя устройства, как оно выбрано в списке: у «авто» — то, что подставится. */
+function devLabel(id) {
+  const sel = $(id);
+  const o = sel && sel.selectedOptions && sel.selectedOptions[0];
+  return o ? o.textContent : '';
+}
+
+/* Что мешает начать запись. Одна помеха — одна строка и кнопка, которая её
+   снимает; null — ничего не мешает. */
+function startBlocker() {
+  const d = S.devices;
+  if (d && Array.isArray(d.mics) && !d.mics.length) {
+    return { text: 'Микрофон не найден', btn: 'Проверить устройства',
+      act: () => $('btn-check-dev').click() };
+  }
+  return null;
 }
 
 /* Новая запись и готовая запись — разные состояния экрана.
@@ -948,8 +1032,11 @@ function openRecMenu() {
   box.id = 'rec-menu';
   box.className = 'rec-menu';
   const hasNote = !!m.vault_path;
+  // Удаление записи — только здесь, последним пунктом и красным. Второго входа
+  // в панели под стенограммой больше нет.
   box.innerHTML = `
     <button type="button" class="js-note"${hasNote ? ' title="Файл заметки откроется программой, назначенной в Windows для .md"' : ' disabled title="Файла заметки ещё нет: запись не сохранена"'}>Открыть файл заметки</button>
+    ${hasNote ? '<button type="button" class="js-resave" title="Записать заметку заново: документы, стенограмма, участники. Обычно не нужно — заметка обновляется сама">Переписать заметку</button>' : ''}
     <button type="button" class="js-folder">Открыть служебную папку</button>
     <button type="button" class="js-del danger">Удалить запись…</button>`;
   document.body.appendChild(box);
@@ -957,15 +1044,28 @@ function openRecMenu() {
   box.style.top = `${Math.round(r.bottom + 4)}px`;
   box.style.left = `${Math.round(Math.max(8, r.right - box.offsetWidth))}px`;
   box.querySelector('.js-note').onclick = () => { closeRecMenu(); revealRec('note', true); };
+  const resave = box.querySelector('.js-resave');
+  if (resave) resave.onclick = () => { closeRecMenu(); saveNote(); };
   box.querySelector('.js-folder').onclick = () => { closeRecMenu(); revealRec('data', false); };
-  box.querySelector('.js-del').onclick = () => { closeRecMenu(); $('btn-delete').click(); };
+  box.querySelector('.js-del').onclick = () => { closeRecMenu(); openDeleteDialog(); };
   document.addEventListener('mousedown', onRecMenuOutside, true);
 }
 
-/* Панель действий не переносится на вторую строку: что не
-   помещается по ширине окна — уходит в меню «⋯» в конце панели. Прячем с
-   конца левой группы: слева стоят частые действия, справа — «Удалить» и
-   акцентная кнопка, их прятать нельзя. */
+/* Записать заметку открытой записи. Обычно она пишется сама — после «Стоп» и
+   при каждом изменении; кнопка нужна, когда заметки нет или запись не удалась. */
+async function saveNote() {
+  if (!S.currentId) return;
+  try {
+    const res = await api(`/api/recordings/${S.currentId}/save`, { method: 'POST' });
+    notice('Заметка записана: ' + (res.relative || res.path), 'ok');
+    await refreshCurrent(); paintHead();
+  } catch (e) { notice(e.message, 'err'); }
+}
+
+/* Панель действий не переносится на вторую строку: что не помещается по
+   ширине окна — уходит в меню «⋯» в конце панели. Прячем с конца ряда:
+   справа то, что нужно реже. «Сохранить заметку» не прячем: она видна, только
+   когда заметки нет, и это надо видеть. */
 function actionsMenuClose() {
   const m = document.getElementById('acts-menu');
   if (m) m.remove();
@@ -982,18 +1082,16 @@ function fitActions() {
   const group = document.querySelector('#rec-actions .act-group:not(.hidden)');
   if (!group || !group.clientWidth) return;
   const more = $('acts-more');
+  if (!group.contains(more)) return;     // «⋯» есть только у стенограммы
   // Сначала возвращаем всё на место: ширина окна могла вырасти.
   group.querySelectorAll('.act-hidden').forEach((b) => b.classList.remove('act-hidden'));
   more.classList.add('hidden');
-  const spacer = group.querySelector('.fb-spacer');
-  const left = [...group.children].filter((el) => el !== more && el !== spacer
-    && (!spacer || el.compareDocumentPosition(spacer) & Node.DOCUMENT_POSITION_FOLLOWING));
   const fits = () => group.scrollWidth <= group.clientWidth + 1;
   if (fits()) return;
   more.classList.remove('hidden');
-  for (let i = left.length - 1; i >= 0 && !fits(); i -= 1) {
-    if (left[i].tagName === 'BUTTON') left[i].classList.add('act-hidden');
-  }
+  const cands = [...group.children].filter((el) => el.tagName === 'BUTTON' && el !== more
+    && !el.classList.contains('keep') && !el.classList.contains('hidden'));
+  for (let i = cands.length - 1; i >= 0 && !fits(); i -= 1) cands[i].classList.add('act-hidden');
 }
 
 function openActionsMenu() {
@@ -1036,8 +1134,8 @@ function paintRecStatus() {
   if (m.status === 'processing') { label = 'идёт обработка'; kind = 'go'; }
   else if (m.status === 'stopped') { label = 'обработка остановлена'; kind = 'bad'; }
   else if (m.diarize_status === 'running') { label = 'идёт разметка'; kind = 'go'; }
-  else if (m.diarized) { label = 'говорящие размечены'; kind = 'ok'; }
-  else if (m.status === 'recorded') { label = 'говорящие не размечены'; kind = 'none'; }
+  else if (m.diarized) { label = 'голоса размечены'; kind = 'ok'; }
+  else if (m.status === 'recorded') { label = 'голоса не размечены'; kind = 'none'; }
   state.innerHTML = statDot(kind, label);
   // Ход задачи именно по этой записи: проценты и остаток считает одна функция
   // на всю программу, своего расчёта здесь нет.
@@ -1057,11 +1155,14 @@ function paintHead() {
     $('rec-title').disabled = true;
     $('rec-date').textContent = '';
     $('rec-duration').textContent = '00:00:00';
+    $('rec-duration').classList.add('hidden');
+    $('rec-dur-dot').classList.add('hidden');
     $('rec-stand').classList.add('hidden');
     paintRecStatus();
-    ['btn-save', 'btn-diarize', 'btn-retry', 'btn-echo', 'btn-add-doc', 'btn-delete',
+    ['btn-save', 'btn-diarize', 'btn-retry', 'btn-echo', 'btn-add-doc',
       'btn-copy-transcript', 'btn-hide', 'btn-edit-transcript', 'btn-del-cat', 'btn-share']
       .forEach((id) => { $(id).disabled = true; });
+    $('btn-save').classList.add('hidden');
     $('diar-progress').classList.add('hidden');
     paintRecShell();
     return;
@@ -1069,12 +1170,20 @@ function paintHead() {
   ['btn-copy-transcript', 'btn-hide', 'btn-edit-transcript', 'btn-del-cat'].forEach((id) => { $(id).disabled = false; });
   $('rec-title').disabled = false;
   $('rec-title').placeholder = 'Название записи';
+  // «Сохранить заметку» — из состояния: заметка уже есть — она обновляется
+  // сама, и кнопки нет; нет заметки, а текст есть — кнопка видна.
   $('btn-save').disabled = false;
-  $('btn-delete').disabled = false;
+  $('btn-save').classList.toggle('hidden', !!m.vault_path || isRec
+    || !((S.current.segments || []).length));
   if (document.activeElement !== $('rec-title')) $('rec-title').value = m.title || '';
   $('rec-date').textContent = fmtDate(m.created_at);
   $('rec-duration').textContent = fmtDur(m.duration_s);
+  // Таймер — только когда запись началась: до «Старта» нули ничего не значат.
+  const started = m.status === 'recording' || Number(m.duration_s) > 0;
+  $('rec-duration').classList.toggle('hidden', !started);
+  $('rec-dur-dot').classList.toggle('hidden', !started);
   // Каким вариантом распознавания шла запись и как он себя вёл (стенд 18.09).
+  // Это сведение о записи — живёт во «Свойствах», а не в шапке.
   const stand = m.asr_stand;
   $('rec-stand').classList.toggle('hidden', !stand);
   $('rec-stand-title').textContent = stand ? (stand.title || '') : '';
@@ -1105,7 +1214,14 @@ function paintHead() {
   // «Перечитать точнее» есть, только когда звонки идут другой моделью, чем
   // файлы (решение 21.09): перечитывать той же моделью незачем.
   $('btn-retry').classList.toggle('hidden', !!(S.asr && S.asr.reread === false));
-  $('btn-add-doc').disabled = busy || !hasText;
+  // Выключенная «+ Документ» говорит, почему: в подсказке — чем занята запись.
+  const addDoc = $('btn-add-doc');
+  if (addDoc.dataset.title === undefined) addDoc.dataset.title = addDoc.title;
+  const job = busy && (S.jobs || []).find((j) => j.rec_id === m.id && (j.status === 'running' || j.status === 'queued'));
+  addDoc.disabled = busy || !hasText;
+  addDoc.title = busy ? `Запись сейчас занята: ${job.title || 'идёт обработка'}. Документ можно будет сделать, когда это закончится.`
+    : !hasText ? 'Стенограммы пока нет — документ собирать не из чего.'
+      : addDoc.dataset.title;
   // «Отправить» (20.09): отправлять нечего, пока нет ни документа, ни
   // стенограммы. Идущую запись тоже не отправляем — она ещё не готова.
   $('btn-share').disabled = isRec || (!hasText && !(S.docs || []).length);
@@ -1121,7 +1237,7 @@ function paintHead() {
     : 'Распознать запись заново точной моделью: дольше, но меньше ошибок в словах';
   if (!S.caps.diarize) {
     $('btn-diarize').disabled = true;
-    $('btn-diarize').title = S.caps.diarize_note || 'разметка говорящих не готова';
+    $('btn-diarize').title = S.caps.diarize_note || 'разметка голосов не готова';
   } else {
     $('btn-diarize').title = noMedia ? noMediaWhy
       : 'Разделить собеседников по голосам и подписать знакомых по базе голосов';
@@ -1261,7 +1377,7 @@ async function saveLabels() {
 async function openTasks() {
   if (!S.currentId) return;
   const panel = $('tasks-panel');
-  $('tasks-list').innerHTML = '<div class="tiny muted">читаю документ…</div>';
+  $('tasks-list').innerHTML = '<div class="tiny muted">документ читается…</div>';
   panel.classList.remove('hidden');
   let res;
   try { res = await api(`/api/tasks/${S.currentId}`); }
@@ -1270,7 +1386,7 @@ async function openTasks() {
   const warn = $('tasks-warn');
   warn.classList.toggle('hidden', res.configured);
   if (!res.configured) {
-    warn.textContent = 'Токен Todoist не задан — отправлять некуда. Настройки → Обработка.';
+    warn.textContent = 'Токен Todoist не задан — отправлять некуда. Настройки → Документы.';
   }
   if (!(res.items || []).length) {
     $('tasks-list').innerHTML = '<div class="tiny muted">В документе нет разделов с поручениями.</div>';
@@ -1727,7 +1843,7 @@ async function openRecording(id) {
 
 /* Удаление в одном из трёх объёмов: всё, только видео и звук, только из
    истории. Первый и третий убирают запись с экрана, второй — оставляет:
-   стенограмма на месте, и по ней ещё можно собрать протокол или саммари. */
+   стенограмма на месте, и по ней ещё можно собрать протокол или краткое содержание. */
 /* Окно «Что удалить?» — одно на оба случая: кнопка в карточке и клавиша Delete
    (20.09). Отмечено несколько записей — вопрос задаётся один раз на всех, а
    объём работы («всё», «только видео и звук», «только из списка») тот же. */
@@ -1758,7 +1874,7 @@ function openDeleteDialog() {
   mediaChoice.classList.toggle('off', gone);
   $('del-media-note').textContent = gone
     ? 'Видео и звук уже удалены.'
-    : 'Стенограммы останутся — по ним можно сделать протокол или саммари.';
+    : 'Стенограммы останутся — по ним можно сделать протокол или краткое содержание.';
   // Третий пункт обещает ровно то, что правда: папка записи уходит вместе со
   // стенограммой, а снаружи остаётся только то, что и правда лежит снаружи.
   const stays = [];
@@ -1832,8 +1948,8 @@ async function deleteRecording(scope) {
       if (res.kept_video) kept.push('видео');
       if (res.kept_note) kept.push('заметка');
       notice(kept.length
-        ? `Убрал из списка вместе со стенограммой. Осталось: ${kept.join(', ')}.`
-        : 'Убрал из списка вместе со стенограммой.', 'ok');
+        ? `Убрано из списка вместе со стенограммой. Осталось: ${kept.join(', ')}.`
+        : 'Убрано из списка вместе со стенограммой.', 'ok');
     } else {
       notice('Удалено всё: запись, файлы и заметка.', 'ok');
     }
@@ -1854,7 +1970,12 @@ async function listDevices(probe) {
     const res = await api('/api/devices' + (probe ? '?probe=true' : ''), probe ? { method: 'POST' } : undefined);
     S.devices = res;
     const mic = $('mic-select');
-    mic.innerHTML = '<option value="">по умолчанию</option>' + (res.mics || []).map((d) => {
+    // «Авто» называет устройство, которое подставится: безымянное «по
+    // умолчанию» не говорило, что выбрано. Какое именно — решает служба.
+    const mics = res.mics || [];
+    const micAuto = mics.find((d) => d.recommended) || mics.find((d) => d.is_communications)
+      || mics.find((d) => d.is_default);
+    mic.innerHTML = `<option value="">${esc(micAuto ? `авто — ${micAuto.name}` : 'авто')}</option>` + mics.map((d) => {
       const marks = [];
       // Живой вход или пустышка — это важнее всех прочих пометок, поэтому первым.
       if (d.probe) {
@@ -1870,7 +1991,8 @@ async function listDevices(probe) {
     mic.value = res.mic_selected == null ? '' : String(res.mic_selected);
 
     const far = $('far-select');
-    far.innerHTML = '<option value="">рекомендованное</option>' + (res.loopback || []).map((d) => {
+    const farAuto = farAutoDevice(res.loopback || []);
+    far.innerHTML = `<option value="">${esc(farAuto ? `авто — ${farAuto.name}` : 'авто')}</option>` + (res.loopback || []).map((d) => {
       const marks = [];
       if (d.is_communications) marks.push('устройство связи');
       else if (d.is_default_output) marks.push('вывод по умолчанию');
@@ -1878,6 +2000,7 @@ async function listDevices(probe) {
     }).join('');
     far.value = res.far_selected == null ? '' : String(res.far_selected);
     S.loopback = res.loopback || [];
+    paintDevTitles();
     paintEchoWarning();
 
     if (res.mic_probe) {
@@ -1912,8 +2035,10 @@ async function listDevices(probe) {
 async function startRecording() {
   if (S.recordingId || S.starting) { return; }
   S.starting = true;
+  // Что устройства включаются, видно на самом экране записи, а не всплывашкой
+  // поверх названия.
   paintHead();
-  notice('Включаю устройства…');
+  paintTranscript();
 
   // Если открыта живая заметка — дописываем в неё, а не заводим новую.
   // Так «Старт» и «Стоп» можно нажимать сколько нужно: стенограмма растёт.
@@ -1952,7 +2077,7 @@ async function stopRecording() {
   const id = S.recordingId;
   if (!id) return;
   $('btn-stop').disabled = true;
-  notice('Останавливаю, дописываю последнюю фразу…');
+  notice('Запись останавливается, дописывается последняя фраза…');
   S.recordingId = null;
   try {
     const res = await api(`/api/recordings/${id}/stop`, { method: 'POST' });
@@ -1969,7 +2094,7 @@ async function stopRecording() {
     try { await api(`/api/recordings/${id}/save`, { method: 'POST' }); } catch (e) {}
     await refreshCurrent(); paintAll();
   } else {
-    notice('Записывать было нечего — заметку не сохраняю');
+    notice('Записывать было нечего — заметка не сохранена');
   }
 }
 
@@ -1982,20 +2107,20 @@ function startTicker() {
     if (m && m.id === S.recordingId) {
       m.duration_s = (m.duration_s || 0) + 1;
       $('rec-duration').textContent = fmtDur(m.duration_s);
-      const row = document.querySelector(`.rec-item[data-id="${m.id}"] .rec-item-sub span:nth-child(2)`);
-      if (row) row.textContent = fmtClock(m.duration_s);
+      const row = document.querySelector(`.rec-item[data-id="${m.id}"] .js-dur`);
+      if (row) row.textContent = fmtDur(m.duration_s);
     }
   }, 1000);
 }
 function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
 
-/* ====================================================== говорящие */
+/* ====================================================== голоса */
 
 /* Окно «Кто это говорит?» (решения 13.09).
    Поле имени с подсказками из базы голосов: по вхождению букв в любое слово
-   имени, у каждого — насколько похож голос этого говорящего. Сохранение идёт
+   имени, у каждого — насколько похож этот голос. Сохранение идёт
    через проверку: если служба видит конфликт (похожее имя, чужой голос, тот
-   же человек у другого говорящего), она отвечает вопросом с кнопками, и
+   же человек под другим голосом записи), она отвечает вопросом с кнопками, и
    выбранная кнопка уходит обратно вместе с остальными ответами. */
 
 function nameKey(s) {
@@ -2016,8 +2141,11 @@ function openSpeakerDialog(key, currentName) {
   }
   const meta = S.current && S.current.meta;
   S.speakerCtx = { key: key, decision: {}, picked: null, items: [], active: -1, seq: 0, role: null };
-  $('speaker-current').textContent = `Сейчас подписано: ${currentName || key}`;
-  $('speaker-name').value = '';
+  // Кто подписан сейчас — в самом поле: имя стоит в нём и выделено, новое
+  // вводится поверх. У безымянного голоса («Спикер 2») поле пустое.
+  const named = !!currentName && !speakerUnnamed(currentName) && currentName !== key;
+  S.speakerCtx.prefill = named ? currentName : '';
+  $('speaker-name').value = S.speakerCtx.prefill;
   $('speaker-remember').checked = true;
   $('speaker-picked').textContent = '';
   $('speaker-notes').textContent = '';
@@ -2028,7 +2156,7 @@ function openSpeakerDialog(key, currentName) {
   $('btn-speaker-unsplit').classList.toggle('hidden', !split);
   showDialog('dlg-speaker');
   speakerSearch();
-  setTimeout(() => $('speaker-name').focus(), 50);
+  setTimeout(() => { $('speaker-name').focus(); $('speaker-name').select(); }, 50);
 }
 
 function speakerHint(p) {
@@ -2060,8 +2188,17 @@ async function speakerSearch() {
   }
   ctx.items = items;
   ctx.active = -1;
+  // Подставленное в поле имя из базы — это уже выбранный человек, как если бы
+  // его выбрали в списке: иначе «Сохранить» без правки имени искало бы его заново.
+  if (ctx.prefill && !ctx.picked && q === ctx.prefill) {
+    const same = items.find((it) => it.kind === 'person' && nameKey(it.label) === nameKey(q));
+    if (same) {
+      ctx.picked = { person_id: same.id, name: same.label };
+      $('speaker-picked').textContent = `Из базы голосов: ${same.label}${same.hint ? ' — ' + same.hint : ''}`;
+    }
+  }
   ctx.hasVoice = !!res.has_voice;
-  if (!res.has_voice) $('speaker-notes').textContent = 'Голос этого говорящего ещё не размечен — запомнится только имя.';
+  if (!res.has_voice) $('speaker-notes').textContent = 'Этот голос ещё не размечен — запомнится только имя.';
   // Роль показываем один раз, при открытии карточки: дальше человек правит
   // поля, и перерисовка на каждую букву в имени стирала бы правку.
   if (!ctx.role) paintSpeakerRole(res.role || {});
@@ -2145,7 +2282,7 @@ async function postSpeaker(body) {
   return { status: r.status, data: data };
 }
 
-/* Роль участника (20.09): сторона и должность прямо в карточке говорящего.
+/* Роль участника (20.09): сторона и должность прямо в окне «Кто это говорит?».
    Постоянная роль живёт у человека в базе голосов, разовая — в записи. */
 function paintSpeakerRole(role) {
   const box = $('speaker-role');
@@ -2156,7 +2293,8 @@ function paintSpeakerRole(role) {
   // записи поставить всё равно можно: она держится за именем, а не за базой.
   const known = !!(role && role.person_id);
   const once = !!(role && (role.rec_side || role.rec_position)) || !known;
-  $('speaker-side').innerHTML = ['<option value="">не указана</option>'].concat(
+  // Пустое значение — пустое: «не указана» в поле читалось как выбранный ответ.
+  $('speaker-side').innerHTML = ['<option value="">—</option>'].concat(
     ((role && role.sides) || []).map((s) => `<option value="${esc(s.key)}">${esc(s.title)}</option>`)).join('');
   $('speaker-role-once').checked = once;
   $('speaker-role-once').disabled = !known;
@@ -2174,10 +2312,11 @@ function paintSpeakerRoleNote() {
   const perm = role.side || role.position
     ? `постоянная роль: ${[sideTitle(role.side), role.position].filter(Boolean).join(', ')}`
     : 'постоянной роли нет';
+  // Пояснение следует за флажком «только в этой записи».
   $('speaker-role-note').textContent = !role.person_id
-    ? 'Человека ещё нет в базе голосов — роль запомнится только для этой записи.'
-    : (once ? `Только для этой записи. У человека ${perm}.`
-      : 'Роль запомнится у человека и будет действовать во всех записях.');
+    ? 'Человека ещё нет в базе голосов — роль только для этой записи.'
+    : (once ? `Роль только для этой записи. У человека ${perm}.`
+      : 'Роль запомнится у человека для всех записей.');
 }
 
 function sideTitle(key) {
@@ -2188,7 +2327,7 @@ function sideTitle(key) {
 }
 
 /* Сохранить роль: постоянную — человеку в базу, разовую — в запись.
-   Зовётся из «Сохранить» карточки говорящего, вместе с именем. */
+   Зовётся из «Сохранить» окна «Кто это говорит?», вместе с именем. */
 async function saveSpeakerRole() {
   const ctx = S.speakerCtx;
   const role = (ctx && ctx.role) || {};
@@ -2220,7 +2359,7 @@ function applySpeakerResult(data) {
   if (data.meta && S.current) { S.current.meta = data.meta; S.current.segments = data.segments; }
   paintAll();
   const p = data.person || {};
-  notice(`Говорящий подписан: ${p.owner ? 'Я' : (p.name || '')}${data.voice_saved ? ' (голос запомнен)' : ''}`, 'ok');
+  notice(`Голос подписан: ${p.owner ? 'Я' : (p.name || '')}${data.voice_saved ? ' (голос запомнен)' : ''}`, 'ok');
   if ((data.removed_from || []).length) notice(`Голос убран у: ${data.removed_from.join(', ')}`);
 }
 
@@ -2280,7 +2419,7 @@ async function confirmSuggestion(key, sug) {
 async function splitSpeaker(key) {
   try {
     await api(`/api/recordings/${S.currentId}/speaker/split`, { method: 'POST', body: { speaker_key: key } });
-    notice('Разделяю голоса: распознаю реплики заново и размечаю — это займёт время', 'ok');
+    notice('Голоса разделяются: реплики распознаются заново и размечаются — это займёт время', 'ok');
   } catch (e) { notice(e.message, 'err'); }
 }
 
@@ -2302,7 +2441,7 @@ function paintSpeakerAlerts() {
   Object.entries(m.speakers || {}).forEach(([key, info]) => {
     if (info && info.multi_voice) {
       rows.push(`<div class="sa-row" data-key="${esc(key)}"><svg aria-hidden="true"><use href="/static/icons.svg#ic-people"></use></svg> Под именем «${esc(info.name || key)}» говорили
-        ${info.multi_voice.voices} разных голоса — похоже на переговорку или общий компьютер. Голос этой учётки не запоминаю.
+        ${info.multi_voice.voices} разных голоса — похоже на переговорку или общий компьютер. Голос этой учётки не запоминается.
         <button class="primary small js-split" type="button">Разделить голоса</button>
         <button class="ghost small js-one" type="button">Это один человек</button></div>`);
     }
@@ -2401,7 +2540,7 @@ async function setOwnerAbsent(on) {
   // Включение — долгая работа (разметка голосов дорожки), выключение — мгновенное.
   try {
     const res = await api(`/api/recordings/${S.currentId}/owner_absent`, { method: 'POST', body: { on: !!on } });
-    if (on) notice('Разделяю голоса микрофона — «Я» не поставлю никому', 'ok');
+    if (on) notice('Голоса микрофона разделяются — «Я» не будет поставлено никому', 'ok');
     if (res.meta && S.current) { S.current.meta = res.meta; await refreshCurrent(); }
     paintAll();
   } catch (e) {
@@ -2432,6 +2571,10 @@ function showDialog(id) {
   $(id).classList.remove('hidden');
 }
 function hideDialogs() {
+  // Окно поверх настроек (редактор вида документа, «Объединить…») закрывается
+  // само: настройки под ним остаются открытыми.
+  const nested = [...document.querySelectorAll('.dialog.nested:not(.hidden)')];
+  if (nested.length) { nested.forEach((d) => d.classList.add('hidden')); return; }
   $('overlay').classList.add('hidden');
   document.querySelectorAll('.dialog').forEach((d) => d.classList.add('hidden'));
   // Окно могли закрыть крестиком или Esc, ничего не выбрав: галочка «со мной
@@ -2456,7 +2599,7 @@ function openVoices(mode) {
   const micSplit = !!(m.room_shared || m.owner_absent || (m.splits && m.splits.me));
   $('repass-lead').textContent = room
     ? 'Ваши реплики будут распознаны заново точной моделью и разделены по голосам.'
-    : 'Текст распознается заново точной моделью, и реплики разойдутся по говорящим.'
+    : 'Текст распознается заново точной моделью, и реплики разойдутся по голосам.'
       + (micSplit ? ' Голоса вашего микрофона после этого разделятся заново сами.' : '');
   $('repass-hint').textContent = room
     ? 'Сколько человек говорило рядом с вами, считая вас?'
@@ -2597,13 +2740,29 @@ function showFarWarning() {
   $('far-warning').classList.remove('hidden');
 }
 
+/* Какое устройство собеседников подставится при «авто» — его помечает служба;
+   старая служба без пометки — устройство связи, иначе вывод по умолчанию. */
+function farAutoDevice(list) {
+  return list.find((d) => d.recommended) || list.find((d) => d.is_communications)
+    || list.find((d) => d.is_default_output) || null;
+}
+
+/* Полное имя выбранного устройства — в подсказке списка: список по ширине
+   имени, но длинное имя всё равно может не влезть. */
+function paintDevTitles() {
+  $('mic-select').title = devLabel('mic-select');
+  $('far-select').title = $('far-select').value === ''
+    ? `${devLabel('far-select')}. Во время звонка берётся устройство, куда программа звонка выводит звук.`
+    : devLabel('far-select');
+}
+
 function paintEchoWarning() {
   const box = $('echo-warning');
   if (!box) return;
   const chosen = $('far-select').value;
   const list = S.loopback || [];
   const dev = chosen === ''
-    ? list.find((d) => d.is_communications) || list.find((d) => d.is_default_output)
+    ? farAutoDevice(list)
     : list.find((d) => String(d.index) === String(chosen));
   const risky = !!(dev && dev.echo_risk) && $('chk-far').checked;
   box.classList.toggle('hidden', !risky);
@@ -2633,7 +2792,7 @@ async function warnAboutEdits(room) {
   said.push(c.texts
     ? `Правки текста (${c.texts}) пропадут: текст распознается заново.`
     : 'Правки текста пропадут: текст распознается заново.');
-  if (c.speakers && !room) said.push(`Ваши решения о говорящих (${c.speakers}) сохранятся.`);
+  if (c.speakers && !room) said.push(`Ваши решения о голосах (${c.speakers}) сохранятся.`);
   box.textContent = said.join(' ');
   box.classList.remove('hidden');
 }
@@ -2647,7 +2806,7 @@ async function runVoices(speakers) {
     if (room) {
       const body = speakers ? { on: true, speakers: speakers } : { on: true };
       await api(`/api/recordings/${id}/room`, { method: 'POST', body: body });
-      notice('Размечаю вашу дорожку: ваш голос останется «Я», остальные — «Рядом со мной»', 'ok');
+      notice('Ваша дорожка размечается: ваш голос останется «Я», остальные — «Рядом со мной»', 'ok');
       await refreshCurrent();
       paintAll();
       return;
@@ -2655,8 +2814,8 @@ async function runVoices(speakers) {
     await api(`/api/recordings/${id}/retranscribe`,
       { method: 'POST', body: speakers ? { speakers: speakers } : {} });
     notice(speakers
-      ? `Перечитываю точной моделью и размечаю на ${speakers} голосов — это идёт в фоне`
-      : 'Перечитываю точной моделью — это идёт в фоне', 'ok');
+      ? `Запись перечитывается точной моделью и размечается на ${speakers} голосов — это идёт в фоне`
+      : 'Запись перечитывается точной моделью — это идёт в фоне', 'ok');
   } catch (e) {
     notice(e.message, 'err');
     paintRoomToggle();
@@ -2676,7 +2835,7 @@ const FEATURES = [
     note: 'Проект, теги, продолжение записи и связанные заметки во «Свойствах».' },
   { key: 'todoist', name: 'Задачи в Todoist',
     note: 'Кнопка «Поставить задачи» у документа и токен Todoist.' },
-  { key: 'outlook', name: 'Встречи из Outlook',
+  { key: 'outlook', name: 'Встречи из календаря',
     note: 'Название и участники подставляются из встречи в календаре.' },
   { key: 'calls', name: 'Замечать звонки',
     note: 'Программа видит начало звонка и предлагает начать запись.' },
@@ -2690,7 +2849,7 @@ const FEATURES = [
   { key: 'video_sharepoint', name: 'Видео: SharePoint и Teams', note: 'Источник видео на вкладке «Видео».' },
   { key: 'video_password', name: 'Видео: сайт по паролю', note: 'Источник видео на вкладке «Видео».' },
   { key: 'advanced', name: 'Тонкие настройки',
-    note: 'Раздел «Продвинутые»: шаг окна разметки, пороги, число отмен.' },
+    note: 'Раздел «Тонкие настройки» и пороги узнавания в «Голосах»: распознавание, разметка голосов, отмена правок, язык инструкций.' },
 ];
 
 /* Спрятать всё, что относится к выключенным возможностям. Одно место на всю
@@ -2733,6 +2892,19 @@ async function setFeature(key, on) {
   } catch (e) { notice(e.message, 'err'); }
 }
 
+/* «По умолчанию» — набор, с которым программа ставится. Какой он, знает
+   реестр возможностей в службе: страница только просит его вернуть. */
+async function resetFeatures() {
+  const def = S.settings && S.settings.features_default;
+  if (!def) return;
+  try {
+    S.settings = await api('/api/settings', { method: 'POST', body: { features: def } });
+    applyFeatures();
+    paintFeatures();
+    notice('Возможности — как при установке', 'ok');
+  } catch (e) { notice(e.message, 'err'); }
+}
+
 async function enableAllFeatures() {
   const f = {};
   FEATURES.forEach((it) => { f[it.key] = true; });
@@ -2753,13 +2925,15 @@ async function openSettings() {
   // Токен нужен только релизу с разметкой через pyannote; решает служба.
   $('hf-field').classList.toggle('hidden', !s.diarize_needs_token);
   $('hf-state').textContent = s.hf_token_set
-    ? `токен задан (${s.hf_token_hint}) — поле оставьте пустым, чтобы не менять`
-    : 'токен не задан: разметка говорящих не заработает';
+    ? `токен сохранён (${s.hf_token_hint}) · впишите новый, чтобы заменить`
+    : 'токен не задан: разметка голосов не заработает';
   $('set-silence').value = s.silence_finalize_ms || 2200;
   $('set-threads').value = s.onnx_threads || 7;
   $('set-match').value = s.voice_match_threshold || 0.7;
   $('set-suggest').value = s.voice_suggest_threshold || 0.45;
   $('set-shots').checked = s.screenshots_enabled !== false;
+  $('set-shot-folders').value = (s.screenshot_folders || []).join('\n');
+  loadShotFolders();
   $('set-mic-pill').checked = s.mic_pill !== false;
   $('set-fix-after').value = s.fix_suggest_after == null ? 3 : s.fix_suggest_after;
   loadFixes();
@@ -2789,10 +2963,9 @@ async function openSettings() {
   fillConnections();
   paintVaultState();
   $('outlook-state').textContent = S.caps.outlook
-    ? 'классический Outlook найден, встречи читаются'
-    : 'COM-доступ к Outlook недоступен (возможно, запущен «новый Outlook»)';
-  const eng = (S.caps.engines || []).map((e) => `${e.title}: ${e.ready ? (e.state || 'готов') : e.reason}`);
-  $('engine-state').textContent = eng.join(' · ');
+    ? 'встречи из календаря подставляются'
+    : 'Встречи из календаря не подставляются — вероятно, почта работает в новом режиме';
+  paintEngineState();
   refreshModelsHint();
   loadNeeds();
   fillAsrModels();
@@ -2800,6 +2973,8 @@ async function openSettings() {
   toggleApiFields();
   $('set-auto-diarize').checked = !!s.diarize_auto;
   $('set-retention').value = s.audio_retention_days || 0;
+  $('set-busy-rec').value = ['run', 'pause'].includes(s.processing_during_recording)
+    ? s.processing_during_recording : 'background';
   fillDictate();
   fillAdvanced();
   showYtdlpVersion();
@@ -2841,6 +3016,10 @@ async function loadAbout() {
   $('about-version').textContent = st.version || 'без номера';
   $('about-repo').textContent = st.repo ? `github.com/${st.repo}` : '—';
   const busy = (S.jobs || []).some((j) => j.kind === 'update' && ['queued', 'running'].includes(j.status));
+  // Где обновление кнопкой невозможно (сборка из git), кнопок нет вовсе:
+  // остаётся одна строка — почему и как здесь обновляется код.
+  $('upd-buttons').classList.toggle('hidden', !st.can_update);
+  $('upd-how').classList.toggle('hidden', !st.can_update);
   $('btn-upd-check').disabled = !st.can_update || busy;
   $('btn-upd-file').disabled = !st.can_update || busy;
   $('upd-staged').classList.toggle('hidden', !st.staged);
@@ -2854,13 +3033,13 @@ async function loadAbout() {
     $('upd-found').classList.add('hidden');
   }
   $('upd-state').textContent = !st.can_update ? st.reason
-    : (busy ? 'Готовлю обновление — ход виден в блоке «В работе».' : updateLastText(st.last));
+    : (busy ? 'Обновление готовится — ход виден в блоке «В работе».' : updateLastText(st.last));
   return st;
 }
 
 async function checkUpdates() {
   $('btn-upd-check').disabled = true;
-  $('upd-state').textContent = 'Спрашиваю GitHub…';
+  $('upd-state').textContent = 'Запрос к GitHub…';
   $('upd-found').classList.add('hidden');
   try {
     const r = await api('/api/updates/check', { method: 'POST' });
@@ -2888,7 +3067,7 @@ function bindAbout() {
     try {
       await api('/api/updates/download', { method: 'POST' });
       $('upd-found').classList.add('hidden');
-      $('upd-state').textContent = 'Скачиваю и готовлю — ход виден в блоке «В работе». Программа работает как обычно.';
+      $('upd-state').textContent = 'Обновление скачивается и готовится — ход виден в блоке «В работе». Программа работает как обычно.';
     } catch (e) { notice(e.message, 'err'); } finally { $('btn-upd-get').disabled = false; }
   };
   $('btn-upd-file').onclick = () => $('upd-file').click();
@@ -2898,10 +3077,10 @@ function bindAbout() {
     if (!f) return;
     const fd = new FormData();
     fd.append('file', f, f.name);
-    $('upd-state').textContent = `Беру «${f.name}»…`;
+    $('upd-state').textContent = `Файл «${f.name}» принят…`;
     try {
       await api('/api/updates/file', { method: 'POST', body: fd });
-      $('upd-state').textContent = 'Проверяю архив и докачиваю, что поменялось, — ход виден в блоке «В работе».';
+      $('upd-state').textContent = 'Архив проверяется, поменявшееся докачивается — ход виден в блоке «В работе».';
     } catch (e) { $('upd-state').textContent = e.message; }
   };
   $('btn-upd-discard').onclick = async () => {
@@ -2923,15 +3102,19 @@ async function noticeLastUpdate() {
 /* Строка под папкой заметок: на месте ли она и сколько в ней заметок. */
 function paintVaultState() {
   const v = S.vault || {};
+  // Состояние — справа от поля и коротко: «21 заметка».
   $('vault-state').textContent = v.exists
-    ? `папка на месте, заметок: ${v.notes != null ? v.notes : '—'}`
+    ? (v.notes != null ? plural(v.notes, 'заметка', 'заметки', 'заметок') : 'папка на месте')
     : 'папка будет создана при первом сохранении';
-  $('vault-state').className = 'tiny ' + (v.writable === false ? '' : 'muted');
+  $('vault-state').className = 'sstate' + (v.writable === false ? ' warn-line' : '');
 }
 
 /* Кнопка «Выбрать…» у поля с папкой: окно выбора, как в Проводнике.
    Выбранный путь ложится в поле и сохраняется так же, как вписанный руками.
-   К другому полю подключается одной разметкой: data-for="<id поля>". */
+   К другому полю подключается одной разметкой: data-for="<id поля>".
+   data-add="line" — поле держит список папок по строке: путь добавляется
+   строкой, а не заменяет всё. Пустой список может значить «по умолчанию» —
+   тогда поле подсказывает, с чего начать список (data-seed, по строке). */
 function bindPickFolder() {
   document.querySelectorAll('.js-pick-folder').forEach((btn) => {
     if (btn.dataset.bound) return;
@@ -2940,14 +3123,27 @@ function bindPickFolder() {
       e.preventDefault();
       const input = $(btn.dataset.for);
       if (!input) return;
-      const label = btn.closest('.field');
+      // Заголовок окна выбора — подпись строки, к которой относится кнопка.
+      const row = btn.closest('.srow, .field');
+      const label = row && (row.querySelector('.slabel') || row);
       const title = ((label && label.firstChild && label.firstChild.textContent) || '').trim();
+      const asLine = btn.dataset.add === 'line';
+      const lines = input.value.split('\n').map((s) => s.trim()).filter(Boolean);
       btn.disabled = true;
       try {
         const res = await api('/api/pick-folder', {
-          method: 'POST', body: { title: title || 'Выбор папки', start: input.value.trim() } });
+          method: 'POST',
+          body: { title: title || 'Выбор папки', start: asLine ? (lines[lines.length - 1] || '') : input.value.trim() } });
         if (res.path) {
-          input.value = res.path;
+          if (asLine) {
+            const list = lines.length ? lines
+              : (input.dataset.seed || '').split('\n').map((s) => s.trim()).filter(Boolean);
+            const same = (a, b) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
+            if (!list.some((p) => same(p, res.path))) list.push(res.path);
+            input.value = list.join('\n');
+          } else {
+            input.value = res.path;
+          }
           if (input.closest('#dlg-settings')) await applySettings(input);
         }
       } catch (err) { notice(err.message, 'err'); }
@@ -2956,62 +3152,128 @@ function bindPickFolder() {
   });
 }
 
-/* «Настройки → Основное»: где лежит звук и видео, сколько занимает, что удалится по сроку. */
+/* «Настройки → Запись и звонки»: откуда берутся снимки экрана. Пустой список — папки
+   программа ищет сама; найденное показывается под полем и становится началом
+   списка, когда человек добавляет первую свою папку. */
+async function loadShotFolders() {
+  const box = $('shot-folders-state');
+  const field = $('set-shot-folders');
+  let res;
+  try { res = await api('/api/screenshots/folders'); } catch (e) { box.textContent = e.message; return; }
+  const active = res.active || [];
+  field.dataset.seed = (res.auto || []).join('\n');
+  // Свой список — строками с «убрать»: путь раскрыт службой, у строки без
+  // папки пометка. Второго перечня тех же папок под списком нет.
+  const own = res.own || [];
+  const list = $('shot-folders-list');
+  list.innerHTML = own.map((r, i) => `<div class="slist-row">
+      <span class="sl-main">${esc(r.path)}</span>
+      ${r.exists ? '' : '<span class="sstate warn-line">папки нет</span>'}
+      <button type="button" class="ghost small js-shot-del" data-i="${i}" title="Убрать папку из списка">убрать</button>
+    </div>`).join('');
+  list.querySelectorAll('.js-shot-del').forEach((b) => {
+    b.onclick = async () => {
+      const raw = (own[Number(b.dataset.i)] || {}).raw;
+      field.value = field.value.split('\n').map((s) => s.trim())
+        .filter((s) => s && s !== raw).join('\n');
+      await applySettings(field);
+    };
+  });
+  box.textContent = own.length
+    ? (active.length ? '' : 'Ни одной из этих папок нет — снимки в заметку не попадут.')
+    : (active.length
+      ? `Список пуст — программа ищет сама: ${active.join(' · ')}`
+      : 'Список пуст, и сама программа ни одной папки снимков не нашла: добавьте ту, куда они сохраняются.');
+}
+
+/* «Настройки → Общие»: где лежит звук и видео, сколько занимает, что удалится по сроку. */
 async function loadStorage() {
   let st;
   try { st = await api('/api/storage'); } catch (e) { $('storage-audio').textContent = e.message; return; }
   const a = st.audio || {};
   const v = st.videos || {};
-  $('storage-audio').textContent = `${a.path} — ${fmtSize(a.bytes)}`
-    + (a.records ? ` (записей со звуком: ${a.records}, из них звонков ${a.calls_records}, ${fmtSize(a.calls_bytes)})` : ', пусто');
-  $('storage-videos').textContent = v.exists ? `${v.path} — ${fmtSize(v.bytes)} (файлов: ${v.files})` : `${v.path} — папки пока нет`;
+  // Строкой — сколько занимает; где лежит — в подсказке и по «Открыть папку».
+  $('storage-audio').textContent = a.records
+    ? `${fmtSize(a.bytes)} · ${plural(a.records, 'запись', 'записи', 'записей')} со звуком` : 'пусто';
+  $('storage-audio').title = (a.path || '') + (a.records
+    ? `\nИз них звонков: ${a.calls_records}, ${fmtSize(a.calls_bytes)}` : '');
+  $('storage-videos').textContent = v.exists
+    ? `${fmtSize(v.bytes)} · ${plural(v.files, 'файл', 'файла', 'файлов')}` : 'папки пока нет';
+  $('storage-videos').title = v.path || '';
   $('btn-reveal-videos').disabled = !v.exists;
   const due = st.due || {};
   $('storage-due').textContent = st.retention_days
     ? (due.records ? `Сейчас под срок попадает звук записей: ${due.records} (${fmtSize(due.bytes)}) — удалится при следующей проверке (раз в 6 часов).`
       : 'Звука старше срока сейчас нет.')
-    : '0 — не удалять. Стенограммы, документы и заметки при удалении звука остаются.';
+    : '0 — не удалять';
 }
 
-/* «Настройки → Обработка»: имя владельца и задача/структура каждого документа. */
+/* «Настройки → Документы»: задача и структура каждого документа; своё имя и
+   роль — в «Общих», но приходят с тем же ответом службы. */
 async function loadPrompts() {
   let res;
   try { res = await api('/api/prompts'); } catch (e) { $('prompt-list').textContent = e.message; return; }
   S.prompts = res.prompts || [];
   $('set-owner').value = res.owner_name === 'Я' ? '' : (res.owner_name || '');
-  $('set-owner-side').innerHTML = ['<option value="">не указана</option>'].concat(
+  $('set-owner-side').innerHTML = ['<option value="">—</option>'].concat(
     (res.sides || []).map((s) => `<option value="${esc(s.key)}">${esc(s.title)}</option>`)).join('');
   $('set-owner-side').value = res.owner_side || '';
   $('set-owner-position').value = res.owner_position || '';
   $('set-prompt-lang').value = res.prompt_lang === 'en' ? 'en' : 'ru';
-  // Токен не показываем: службы отдаёт только «задан» и хвостик. Пустое поле
-  // означает «не трогали», а не «убрать токен» — см. collectPrompts.
+  // Токен не показываем: служба отдаёт только «задан» и хвостик. Пустое поле
+  // означает «не трогали», а не «убрать токен» — см. collectPrompts. Что токен
+  // есть, говорит строка рядом с полем, а не заглушка внутри него.
   $('set-todoist').value = '';
-  $('set-todoist').placeholder = res.todoist_set ? ('задан · ' + (res.todoist_hint || '')) : 'не задан';
-  $('prompt-list').innerHTML = S.prompts.map((p) => `
-    <div class="box prompt-box" data-k="${esc(p.key)}">
-      <div class="row"><b>${esc(p.title)}</b>
-        <span class="tiny js-state">${p.overridden ? '— изменён' : '— исходный'}</span></div>
-      <div class="tiny muted">${esc(p.hint)}</div>
-      <textarea rows="9" class="js-prompt">${esc(p.current)}</textarea>
-      <div class="row"><button class="ghost small js-reset" type="button">Вернуть исходный</button></div>
+  $('todoist-state').textContent = res.todoist_set
+    ? `токен сохранён (${res.todoist_hint || ''}) · впишите новый, чтобы заменить` : '';
+  paintPromptList();
+}
+
+/* Виды документов — строками: название, строка описания, исходный или
+   изменён. Сам текст задачи правится в своём окне (openPromptEditor). */
+function paintPromptList() {
+  const box = $('prompt-list');
+  box.innerHTML = (S.prompts || []).map((p) => `
+    <div class="slist-row prompt-row" data-k="${esc(p.key)}" title="Открыть задачу документа">
+      <span class="sl-main"><b>${esc(p.title)}</b><span class="pr-hint">${esc(p.hint)}</span></span>
+      <span class="sstate">${String(p.current || '').trim() === String(p.default || '').trim() ? 'исходный' : 'изменён'}</span>
     </div>`).join('');
-  $('prompt-list').querySelectorAll('.prompt-box').forEach((box) => {
-    const p = S.prompts.find((x) => x.key === box.dataset.k);
-    const ta = box.querySelector('.js-prompt');
-    const state = () => {
-      box.querySelector('.js-state').textContent = ta.value.trim() === p.default ? '— исходный' : '— изменён';
-    };
-    ta.oninput = state;
-    box.querySelector('.js-reset').onclick = () => { ta.value = p.default; state(); };
+  box.querySelectorAll('.prompt-row').forEach((row) => {
+    row.onclick = () => openPromptEditor(row.dataset.k);
   });
+}
+
+function openPromptEditor(key) {
+  const p = (S.prompts || []).find((x) => x.key === key);
+  if (!p) return;
+  S.promptKey = key;
+  $('prompt-title').textContent = p.title;
+  $('prompt-hint').textContent = p.hint || '';
+  $('prompt-text').value = p.current || '';
+  paintPromptState();
+  $('dlg-prompt').classList.remove('hidden');
+  $('prompt-text').focus();
+}
+
+function paintPromptState() {
+  const p = (S.prompts || []).find((x) => x.key === S.promptKey);
+  if (!p) return;
+  $('prompt-state').textContent = $('prompt-text').value.trim() === String(p.default || '').trim()
+    ? 'Исходный текст задачи' : 'Изменён — от исходного отличается';
+}
+
+async function savePromptEditor() {
+  const p = (S.prompts || []).find((x) => x.key === S.promptKey);
+  if (!p) return;
+  p.current = $('prompt-text').value;
+  hideDialogs();                        // закрывается только редактор
+  paintPromptList();
+  await applySettings($('prompt-list'));
 }
 
 function collectPrompts() {
   const overrides = {};
-  $('prompt-list').querySelectorAll('.prompt-box').forEach((box) => {
-    overrides[box.dataset.k] = box.querySelector('.js-prompt').value;
-  });
+  (S.prompts || []).forEach((p) => { overrides[p.key] = p.current; });
   const out = { owner_name: $('set-owner').value.trim() || 'Я', overrides,
                 owner_side: $('set-owner-side').value || '',
                 owner_position: $('set-owner-position').value.trim(),
@@ -3061,13 +3323,18 @@ function collectConnections() {
     api_kind: $('set-api-kind').value,
     api_folder: $('set-folder').value.trim(),
     asr_files: $('set-asr-files').value,
-    asr_base_url: $('set-cloud-asr-url').value.trim(),
-    asr_model: $('set-cloud-asr-model').value.trim(),
   };
+  // Облачные поля видны и уходят в настройки, только когда выбрано облако:
+  // спрятанное поле ни на что не влияет — и в сохранение не попадает.
+  const cloud = $('set-asr-files').value === 'cloud';
+  if (cloud) {
+    patch.asr_base_url = $('set-cloud-asr-url').value.trim();
+    patch.asr_model = $('set-cloud-asr-model').value.trim();
+  }
   // Ключи служба сливает по одному: отправляем только вписанный.
   const keys = {};
   if ($('set-apikey').value.trim()) keys.docs = $('set-apikey').value.trim();
-  if ($('set-cloud-asr-key').value.trim()) keys.asr = $('set-cloud-asr-key').value.trim();
+  if (cloud && $('set-cloud-asr-key').value.trim()) keys.asr = $('set-cloud-asr-key').value.trim();
   if (Object.keys(keys).length) patch.api_keys = keys;
   return patch;
 }
@@ -3078,7 +3345,8 @@ function paintConnections() {
   const cs = (S.caps || {}).connections || {};
   const docs = cs.docs || {};
   const asr = cs.asr || {};
-  const keyLine = (c) => (c.has_key ? `ключ задан (${c.key_hint})` : 'ключ не задан');
+  // Одно состояние ключа рядом с пустым полем: «сохранён · заменить».
+  const keyLine = (c) => (c.has_key ? `ключ сохранён (${c.key_hint}) · впишите новый, чтобы заменить` : 'ключ не задан');
   $('apikey-state').textContent = keyLine(docs);
   $('cloud-asr-key-state').textContent = keyLine(asr);
   $('set-api-kind').options[0].textContent = docs.base_url && !docs.kind_manual
@@ -3086,14 +3354,12 @@ function paintConnections() {
   $('folder-field').classList.toggle('hidden', docs.kind !== 'yandexgpt');
   $('api-url-state').textContent = docs.base_url
     ? `${docs.service} · разговор ${docs.kind_title}` + (docs.problem ? ` · ${docs.problem}` : '')
-    : 'Адрес API, обычно заканчивается на /v1. Только https и только внешний адрес.';
-  // Облачные поля нужны, только когда распознаём в облаке: иначе они серые и
-  // не правятся — чтобы не казалось, что ключ здесь что-то меняет.
+    : 'обычно заканчивается на /v1; только https и только внешний адрес';
+  // Облачные поля нужны, только когда распознаём в облаке: иначе их нет на
+  // экране — чтобы не казалось, что ключ здесь что-то меняет.
   const local = $('set-asr-files').value !== 'cloud';
-  $('cloud-asr-fields').classList.toggle('fields-off', local);
-  $('cloud-asr-fields').querySelectorAll('input, button').forEach((el) => { el.disabled = local; });
-  $('cloud-asr-state').textContent = local
-    ? 'Файлы и видео распознаются на этом компьютере — облачные поля не используются.'
+  $('cloud-asr-fields').classList.toggle('hidden', local);
+  $('cloud-asr-state').textContent = local ? ''
     : (asr.problem
       || (asr.model ? `${asr.service} · модель ${asr.model}` : 'Не указана модель распознавания.'));
 }
@@ -3240,7 +3506,7 @@ function bindModelCombos() {
 
 async function refreshModels(role, btn) {
   btn.disabled = true;
-  btn.textContent = 'спрашиваю сервис…';
+  btn.textContent = 'запрос к сервису…';
   try {
     await applySettings(btn);            // адрес и ключ могли вписать только что
     const res = await api(`/api/models?role=${role}&refresh=true`, { method: 'POST' });
@@ -3299,14 +3565,20 @@ function priceLabel(m) {
    имена моделей), поэтому после смены выбора она устаревает до сохранения —
    об этом честно пишем. */
 function refreshModelsHint() {
-  const s = S.settings || {};
   const now = (S.caps || {}).minutes_models || '';
-  const changed = $('set-engine').value !== (s.minutes_engine || 'claude_cli')
-    || $('set-model').value.trim() !== (s.api_model || '')
-    || $('set-cli-model').value !== (s.claude_cli_model || '');
-  $('quality-state').textContent = changed
-    ? `Сейчас: ${now} Новый выбор применится после «Сохранить».`
-    : `Сейчас: ${now}`;
+  // У подписки с моделью «по умолчанию» модель подбирается сама — так и
+  // пишем; какие именно имена моделей, видно в подсказке строки.
+  const auto = $('set-engine').value === 'claude_cli' && !$('set-cli-model').value;
+  $('quality-state').textContent = auto ? 'Модель подбирается сама по длине записи.' : now;
+  $('quality-state').title = now;
+}
+
+/* Состояние выбранного способа делать документы — одной строкой рядом со
+   списком. Про невыбранный способ здесь ничего не говорим. */
+function paintEngineState() {
+  const key = $('set-engine').value;
+  const e = ((S.caps || {}).engines || []).find((x) => x.key === key);
+  $('engine-state').textContent = !e ? '' : (e.ready ? (e.state || 'готов') : (e.reason || 'не готов'));
 }
 
 /* «Настройки → Голоса»: карточки людей (варианты имени, откуда каждый образец
@@ -3345,6 +3617,12 @@ async function loadVoices() {
       : '<option value="">копий пока нет</option>';
     $('btn-voices-restore').disabled = !list.length;
   }).catch(() => {});
+  paintVoices();
+}
+
+/* Люди базы голосов — строками, с поиском по имени. Отрисовка отдельно от
+   загрузки: поиск перерисовывает список, не спрашивая службу на каждую букву. */
+function paintVoices() {
   const open = S.voicesOpen || (S.voicesOpen = new Set());
   $('voices-dupes').innerHTML = S.voiceDupes.length
     ? `<div class="box dupes"><b>Возможно, это одни и те же люди</b>${S.voiceDupes.map((d, i) =>
@@ -3353,14 +3631,34 @@ async function loadVoices() {
         <button class="ghost small js-merge-ba" type="button">в «${esc(d.b.name)}»</button>
         <button class="ghost small js-notsame" type="button">Разные люди</button></div>`).join('')}</div>`
     : '';
+  $('voices-dupes').querySelectorAll('.dupe').forEach((row) => {
+    const d = S.voiceDupes[Number(row.dataset.i)];
+    const merge = async (src, dst) => {
+      if (!confirm(`Объединить «${src.name}» с «${dst.name}»? Копия базы сохранится.`)) return;
+      await voicesAction(`/api/voices/${encodeURIComponent(src.id)}/merge`, { method: 'POST', body: { into: dst.id } });
+      loadVoices();
+    };
+    row.querySelector('.js-merge-ab').onclick = () => merge(d.b, d.a);
+    row.querySelector('.js-merge-ba').onclick = () => merge(d.a, d.b);
+    row.querySelector('.js-notsame').onclick = async () => {
+      await voicesAction('/api/voices/not-same', { method: 'POST', body: { a: d.a.id, b: d.b.id } });
+      loadVoices();
+    };
+  });
   const box = $('voices-list');
   if (!S.voices.length) {
-    box.innerHTML = '<div class="tiny muted">Пока пусто. Подпишите говорящего в записи или загрузите расшифровку Teams с именами.</div>';
+    box.innerHTML = '<div class="tiny muted">Пока пусто. Подпишите голос в записи или загрузите расшифровку Teams с именами.</div>';
     return;
   }
-  const others = (p) => S.voices.filter((x) => x.id !== p.id)
-    .map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
-  box.innerHTML = S.voices.map((p) => {
+  // Поиск по имени и его вариантам — тем же ключом, что и в окне «Кто это говорит?».
+  const q = nameKey($('voices-filter').value || '');
+  const shown = !q ? S.voices : S.voices.filter((p) => [p.name].concat(p.aliases || [])
+    .some((n) => nameKey(n).includes(q)));
+  if (!shown.length) {
+    box.innerHTML = '<div class="tiny muted">Под этот поиск никого нет.</div>';
+    return;
+  }
+  box.innerHTML = shown.map((p) => {
     const badges = [p.owner ? '<span class="vbadge">это вы</span>' : '',
       p.kind === 'shared' ? '<span class="vbadge warn">общее устройство</span>' : ''].join('');
     const voice = p.kind === 'shared' ? 'голос не запоминается'
@@ -3381,9 +3679,10 @@ async function loadVoices() {
         ${samples ? `<div class="vsamples">${samples}</div>` : ''}
         <div class="row">
           <button class="ghost small js-vrename" type="button">Переименовать</button>
+          <button class="ghost small js-vmerge" type="button" title="Слить этого человека с другим: образцы голоса и варианты имени перейдут к нему">Объединить…</button>
           ${p.owner ? '' : `<label class="inline tiny" title="Переговорка или общий компьютер: голос не запоминается и никому не подставляется"><input type="checkbox" class="js-vshared" ${p.kind === 'shared' ? 'checked' : ''}> общее устройство</label>`}
-          <select class="js-vmerge-to"><option value="">объединить с…</option>${others(p)}</select>
-          <button class="ghost small js-vdel" type="button">Удалить</button>
+          <span class="fb-spacer"></span>
+          <button class="danger small js-vdel" type="button" title="Удалить человека из базы вместе с образцами голоса. Копия базы сохранится.">Удалить…</button>
         </div>
       </div></div>`;
   }).join('');
@@ -3417,18 +3716,7 @@ async function loadVoices() {
       loadVoices();
     };
   });
-  box.querySelectorAll('.js-vmerge-to').forEach((sel) => {
-    sel.onchange = async () => {
-      const p = person(sel);
-      const into = S.voices.find((x) => x.id === sel.value);
-      if (!into) return;
-      if (!confirm(`Объединить «${p.name}» с «${into.name}» в одного человека? Образцы голоса и варианты имени перейдут к «${into.name}». Копия базы сохранится.`)) {
-        sel.value = ''; return;
-      }
-      await voicesAction(`/api/voices/${encodeURIComponent(p.id)}/merge`, { method: 'POST', body: { into: into.id } });
-      loadVoices();
-    };
-  });
+  box.querySelectorAll('.js-vmerge').forEach((b) => { b.onclick = () => openMergeDialog(person(b)); });
   box.querySelectorAll('.js-valias-add').forEach((a) => {
     a.onclick = async (e) => {
       e.preventDefault();
@@ -3448,20 +3736,47 @@ async function loadVoices() {
       loadVoices();
     };
   });
-  $('voices-dupes').querySelectorAll('.dupe').forEach((row) => {
-    const d = S.voiceDupes[Number(row.dataset.i)];
-    const merge = async (src, dst) => {
-      if (!confirm(`Объединить «${src.name}» с «${dst.name}»? Копия базы сохранится.`)) return;
-      await voicesAction(`/api/voices/${encodeURIComponent(src.id)}/merge`, { method: 'POST', body: { into: dst.id } });
-      loadVoices();
-    };
-    row.querySelector('.js-merge-ab').onclick = () => merge(d.b, d.a);
-    row.querySelector('.js-merge-ba').onclick = () => merge(d.a, d.b);
-    row.querySelector('.js-notsame').onclick = async () => {
-      await voicesAction('/api/voices/not-same', { method: 'POST', body: { a: d.a.id, b: d.b.id } });
-      loadVoices();
-    };
+}
+
+/* «Объединить…»: с кем — выбирается в окне, с отбором по имени. */
+function openMergeDialog(p) {
+  if (!p) return;
+  S.mergeFrom = p;
+  S.mergeInto = null;
+  $('merge-title').textContent = `Объединить «${p.name}»`;
+  $('merge-what').textContent = 'Образцы голоса и варианты имени перейдут к выбранному человеку. Копия базы сохранится.';
+  $('merge-filter').value = '';
+  $('btn-merge-go').disabled = true;
+  paintMergeList();
+  $('dlg-merge').classList.remove('hidden');
+  $('merge-filter').focus();
+}
+
+function paintMergeList() {
+  const p = S.mergeFrom;
+  if (!p) return;
+  const q = nameKey($('merge-filter').value || '');
+  const list = (S.voices || []).filter((x) => x.id !== p.id
+    && (!q || [x.name].concat(x.aliases || []).some((n) => nameKey(n).includes(q))));
+  $('merge-list').innerHTML = list.length ? list.map((x) => `
+    <label class="link-row"><input type="radio" name="merge-pick" value="${esc(x.id)}"${S.mergeInto === x.id ? ' checked' : ''}>
+      <span class="link-title">${esc(x.name)}</span></label>`).join('')
+    : '<div class="tiny muted">Никого не нашлось.</div>';
+  $('merge-list').querySelectorAll('input').forEach((r) => {
+    r.onchange = () => { S.mergeInto = r.value; $('btn-merge-go').disabled = false; };
   });
+}
+
+async function doMerge() {
+  const p = S.mergeFrom;
+  const into = (S.voices || []).find((x) => x.id === S.mergeInto);
+  if (!p || !into) return;
+  hideDialogs();                        // закрывается только это окно
+  const res = await voicesAction(`/api/voices/${encodeURIComponent(p.id)}/merge`,
+    { method: 'POST', body: { into: into.id } });
+  if (res.status === 200) notice(`«${p.name}» и «${into.name}» — теперь один человек`, 'ok');
+  else notice(res.data.detail || `Ошибка ${res.status}`, 'err');
+  loadVoices();
 }
 
 /* Настройки применяются сразу (решение 18.09): кнопки
@@ -3482,6 +3797,7 @@ function collectSettings() {
     voice_match_threshold: parseFloat($('set-match').value) || 0.7,
     voice_suggest_threshold: parseFloat($('set-suggest').value) || 0.45,
     screenshots_enabled: $('set-shots').checked,
+    screenshot_folders: $('set-shot-folders').value.split('\n').map((s) => s.trim()).filter(Boolean),
     mic_pill: $('set-mic-pill').checked,
     fix_suggest_after: Number($('set-fix-after').value) || 3,
     tray_enabled: $('set-tray').checked,
@@ -3524,6 +3840,7 @@ function collectSettings() {
   // Какие модели распознавания и для чего (решение 21.09).
   Object.assign(patch, collectAsrModels());
   patch.audio_retention_days = Math.max(0, parseInt($('set-retention').value, 10) || 0);
+  patch.processing_during_recording = $('set-busy-rec').value;
   Object.assign(patch, collectDictate());
   Object.assign(patch, collectAdvanced());
   return patch;
@@ -3533,8 +3850,10 @@ function collectSettings() {
    раз кнопки «Сохранить» больше нет. Держится пару секунд и уходит. */
 function markSaved(el) {
   if (!el) return;
-  const field = el.closest('.field') || el.parentElement;
-  if (!field) return;
+  // Отметка — рядом с полем: в строке настроек это правая часть строки.
+  const row = el.closest('.srow, .scheck, .field') || el.parentElement;
+  if (!row) return;
+  const field = row.classList.contains('srow') ? (row.querySelector('.sctl') || row) : row;
   let mark = field.querySelector('.saved-mark');
   if (!mark) {
     mark = document.createElement('span');
@@ -3558,8 +3877,12 @@ async function applySettings(from) {
     markSaved(from);
     // Сменили выбор моделей — служба пересчитает, что скачать и что не нужно.
     if (from && /^set-(asr|live-draft)/.test(from.id || '')) await loadAsrModels();
+    if (from && from.id === 'set-shot-folders') await loadShotFolders();
     await loadState();
     paintVaultState();
+    // Строки под полями считает служба по сохранённому — перерисовываем их.
+    paintEngineState();
+    refreshModelsHint();
     if (S.currentId) await refreshCurrent();
     paintAll();
   } catch (e) { notice(e.message, 'err'); }
@@ -3586,7 +3909,7 @@ function bindSettingsFields() {
 }
 
 /* «Сделать документ»: тип записи + вид документа. Тип подсказывает документ
-   (встреча — протокол или саммари, лекция — конспект, интервью — выжимка), но
+   (встреча — протокол или краткое содержание, лекция — конспект, интервью — выжимка), но
    выбрать можно любой. Выбранный тип запоминается в записи. */
 const KIND_DOC = { lecture: 'lecture', interview: 'interview' };
 async function openMinutes() {
@@ -3740,6 +4063,7 @@ async function handleEvent(ev) {
         if (S.currentId === ev.rec_id) await refreshCurrent();
       } else {
         paintHead();
+        paintTranscript();     // «Включаются устройства…» → «Слушаю…»
       }
       break;
     }
@@ -3859,7 +4183,7 @@ function showPane(pane) {
     b.classList.toggle('active', b.dataset.pane === pane);
   });
   // Подсветка вкладки документа: гаснет, как только открыта другая вкладка —
-  // иначе активными выглядели две сразу («Саммари» и «Свойства»).
+  // иначе активными выглядели две сразу («Краткое содержание» и «Свойства»).
   document.querySelectorAll('#minutes-tabs .doc-tab').forEach((b) => {
     b.classList.toggle('active', pane === 'doc' && b.dataset.k === S.docShown);
   });
@@ -3883,14 +4207,14 @@ function currentDoc() {
   return docs.find((d) => d.key === S.docShown) || docs[0] || null;
 }
 
-/* Документы записи: по вкладке на каждый (протокол, саммари, вопросы…). */
+/* Документы записи: по вкладке на каждый (протокол, краткое содержание, вопросы…). */
 function paintDocTabs() {
   const docs = S.docs || [];
   $('minutes-tabs').innerHTML = docs.map((d) =>
     `<button class="doc-tab${(d.key === S.docShown && S.pane === 'doc') ? ' active' : ''}" data-k="${esc(d.key)}" type="button">${esc(d.title)}</button>`).join('');
   $('minutes-tabs').querySelectorAll('.doc-tab').forEach((b) => {
     // Щелчок по вкладке документа не только выбирает документ, но и открывает
-    // саму вкладку: раньше, стоя на «Стенограмме», нажать «Саммари» было
+    // саму вкладку: раньше, стоя на «Стенограмме», нажать «Краткое содержание» было
     // некуда — документ выбирался, а на экране ничего не менялось.
     b.onclick = () => { S.docShown = b.dataset.k; showPane('doc'); };
   });
@@ -4035,17 +4359,17 @@ function mdBlocks(md) {
 
 /* Копировать документ в том виде, в каком его будут вставлять (20.09).
    Документ внутри хранится в Markdown — это одна правда, а на выходе три
-   отрисовки под три места: заметки, Word с Outlook и Telegram.
+   отрисовки под три места: заметки, Word с почтой и Telegram.
 
    Системного вызова здесь нет и не нужно: буфер обмена браузера сам умеет
-   класть рядом простой текст и HTML, а Word с Outlook берут из него HTML. */
+   класть рядом простой текст и HTML, а Word и почта берут из него HTML. */
 const COPY_FORMATS = {
   md: { title: 'Markdown', note: 'как есть — для заметок и Obsidian' },
-  rich: { title: 'Оформленный текст', note: 'для Word и Outlook: заголовки, списки, таблицы' },
+  rich: { title: 'Оформленный текст', note: 'для Word и почты: заголовки, списки, таблицы' },
   tg: { title: 'Telegram', note: 'жирный и курсив, таблицы строками' },
 };
 
-/* HTML для Word и Outlook: тот же рисовальщик, что и на странице, только без
+/* HTML для Word и почты: тот же рисовальщик, что и на странице, только без
    наших крючков — классов вычёркивания и кнопок-таймкодов. Второго
    рисовальщика Markdown в программе заводить незачем. */
 function docHtml(md) {
@@ -4146,14 +4470,19 @@ async function openShareDialog() {
     notice('Отправлять пока нечего: нет ни документов, ни стенограммы', 'err');
     return;
   }
-  // Открытый документ отмечен сразу: обычно отправляют именно его.
+  // Открытый документ отмечен сразу: обычно отправляют именно его. Вариант
+  // один — он просто назван, без флажка: снять его значило бы отправить ничего.
   const cur = currentDoc();
-  $('share-list').innerHTML = items.map((it, i) => `
+  const what = (it) => (it.kind === 'transcript' ? 'весь разговор по репликам' : 'документ');
+  $('share-list').innerHTML = items.length === 1
+    ? `<div class="share-one" data-key="${esc(items[0].key)}"><span class="link-title">${esc(items[0].title)}</span>
+        <span class="tiny muted">${what(items[0])}</span></div>`
+    : items.map((it, i) => `
     <label class="link-row">
       <input type="checkbox" data-key="${esc(it.key)}"${
   (cur && it.key === cur.key) || (!cur && i === 0) ? ' checked' : ''}>
       <span class="link-title">${esc(it.title)}</span>
-      <span class="tiny muted">${it.kind === 'transcript' ? 'весь разговор по репликам' : 'документ'}</span>
+      <span class="tiny muted">${what(it)}</span>
     </label>`).join('');
   $('share-list').querySelectorAll('input').forEach((c) => { c.onchange = paintShareNote; });
   $('share-target').onchange = paintShareNote;
@@ -4162,6 +4491,8 @@ async function openShareDialog() {
 }
 
 function sharePicked() {
+  const one = $('share-list').querySelector('.share-one');
+  if (one) return [one.dataset.key];
   return [...$('share-list').querySelectorAll('input:checked')].map((c) => c.dataset.key);
 }
 
@@ -4178,9 +4509,9 @@ function paintShareNote() {
     return;
   }
   $('share-note').textContent = res.mail_attachments
-    ? 'Отмеченное уйдёт вложением. Письмо откроется, но НЕ отправится: адресатов впишете сами.'
-    : `Вложение доезжает только через классический Outlook. ${res.mail_note || ''} `
-      + 'Письмо откроется ссылкой, а папку с файлами покажу рядом.';
+    ? 'Выбранное уйдёт вложением. Письмо откроется, но не отправится: адресатов впишете сами.'
+    : `Вложение прикрепляется только в классической почтовой программе. ${res.mail_note || ''} `
+      + 'Письмо откроется ссылкой, а рядом откроется папка с файлами.';
 }
 
 async function doShare() {
@@ -4340,8 +4671,9 @@ function newRecordingTab() {
   S.currentId = null;
   S.drafts = {};
   hideMinutes();
+  // Что делать дальше, говорит сам экран («Готов к записи»), второй
+  // всплывашкой это не повторяем.
   paintAll();
-  notice('Готово к записи: нажмите «● Старт» или перетащите файл.');
 }
 
 /* ====================================================== файлы и ссылки */
@@ -4401,18 +4733,19 @@ function paintFixes() {
   // Словарь один на программу, поэтому у каждой замены помечено, где она
   // действует: в стенограммах, в диктовке или всюду (решение 18.09).
   const SCOPES = [['both', 'везде'], ['transcript', 'в стенограммах'], ['dictation', 'в диктовке']];
+  // Строкой «было → стало», где действует и «убрать» — без плашек.
   box.innerHTML = rules.length
-    ? rules.map((r) => `<div class="dict-rule">
-        <span class="fix-from">${esc(r.from)}</span>
-        <span class="tiny muted">→</span>
-        <span class="fix-to">${esc(r.to)}</span>
-        <select class="fix-scope small" data-from="${esc(r.from)}"
+    ? rules.map((r) => `<div class="slist-row">
+        <span class="sl-main"><span class="fix-from">${esc(r.from)}</span>
+          <span class="muted">→</span>
+          <span class="fix-to">${esc(r.to)}</span></span>
+        <select class="fix-scope" data-from="${esc(r.from)}" data-bound="1"
                 title="Где действует эта замена">${SCOPES.map(([v, n]) =>
           `<option value="${v}"${(r.where || 'both') === v ? ' selected' : ''}>${n}</option>`).join('')}</select>
         <button class="ghost small fix-del" type="button" data-from="${esc(r.from)}"
-                title="Убрать эту замену">×</button>
+                title="Убрать эту замену">убрать</button>
       </div>`).join('')
-    : '<div class="tiny muted">Пока пусто. Замены появятся сами — из ваших правок.</div>';
+    : '<div class="tiny muted">Пока пусто. Замены появятся сами — из ваших правок — или добавьте свою.</div>';
   box.querySelectorAll('.fix-del').forEach((b) => {
     b.onclick = () => sendFix('forget', b.dataset.from, '');
   });
@@ -4444,13 +4777,13 @@ async function sendFix(action, from, to, where) {
       method: 'POST', body: { action, from, to, where: where || 'both' },
     });
     paintFixes();
-    if (action === 'add') notice(`Теперь пишу «${to}»`, 'ok');
+    if (action === 'add') notice(`Замена добавлена: теперь «${to}»`, 'ok');
   } catch (err) {
     notice(String(err.message || err), 'err');
   }
 }
 
-// «Продвинутые»: поле → ключ настроек. Пустое поле уходит в службу как null —
+// «Тонкие настройки»: поле → ключ настроек. Пустое поле уходит в службу как null —
 // «как у модели».
 const ADVANCED_FIELDS = [
   ['set-dt-step', 'diarize_window_step_s'],
@@ -4527,8 +4860,14 @@ function paintAsrRows() {
   $('row-asr-two').classList.toggle('hidden', !two);
   $('set-asr-reread').disabled = !(two && fastCalls);
   $('row-live-draft').classList.toggle('hidden', !fastCalls);
-  $('row-asr-engine').classList.toggle('hidden', !two && $('set-asr-single').value === 'fast');
-  $('row-asr-weights').classList.toggle('hidden', $('set-asr-engine').value !== 'onnx_asr');
+  const noPrecise = !two && $('set-asr-single').value === 'fast';
+  $('row-asr-engine').classList.toggle('hidden', noPrecise);
+  // Веса — у движка onnx-asr, и только когда виден сам движок.
+  $('row-asr-weights').classList.toggle('hidden', noPrecise || $('set-asr-engine').value !== 'onnx_asr');
+  // Срок выгрузки точной модели ничего не значит при одной точной модели на
+  // всё: она служит записи и не выгружается никогда.
+  const onePrecise = !two && $('set-asr-single').value === 'precise';
+  document.querySelectorAll('.dictate-memory').forEach((el) => el.classList.toggle('hidden', onePrecise));
 }
 
 function paintAsrModels() {
@@ -4541,9 +4880,10 @@ function paintAsrModels() {
   $('asr-download-what').textContent = miss.map((x) => x.title).join(', ');
   const un = m.unneeded || [];
   $('asr-models-unneeded').classList.toggle('hidden', !un.length);
-  $('asr-unneeded-what').textContent = un.map((x) => `${x.title} (${x.disk_mb} МБ`
-    + (x.busy ? ', занято — удалится после перезапуска' : '') + ')').join(', ')
-    + ` — всего ${m.unneeded_mb} МБ.`;
+  // Строкой: сколько всего; что именно — в подсказке.
+  $('asr-unneeded-what').textContent = `${m.unneeded_mb} МБ`;
+  $('asr-unneeded-what').title = un.map((x) => `${x.title} (${x.disk_mb} МБ`
+    + (x.busy ? ', занято — удалится после перезапуска' : '') + ')').join('\n');
   $('asr-models-notes').textContent = (m.notes || []).join(' ');
   const st = m.running || S.asr || {};
   let text = '';
@@ -4552,6 +4892,20 @@ function paintAsrModels() {
     text = `Сейчас работает: ${st.models}. Выбранное — ${m.title} — включится после перезапуска программы.`;
   } else if (st.models) text = `Работает: ${st.models}.`;
   box.textContent = text;
+  paintSettingsFoot();
+}
+
+/* Подвал настроек не обещает «применяются сразу», когда выбор включится
+   только после перезапуска. Кнопки «перезапустить» у программы нет — говорим,
+   как это сделать. */
+function paintSettingsFoot() {
+  const box = $('set-foot-note');
+  if (!box) return;
+  const restart = !!(S.asrModels && S.asrModels.restart);
+  box.textContent = restart
+    ? 'Нужен перезапуск: выбор моделей включится после него — значок у часов → «Выход» и открыть снова.'
+    : 'Изменения применяются сразу';
+  box.classList.toggle('warn-line', restart);
 }
 
 async function asrModelsAction(url, body, done) {
@@ -4566,11 +4920,11 @@ function paintNeeds() {
   const box = $('needs-list');
   if (!box) return;
   const parts = S.needs || [];
-  if (!parts.length) { box.innerHTML = '<div class="tiny muted">проверяю…</div>'; return; }
+  if (!parts.length) { box.innerHTML = '<div class="tiny muted">идёт проверка…</div>'; return; }
   box.innerHTML = parts.map((p) => `<div class="need-row" data-key="${esc(p.key)}">
     <div class="need-main"><b>${esc(p.title)}</b> <span class="tiny muted">${p.size_mb} МБ</span>
       <div class="tiny muted">${esc(p.why)}</div></div>
-    ${p.ready ? '<span class="pill ok">на месте</span>'
+    ${p.ready ? `<span class="stat">${statDot('ok', 'на месте')}</span>`
               : '<button class="ghost small js-need">Скачать</button>'}
   </div>`).join('');
   box.querySelectorAll('.js-need').forEach((b) => {
@@ -4582,7 +4936,7 @@ async function startNeed(key) {
   const p = needPart(key);
   try {
     await api(`/api/needs/${key}`, { method: 'POST' });
-    notice(`Скачиваю: ${(p && p.title) || key}. Ход виден в панели задач слева.`);
+    notice(`Скачивается: ${(p && p.title) || key}. Ход виден слева, в блоке «В работе».`);
   } catch (e) { notice(e.message, 'err'); }
 }
 
@@ -4702,6 +5056,9 @@ function paintExtraHotkey(id, combo) {
   if (!btn) return;
   btn.dataset.hotkey = combo || '';
   btn.textContent = combo ? hotkeyText(combo) : 'не задано';
+  // «убрать» — только у заданного сочетания: убирать нечего — кнопки нет.
+  const clear = $(id + '-clear');
+  if (clear) clear.classList.toggle('hidden', !combo);
 }
 
 function hotkeyText(combo) {
@@ -4908,6 +5265,17 @@ function bind() {
   };
   $('btn-start').onclick = startRecording;
   $('btn-stop').onclick = stopRecording;
+  // «подробнее»: длинное пояснение раскрывается на месте. Один обработчик на
+  // всю программу: кнопка сама говорит, что раскрыть (data-more).
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('.js-more');
+    if (!b) return;
+    e.preventDefault();                  // внутри подписи флажок не переключаем
+    const box = $(b.dataset.more);
+    if (!box) return;
+    const open = !box.classList.toggle('hidden');
+    b.textContent = open ? 'свернуть' : 'подробнее';
+  });
   $('btn-settings').onclick = openSettings;
   document.querySelectorAll('.dlg-close').forEach((b) => (b.onclick = hideDialogs));
   $('overlay').onclick = hideDialogs;
@@ -4917,6 +5285,9 @@ function bind() {
   // используют ещё где-нибудь, и общий поиск по документу начнёт переключать
   // чужие вкладки.
   document.querySelectorAll('#dlg-settings .tab').forEach((t) => {
+    // Щелчок мышью не забирает фокус: иначе на пункте оставалась рамка
+    // фокуса, хотя видна она должна быть только при работе с клавиатуры.
+    t.onmousedown = (e) => e.preventDefault();
     t.onclick = () => {
       document.querySelectorAll('#dlg-settings .tab').forEach((x) =>
         x.classList.toggle('active', x === t));
@@ -4950,9 +5321,25 @@ function bind() {
   // перехватывает сама Windows. Кнопкой выбрать всегда можно.
   document.querySelectorAll('.js-hk').forEach((b) => {
     b.onclick = async () => {
+      document.querySelectorAll('.hk-menu').forEach((m) => m.classList.add('hidden'));
       setHotkey(b.dataset.hk);
       await paintHotkeyButton();
     };
+  });
+  // Готовые сочетания — списком у самого поля сочетания, по стрелке.
+  document.querySelectorAll('.hk-more').forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const menu = $(b.dataset.menu);
+      const wasHidden = menu.classList.contains('hidden');
+      document.querySelectorAll('.hk-menu').forEach((m) => m.classList.add('hidden'));
+      menu.classList.toggle('hidden', !wasHidden);
+    };
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest || !e.target.closest('.hk-field')) {
+      document.querySelectorAll('.hk-menu').forEach((m) => m.classList.add('hidden'));
+    }
   });
   $('btn-dictate-history').onclick = showDictateHistory;
   $('btn-dictate-forget').onclick = forgetDictateHistory;
@@ -4967,14 +5354,14 @@ function bind() {
   bindConnections();
   $('set-model').onchange = refreshModelsHint;
   $('set-cli-model').onchange = refreshModelsHint;
-  $('set-engine').onchange = () => { refreshModelsHint(); toggleApiFields(); };
+  $('set-engine').onchange = () => { refreshModelsHint(); paintEngineState(); toggleApiFields(); };
   // Модели распознавания: какие поля видны — сразу, что скачать и что не
   // нужно — после сохранения выбора (applySettings зовёт loadAsrModels).
   ['set-asr-count', 'set-asr-single', 'set-asr-calls', 'set-asr-engine'].forEach((id) => {
     $(id).addEventListener('change', paintAsrRows);
   });
   $('btn-asr-download').onclick = () => asrModelsAction('/api/asr/models/download', {}, (res) => {
-    notice(res.job_id ? 'Скачиваю модели. Ход виден в панели задач слева.' : res.title, 'ok');
+    notice(res.job_id ? 'Модели скачиваются. Ход виден слева, в блоке «В работе».' : res.title, 'ok');
   });
   $('btn-asr-delete').onclick = () => asrModelsAction('/api/asr/models/cleanup',
     { action: 'delete' }, (res) => {
@@ -4987,7 +5374,7 @@ function bind() {
       + 'полные веса) и рекомендованные настройки, остальные модели удалятся. Программа '
       + 'доработает на прежних моделях до перезапуска.')) return;
     asrModelsAction('/api/asr/models/reset', {}, () => {
-      notice('Сбрасываю модели. Ход виден в панели задач слева.', 'ok');
+      notice('Модели сбрасываются. Ход виден слева, в блоке «В работе».', 'ok');
     });
   };
 
@@ -5006,9 +5393,9 @@ function bind() {
     const btn = $('btn-check-cli');
     const box = $('cli-check-state');
     btn.disabled = true;
-    btn.textContent = 'проверяю…';
+    btn.textContent = 'проверка…';
     box.className = 'tiny muted';
-    box.textContent = 'Спрашиваю Claude CLI — до минуты.';
+    box.textContent = 'Запрос к Claude CLI — до минуты.';
     try {
       const res = await api('/api/engines/claude_cli/check', { method: 'POST' });
       box.textContent = (res.ok ? '✓ ' : '⚠ ') + res.text;
@@ -5124,14 +5511,7 @@ function bind() {
     } catch (e) { notice(e.message, 'err'); }
   };
 
-  $('btn-save').onclick = async () => {
-    if (!S.currentId) return;
-    try {
-      const res = await api(`/api/recordings/${S.currentId}/save`, { method: 'POST' });
-      notice('Сохранено: ' + (res.relative || res.path), 'ok');
-      await refreshCurrent(); paintHead();
-    } catch (e) { notice(e.message, 'err'); }
-  };
+  $('btn-save').onclick = saveNote;
   // Число голосов здесь больше не спрашиваем: авторазметка идёт без вопросов,
   // и ручная должна вести себя так же. Указать число можно в «Перечитать
   // точнее» — там оно и нужно, когда разметка ошиблась (решение 14.09).
@@ -5139,13 +5519,35 @@ function bind() {
     if (!S.currentId) return;
     try {
       await api(`/api/recordings/${S.currentId}/diarize`, { method: 'POST', body: {} });
-      notice('Разметка говорящих поставлена в очередь', 'ok');
+      notice('Разметка голосов поставлена в очередь', 'ok');
     } catch (e) { notice(e.message, 'err'); }
   };
   $('btn-micmute').onclick = toggleMic;
   $('btn-rec-menu').onclick = openRecMenu;
   $('acts-more').onclick = openActionsMenu;
   $('btn-features-all').onclick = enableAllFeatures;
+  $('btn-features-default').onclick = resetFeatures;
+  // Словарь замен: своя замена — двумя полями и «+ добавить».
+  $('btn-fix-add').onclick = async () => {
+    const from = $('fix-new-from').value.trim();
+    const to = $('fix-new-to').value.trim();
+    if (!from || !to) { notice('Впишите, как слышит модель и как писать', 'err'); return; }
+    await sendFix('add', from, to);
+    $('fix-new-from').value = '';
+    $('fix-new-to').value = '';
+  };
+  // Люди базы голосов: поиск по имени перерисовывает список на месте.
+  $('voices-filter').oninput = () => paintVoices();
+  $('merge-filter').oninput = paintMergeList;
+  $('btn-merge-go').onclick = doMerge;
+  // Редактор вида документа — своё окно поверх настроек.
+  $('prompt-text').oninput = paintPromptState;
+  $('btn-prompt-reset').onclick = () => {
+    const p = (S.prompts || []).find((x) => x.key === S.promptKey);
+    if (p) { $('prompt-text').value = p.default || ''; paintPromptState(); }
+  };
+  $('btn-prompt-save').onclick = savePromptEditor;
+  document.querySelector('#dlg-prompt .js-prompt-cancel').onclick = hideDialogs;
   $('btn-go-dict').onclick = () => {
     document.querySelector('#dlg-settings .tab[data-tab="t-general"]').click();
     const title = $('dict-title');
@@ -5158,6 +5560,7 @@ function bind() {
       method: 'POST', body: { mic_device_name: v === '' ? null : v },
     });
     notice('Микрофон выбран', 'ok');
+    paintDevTitles();
   };
   $('far-select').onchange = async () => {
     const v = $('far-select').value;
@@ -5165,10 +5568,11 @@ function bind() {
       method: 'POST', body: { far_device_index: v === '' ? null : parseInt(v, 10) },
     });
     notice('Устройство собеседников выбрано', 'ok');
+    paintDevTitles();
     paintEchoWarning();
   };
   $('btn-check-dev').onclick = async () => {
-    notice('Проверяю устройства…');
+    notice('Устройства проверяются…');
     showFarWarning();
     await listDevices(true);
     const d = S.devices || {};
@@ -5194,7 +5598,7 @@ function bind() {
     if (!S.currentId) return;
     try {
       await api(`/api/recordings/${S.currentId}/echo`, { method: 'POST' });
-      notice('Пересчитываю эхо — это займёт секунды', 'ok');
+      notice('Эхо пересчитывается — это займёт секунды', 'ok');
     } catch (e) {
       notice(e.message, 'err');
     }
@@ -5240,7 +5644,7 @@ function bind() {
     const title = ((S.docKinds || []).find((d) => d.key === S.tplChosen) || {}).title || 'документ';
     try {
       await api(`/api/recordings/${S.currentId}/document`, { method: 'POST', body: body });
-      notice(`Готовлю: ${title}…`, 'ok');
+      notice(`Готовится: ${title}…`, 'ok');
     } catch (e) { notice(e.message, 'err'); }
   };
   // Одна кнопка с выбором вида (20.09): Markdown, оформленный текст, Telegram.
@@ -5273,7 +5677,7 @@ function bind() {
     try {
       await api(`/api/recordings/${S.currentId}/document`,
                 { method: 'POST', body: { doc: cur.key } });
-      notice('Пересобираю документ без вычеркнутого…', 'ok');
+      notice('Документ пересобирается без вычеркнутого…', 'ok');
     } catch (e) { notice(e.message, 'err'); }
   };
   $('btn-edit-transcript').onclick = () => setEditMode(!S.editMode);
@@ -5296,7 +5700,7 @@ function bind() {
     e.preventDefault();
     undoEdit();
   });
-  // Enter — отдать выделенное любому говорящему записи.
+  // Enter — отдать выделенное другому голосу записи.
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') hideGiveMenu();
     if (!S.editMode || e.key !== 'Enter' || e.altKey || e.ctrlKey) return;
@@ -5315,8 +5719,7 @@ function bind() {
     const text = segs.map((s) => `[${fmtClock(s.start)}] ${displaySpeaker(s.speaker)}: ${s.text || ''}`).join('\n');
     navigator.clipboard.writeText(text).then(() => notice('Стенограмма скопирована', 'ok'));
   };
-  $('btn-delete').onclick = () => openDeleteDialog();
-  // Delete — то же окно, что и кнопка «Удалить» (20.09). Только когда человек
+  // Delete — то же окно, что и «Удалить запись…» в «⋯» (20.09). Только когда человек
   // и правда в списке записей: в поле ввода, в открытом окне и в режиме правки
   // стенограммы эта клавиша занята своим делом.
   document.addEventListener('keydown', (e) => {
@@ -5455,7 +5858,7 @@ function bind() {
     if (S.recordingId) {
       // Идёт совещание — экран не трогаем: уводить человека от живой
       // стенограммы и кнопки «Стоп» нельзя. Файлы просто ждут в списке.
-      notice('Файлы отложены в раздел «Видео» — обработаю после «Стоп».', '');
+      notice('Файлы отложены в раздел «Видео» — обработка начнётся после «Стоп».', '');
       return;
     }
     setMode('video');

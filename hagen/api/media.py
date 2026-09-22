@@ -83,8 +83,7 @@ async def api_media_options() -> JSONResponse:
             "max_height": int(config.get("max_height") or 720),
             "asr_files": str(config.get("asr_files") or "local"),
             "asr_lang": str(config.get("asr_lang") or "ru"),
-            "category": str(config.get("video_category")
-                            or config.get("default_category") or ""),
+            "category": media.category_for_kind("meeting"),
             "chunk_min": int(config.get("chunk_min") or 15),
             "make_summary": bool(config.get("make_summary")),
         },
@@ -96,6 +95,9 @@ async def api_media_options() -> JSONResponse:
         "transcript_exts": sorted(subs.TRANSCRIPT_EXTS),
         "stages": list(media.STAGES),
         "categories": config.get("categories") or [],
+        # Категория по умолчанию — от типа записи; окно подставляет её, пока
+        # человек не выбрал свою.
+        "category_by_kind": {k: media.category_for_kind(k) for k in media.KINDS},
     })
 
 
@@ -194,7 +196,7 @@ async def api_media_summary(rec_id: str, request: Request) -> JSONResponse:
     if store.get(rec_id) is None:
         raise HTTPException(status_code=404, detail="Запись не найдена")
     if jobs.busy_with("summary", rec_id):
-        raise HTTPException(status_code=409, detail="Саммари уже собирается")
+        raise HTTPException(status_code=409, detail="Документ уже собирается")
     engine = str(body.get("engine") or "").strip() or None
     if engine not in (None, "claude_cli", "api"):
         raise HTTPException(status_code=400, detail="Неизвестный движок: %s" % engine)

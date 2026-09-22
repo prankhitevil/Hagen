@@ -57,7 +57,10 @@ REAL_VOICES = voices.VOICES_PATH
 voices.VOICES_PATH = TMP / "voices.json"
 voices.reload()
 OVR = {"voice_match_threshold": 0.7, "voice_suggest_threshold": 0.45, "voice_match_margin": 0.1,
-       "owner_name": "Иван П.", "diarize_auto": True}
+       "owner_name": "Иван П.", "diarize_auto": True,
+       # Разметка подменена в этом процессе, а помощник разметки — отдельная
+       # программа: подмена туда не доходит. Считаем в самой программе.
+       "processing_during_recording": "pause"}
 _real_get = config.get
 config.get = lambda k, d=None: OVR[k] if k in OVR else _real_get(k, d)
 real_diarize, real_transcribe = diarize.diarize_pcm, asr.transcribe_spans

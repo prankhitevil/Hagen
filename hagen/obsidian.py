@@ -47,7 +47,7 @@ NOTE_TAGS = ["hagen", "стенограмма"]
 
 #: Заголовки разделов заметки.
 H_MINUTES = "## Протокол"
-H_SUMMARY = "## Саммари"
+H_SUMMARY = "## Краткое содержание"
 H_CONSPECT = "## Конспект"
 H_DIGEST = "## Выжимка"
 #: С 20.09 раздел называется «Свои запросы»: в него попадают и ответы на
@@ -573,7 +573,7 @@ def _about_block(meta: dict[str, Any]) -> list[str]:
     items = [f"- **Текст получен:** {_asr_label(meta)}"]
     if meta.get("diarized"):
         model = meta.get("diarize_model") or config.get("diarize_model")
-        items.append(f"- **Разделение говорящих:** {model}")
+        items.append(f"- **Разметка голосов:** {model}")
     meeting = meta.get("meeting")
     if isinstance(meeting, dict):
         subject = str(meeting.get("subject") or meeting.get("title") or "").strip()
@@ -846,7 +846,7 @@ def _drop_sections(lines: list[str], names: tuple[str, ...]) -> list[str]:
 
 
 def _heading_for(meta: dict[str, Any]) -> str:
-    """Заголовок раздела с документом: у видео «Саммари», у записи «Протокол».
+    """Заголовок раздела с документом: у видео «Краткое содержание», у записи «Протокол».
 
     Смотрим на ЯВНЫЙ признак doc_kind, а не на источник записи. Значение
     source='link' появилось раньше режима «Видео» и стоит у обычных записей,
@@ -880,7 +880,7 @@ def render_markdown(
     стенограмма попадает туда отдельной кнопкой и только по желанию человека.
 
     minutes_heading задаёт заголовок раздела с документом: для совещания это
-    «## Протокол», для видео — «## Саммари». Место в заметке одно и то же.
+    «## Протокол», для видео — «## Краткое содержание». Место в заметке одно и то же.
     """
     meta = dict(meta or {})
     segments = sorted(

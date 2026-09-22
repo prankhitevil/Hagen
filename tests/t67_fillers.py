@@ -154,7 +154,7 @@ pane = html[html.find('id="t-dictate"'):html.find('id="t-keys"')]
 check("галочка «убирать слова-паразиты»", 'id="set-dictate-fillers"' in pane)
 check("поле списка", 'id="set-dictate-fillers-list"' in pane)
 check("сказано, что тянущиеся звуки убираются всегда", "перечислять не нужно" in pane)
-check("сказано, что стенограммы это не трогает", "Стенограммы звонков это не трогает" in pane)
+check("сказано, что стенограммы это не трогает", "стенограммы звонков не трогает" in pane)
 check("предупреждение про нужные слова в подсказке «?»", "вот документ" in pane)
 check("поля читаются и сохраняются",
       "$('set-dictate-fillers').checked = s.dictate_strip_fillers !== false;" in js

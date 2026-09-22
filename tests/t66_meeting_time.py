@@ -196,8 +196,8 @@ check("заводская выдержка микрофона — 3 секунд
 html = io.open(PROJECT / "hagen" / "static" / "index.html", encoding="utf-8").read()
 js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
 pane = html[html.find('id="t-call"'):html.find('id="t-processing"')]
-check("поле «до встречи» на вкладке «Звонки»", 'id="set-meeting-ahead"' in pane)
-check("поле выдержки микрофона на вкладке «Звонки»", 'id="set-call-debounce"' in pane)
+check("поле «до встречи» на вкладке «Запись и звонки»", 'id="set-meeting-ahead"' in pane)
+check("поле выдержки микрофона на вкладке «Запись и звонки»", 'id="set-call-debounce"' in pane)
 check("у обоих полей есть подсказка «?»", pane.count('class="q"') >= 2)
 check("сказано, что закончившаяся встреча имени не даёт",
       "Закончившаяся встреча имени не даёт" in pane)

@@ -7,7 +7,8 @@
 * снимки лежат в сейфе Obsidian рядом с заметкой — видны на всех устройствах;
   это 0,2–1 МБ на снимок, а не гигабайты видео; удаляются вместе с заметкой;
 * снимки берутся ТОЛЬКО из папки «Снимки экрана» (Win+Shift+S в Windows 11
-  сохраняет туда сам): файлы, появившиеся между «Старт» и «Стоп».
+  сохраняет туда сам): файлы, появившиеся между «Старт» и «Стоп». Папок может
+  быть несколько, список задаётся в настройках; пустой — ищем сами.
 
 Без перехвата клавиатуры: ровно на такой перехват Kaspersky и ругается.
 
@@ -36,26 +37,43 @@ IMG_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 SUBFOLDER = "Скриншоты"
 #: известная папка Windows «Снимки экрана»
 _SCREENSHOTS_KNOWN_FOLDER = "{B7BEDE81-DF94-4682-A7D8-57A52620B86F}"
+_SHELL_FOLDERS = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
 
 
 # ---------------------------------------------------------------- где искать и куда класть
 
 
-def screenshot_folders() -> list[Path]:
-    """Папки, куда снимки экрана сохраняются сами. Настройка сильнее догадки."""
-    manual = config.get("screenshot_folders") or []
-    cands: list[Path] = [Path(os.path.expandvars(str(p))) for p in manual if str(p).strip()]
-    if not cands:
-        try:
-            import winreg
+def _shell_folder(name: str) -> Path | None:
+    """Папка пользователя по записи в реестре — там, куда её перенесли."""
+    try:
+        import winreg
 
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                r"Software\Microsoft\Windows\CurrentVersion\Explorer"
-                                r"\User Shell Folders") as key:
-                raw = winreg.QueryValueEx(key, _SCREENSHOTS_KNOWN_FOLDER)[0]
-                cands.append(Path(os.path.expandvars(str(raw))))
-        except OSError:
-            pass
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _SHELL_FOLDERS) as key:
+            raw = str(winreg.QueryValueEx(key, name)[0] or "").strip()
+    except OSError:
+        return None
+    return Path(os.path.expandvars(raw)) if raw else None
+
+
+def screenshot_folders(auto: bool = False) -> list[Path]:
+    """Папки, куда снимки экрана сохраняются сами. Настройка сильнее догадки.
+
+    `auto` — только догадка, без настройки: её показывают в настройках, пока
+    список папок пуст. Возвращаются только существующие папки.
+    """
+    manual = [] if auto else (config.get("screenshot_folders") or [])
+    cands: list[Path] = [Path(os.path.expandvars(str(p).strip())) for p in manual
+                         if str(p).strip()]
+    if not cands:
+        # «Изображения» бывают перенесены в OneDrive, а своей записи у «Снимков
+        # экрана» в реестре может не быть вовсе. Тогда Win+Shift+S сохраняет в
+        # «Изображения\Screenshots» на новом месте, а не в домашней папке.
+        shots = _shell_folder(_SCREENSHOTS_KNOWN_FOLDER)
+        if shots is not None:
+            cands.append(shots)
+        pictures = _shell_folder("My Pictures")
+        if pictures is not None:
+            cands += [pictures / "Screenshots", pictures / "Снимки экрана"]
         home = Path.home()
         cands += [home / "Pictures" / "Screenshots", home / "Pictures" / "Снимки экрана",
                   home / "Yandex.Disk" / "Скриншоты"]

@@ -10,7 +10,7 @@ Python-проверки не видят ошибок в app.js и video.js: оп
   * вопрос автоматики звонков с кнопками и обратным отсчётом;
   * блок «Claude упёрся в лимит» с кнопками;
   * SharePoint: фильтры, список с галочками и пометками, счётчик;
-  * подсказки «переподключаю…» у полосок уровня.
+  * подсказки «переподключается…» у полосок уровня.
 """
 import io
 import json
@@ -129,10 +129,10 @@ INJECT = r"""
     const m1 = document.getElementById('sp-m1');
     return m1.options.length === 12;
   });
-  t('подсказка «переподключаю»', () => {
+  t('подсказка «переподключается»', () => {
     S.recordingId = 'rec-x'; S.currentId = 'rec-x'; S.farLost = true; S.farOn = true;
     paintMeters();
-    const ok = document.getElementById('far-hint').textContent === 'переподключаю…';
+    const ok = document.getElementById('far-hint').textContent === 'переподключается…';
     S.recordingId = null; S.farLost = false;
     return ok;
   });
@@ -327,15 +327,20 @@ UI_DOCS = r"""
       return !$('question-field').classList.contains('hidden'); });
     hideDialogs();
     await loadPrompts();
-    await t('«Обработка»: пять инструкций и имя', () =>
-      document.querySelectorAll('#prompt-list .prompt-box').length === 5 && !!$('set-owner'));
-    await t('правка инструкции помечается, «Вернуть исходный» возвращает', () => {
-      const box = document.querySelector('#prompt-list .prompt-box');
-      const ta = box.querySelector('.js-prompt');
+    // Решение 22.09: виды документов — списком строк, текст правится в своём окне.
+    await t('«Документы»: пять видов списком и имя', () =>
+      document.querySelectorAll('#prompt-list .prompt-row').length === 5 && !!$('set-owner'));
+    await t('вид открывается в своём окне; правка помечается, «Вернуть исходный» возвращает', () => {
+      document.querySelector('#prompt-list .prompt-row').click();
+      const opened = !$('dlg-prompt').classList.contains('hidden');
+      const ta = $('prompt-text');
       ta.value = ta.value + ' ещё'; ta.oninput();
-      const changed = /изменён/.test(box.querySelector('.js-state').textContent);
-      box.querySelector('.js-reset').click();
-      return changed && /исходный/.test(box.querySelector('.js-state').textContent); });
+      const changed = /Изменён/.test($('prompt-state').textContent);
+      $('btn-prompt-reset').click();
+      const back = /Исходный/.test($('prompt-state').textContent);
+      hideDialogs();
+      return (opened && changed && back && $('dlg-prompt').classList.contains('hidden'))
+        || JSON.stringify({opened, changed, back}); });
     // --- правка стенограммы: настоящие щелчки и клавиши (16.09) ---
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const until = async (fn, ms) => {
@@ -643,20 +648,17 @@ UI_VOICES = r"""
       const vis = (id) => getComputedStyle($(id)).display !== 'none';
       return (!!$('btn-start').closest('.rec-toggle') && vis('btn-start') !== vis('btn-stop')) || `${vis('btn-start')} ${vis('btn-stop')}`; });
     // Этап 6: вместо семи рядов под стенограммой — панель действий, у каждой
-    // вкладки своя группа. Видна ровно одна, «Удалить» стоит последней.
-    await t('панель действий: одна группа, акцентная кнопка последняя', () => {
+    // вкладки своя группа. Видна ровно одна. Решение 22.09: удаления в панели
+    // нет (оно в «⋯» шапки), акцентных кнопок тоже — акцент один, «+ Документ».
+    await t('панель действий: одна группа, без «Удалить» и без акцента', () => {
       const shown = [...document.querySelectorAll('#rec-actions .act-group')]
         .filter((g) => !g.classList.contains('hidden')).map((g) => g.id);
       const pane = document.querySelector('#rec-tabs .rtab.active').dataset.pane;
-      const group = $('btn-save').closest('.act-group');
-      // Порядок по образцу: опасное действие текстом, за ним одна кнопка
-      // с заливкой — она же последняя в ряду.
-      const right = [...group.children];
-      const okOrder = group.lastElementChild === $('btn-save')
-        && right.indexOf($('btn-delete')) === right.indexOf($('btn-save')) - 1
-        && document.querySelectorAll('#rec-actions button.primary').length === 1;
-      return (shown.length === 1 && shown[0] === 'act-' + pane && okOrder)
-        || JSON.stringify([shown, pane, group && group.id, okOrder]); });
+      const okPanel = !document.getElementById('btn-delete')
+        && document.querySelectorAll('#rec-actions button.primary').length === 0
+        && $('btn-add-doc').classList.contains('primary');
+      return (shown.length === 1 && shown[0] === 'act-' + pane && okPanel)
+        || JSON.stringify([shown, pane, okPanel]); });
     await t('названный собеседник получает свой цвет, безымянный — нет', () => {
       const a = speakerColor({ speaker: 'Иван Петров', track: 'far', speaker_key: 'SPEAKER_00' });
       const b = speakerColor({ speaker: 'Спикер 2', track: 'far', speaker_key: 'SPEAKER_01' });
@@ -681,12 +683,12 @@ UI_VOICES = r"""
     await t('кнопки «Очистить базу» и «Вернуть из копии» на месте', () =>
       !!$('btn-voices-clear') && !!$('btn-voices-restore') && $('voices-backup-select').options.length >= 1);
     // --- продвинутые настройки разметки (15.09) ---
-    await t('вкладка «Продвинутые» переключается', () => {
+    await t('раздел «Тонкие настройки» переключается', () => {
       const tab = document.querySelector('#dlg-settings .tab[data-tab="t-advanced"]');
       tab.click();
-      return (tab.textContent.trim() === 'Продвинутые'
+      return (tab.textContent.trim() === 'Тонкие настройки'
         && !$('t-advanced').classList.contains('hidden')) || tab.textContent; });
-    await t('поля «Продвинутых» заполняются: пусто там, где «как у модели»', () => {
+    await t('поля «Тонких настроек» заполняются: пусто там, где «как у модели»', () => {
       Object.assign(S.settings, {diarize_window_step_s: 2, diarize_cluster_threshold: null,
         diarize_cluster_fb: 0.4, diarize_min_voice_s: null, split_min_piece_s: 2});
       fillAdvanced();
@@ -714,11 +716,11 @@ UI_VOICES = r"""
       } finally {
         if (wasHidden) dlg.classList.add('hidden');
       } });
-    await t('«Звонки»: оба срока на экране вместо текста с зашитыми 30 с и 10 минутами', () => {
+    await t('«Запись и звонки»: оба срока на экране вместо текста с зашитыми 30 с и 10 минутами', () => {
       const pane = $('t-call').textContent;
       return (!!$('set-call-stop') && !!$('set-call-resume') && !/через 30 с/.test(pane)
         && !/в течение 10 минут/.test(pane)) || pane.slice(0, 200); });
-    await t('«Звонки»: сроки заполняются из настроек', async () => {
+    await t('«Запись и звонки»: сроки заполняются из настроек', async () => {
       Object.assign(S.settings, {call_end_confirm_s: 45, call_resume_window_s: 900});
       await openSettings();
       hideDialogs();
@@ -739,7 +741,8 @@ UI_VOICES = r"""
         const shown = tabs.filter((x) => x.offsetParent !== null);
         const cols = new Set(shown.map((x) => Math.round(x.getBoundingClientRect().left))).size;
         const panes = document.querySelector('#dlg-settings .set-panes');
-        return (tabs.length === 10 && shown.length >= 6 && cols === 1 && !!panes
+        // Одиннадцатый раздел — «О программе»: версия и обновление.
+        return (tabs.length === 11 && shown.length >= 6 && cols === 1 && !!panes
           && nav.scrollWidth <= nav.clientWidth + 1)
           || JSON.stringify({n: tabs.length, shown: shown.length, cols, panes: !!panes,
             scroll: nav.scrollWidth, client: nav.clientWidth});

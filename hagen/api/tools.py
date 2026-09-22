@@ -4,12 +4,15 @@
 Перенесено из `server.py` без изменений.
 Область объединяет короткие наборы, у которых нет своей большой темы:
 «повторить загрузку модели» и выбор моделей распознавания (что скачать, что
-удалить, «Сбросить всё»), словарь из ручных правок и выключатель микрофона.
+удалить, «Сбросить всё»), словарь из ручных правок, выключатель микрофона и
+папки снимков экрана.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -158,6 +161,28 @@ async def api_fixes_post(request: Request) -> JSONResponse:
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
     return JSONResponse({"rules": fixes.rules("all"), "suggestions": fixes.suggestions()})
+
+
+@router.get("/api/screenshots/folders")
+async def api_screenshot_folders() -> JSONResponse:
+    """Папки снимков экрана для настроек: за какими следим и что нашлось бы само.
+
+    Сам список правится обычным сохранением настроек (`screenshot_folders`).
+    """
+    loop = asyncio.get_running_loop()
+    system = platform.system()
+    active = await loop.run_in_executor(None, system.screenshot_folders)
+    found = await loop.run_in_executor(None, system.screenshot_folders, True)
+    # Строки своего списка — раскрытыми: в настройках папка видна путём, а не
+    # «%USERPROFILE%\…», и сразу видно, какой папки нет.
+    own = []
+    for raw in config.get("screenshot_folders") or []:
+        raw = str(raw).strip()
+        if raw:
+            path = Path(os.path.expandvars(raw)).expanduser()
+            own.append({"raw": raw, "path": str(path), "exists": path.is_dir()})
+    return JSONResponse({"active": [str(p) for p in active], "auto": [str(p) for p in found],
+                         "own": own})
 
 
 @router.get("/api/mic")

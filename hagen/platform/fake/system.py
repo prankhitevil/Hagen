@@ -13,8 +13,8 @@ from typing import Any, Callable
 __all__ = [
     "ensure_portable", "write_shortcut", "make_shortcuts", "screenshot_folders",
     "watch_screenshots", "delete_shots", "shift_shots",
-    "hidden_process_flags", "open_path", "open_link", "set_console_title",
-    "hide_console", "restrict_to_owner",
+    "hidden_process_flags", "set_process_priority", "open_path", "open_link",
+    "set_console_title", "hide_console", "restrict_to_owner",
 ]
 
 #: Куда заглушка пишет «ярлыки» и откуда берёт «снимки».
@@ -41,6 +41,9 @@ RESTRICTED: list[str] = []
 #: Что сделали с консолью.
 CONSOLE: dict[str, Any] = {"title": "", "hidden": False}
 
+#: Какой приоритет просили дочерним программам: (pid, уровень).
+PRIORITIES: list[tuple[int, str]] = []
+
 
 def reset() -> None:
     SHORTCUTS.clear()
@@ -48,6 +51,7 @@ def reset() -> None:
     DELETED.clear()
     OPENED.clear()
     RESTRICTED.clear()
+    PRIORITIES.clear()
     CONSOLE.update({"title": "", "hidden": False})
 
 
@@ -72,7 +76,7 @@ def make_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
     return made
 
 
-def screenshot_folders() -> list[Path]:
+def screenshot_folders(auto: bool = False) -> list[Path]:
     ROOT.mkdir(parents=True, exist_ok=True)
     return [ROOT]
 
@@ -120,6 +124,14 @@ def shift_shots(items: list[dict[str, Any]], offset_s: float) -> list[dict[str, 
 
 def hidden_process_flags() -> int:
     return 0
+
+
+def set_process_priority(pid: int, level: str) -> bool:
+    """Приоритет не меняется, а записывается. Уровни проверяем так же, как в Windows."""
+    if level not in ("normal", "low", "lowest"):
+        raise ValueError("неизвестный уровень приоритета: %s" % level)
+    PRIORITIES.append((int(pid), str(level)))
+    return True
 
 
 def open_path(path: str | Path) -> None:
