@@ -9,8 +9,10 @@ yt-dlp подключается БИБЛИОТЕКОЙ, а не отдельно
 каждый новый .exe в папке — это ещё один вопрос антивируса, а у библиотеки
 исполняемым файлом остаётся всё тот же python.exe, уже доверенный.
 
-Версия yt-dlp намеренно не закреплена: площадки часто меняют выдачу, и рабочим
-остаётся только свежий. Если ссылки перестали открываться — сначала обновить.
+При установке ставится версия yt-dlp из описи выпуска (lock.json), но кнопка
+«Обновить yt-dlp» берёт свежую: площадки часто меняют выдачу, и рабочим
+остаётся только свежий. Обновление программы такой yt-dlp назад не откатывает.
+Если ссылки перестали открываться — сначала обновить.
 """
 from __future__ import annotations
 
@@ -51,36 +53,16 @@ def version() -> str:
         return ""
 
 
-#: Что оставляем в .venv\Scripts: pip кладёт туда лаунчеры .exe, и каждый новый
-#: файл — это лишний вопрос антивируса (та же чистка, что в install.py --prune).
-_KEEP_SCRIPTS = {"python.exe", "pythonw.exe"}
-
-
-def _drop_new_launchers() -> list[str]:
-    scripts = config.PROJECT_DIR / ".venv" / "Scripts"
-    dropped: list[str] = []
-    if not scripts.is_dir():
-        return dropped
-    for item in scripts.iterdir():
-        if item.suffix.lower() == ".exe" and item.name.lower() not in _KEEP_SCRIPTS:
-            try:
-                item.unlink()
-                dropped.append(item.name)
-            except OSError:
-                log.info("лаунчер %s не удалился", item.name)
-    return dropped
-
-
 def pip_install(packages: list[str], note: Callable[[str], Any] | None = None,
                 upgrade: bool = False) -> None:
-    """Поставить библиотеку pip-ом, но БИБЛИОТЕКОЙ, в своём процессе.
+    """Поставить библиотеку из PyPI pip-ом, но БИБЛИОТЕКОЙ, в своём процессе.
 
     Kaspersky не даёт программе порождать фоновые процессы, поэтому «python -m
-    pip» здесь не годится. После установки убираем лишние лаунчеры .exe, как
-    после любой установки (грабли 13.09).
+    pip» здесь не годится (запуск — lockfile.pip_run). Пакет ложится в .venv,
+    а не в папку python\\, из которой программа запущена. После установки
+    убираем лишние лаунчеры .exe, как после любой установки (грабли 13.09).
     """
-    import contextlib
-    import io as _io
+    from . import lockfile
 
     def say(msg: str) -> None:
         log.info("pip: %s", msg)
@@ -90,29 +72,15 @@ def pip_install(packages: list[str], note: Callable[[str], Any] | None = None,
             except Exception:
                 pass
 
-    try:
-        from pip._internal.cli.main import main as pip_main
-    except Exception as err:
-        raise FetchError("В программе нет pip, ставить нечем: %s" % err) from err
-
-    args = ["install", "--no-input", "--disable-pip-version-check"]
-    if upgrade:
-        args.append("--upgrade")
-    args += list(packages)
-    out = _io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = pip_main(args)
-    except SystemExit as err:
-        code = int(getattr(err, "code", 1) or 0)
-    except Exception as err:
-        raise FetchError("Установка не удалась: %s" % err) from err
-    tail = [ln for ln in out.getvalue().splitlines() if ln.strip()][-3:]
+    args = ["install"] + (["--upgrade"] if upgrade else []) + [
+        "--no-input", "--disable-pip-version-check", "--no-warn-script-location",
+        "--prefix", str(config.PROJECT_DIR / ".venv")]
+    code, tail = lockfile.pip_run(args + list(packages))
     if code != 0:
         raise FetchError("Поставить не вышло (pip вернул %s). Обычно это нет доступа к "
                          "интернету или его закрывает корпоративная сеть. %s"
-                         % (code, " | ".join(tail)))
-    dropped = _drop_new_launchers()
+                         % (code, " | ".join(tail[-3:])))
+    dropped = lockfile.drop_new_launchers(config.PROJECT_DIR)
     if dropped:
         say("убраны лишние лаунчеры: %s" % ", ".join(dropped))
 
@@ -125,8 +93,6 @@ def update(note: Callable[[str], Any] | None = None) -> dict[str, Any]:
     не запустился бы. После установки чистим лишние лаунчеры .exe и выкидываем
     старый yt_dlp из памяти, чтобы следующая ссылка пошла уже через новый.
     """
-    import contextlib
-    import io as _io
     import sys
 
     def say(msg: str) -> None:
@@ -140,27 +106,9 @@ def update(note: Callable[[str], Any] | None = None) -> dict[str, Any]:
     before = version()
     say("обновляю, сейчас %s" % (before or "не установлен"))
     try:
-        from pip._internal.cli.main import main as pip_main
-    except Exception as err:      # pip выкинули из окружения
-        raise FetchError("В программе нет pip, обновить нечем: %s" % err) from err
-
-    out = _io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = pip_main(["install", "--upgrade", "--no-input",
-                             "--disable-pip-version-check", "yt-dlp"])
-    except SystemExit as err:      # pip иногда выходит через SystemExit
-        code = int(getattr(err, "code", 1) or 0)
-    except Exception as err:
-        raise FetchError("Обновление не удалось: %s" % err) from err
-    tail = [ln for ln in out.getvalue().splitlines() if ln.strip()][-3:]
-    if code != 0:
-        raise FetchError("Обновить не вышло (pip вернул %s). Обычно это нет доступа к "
-                         "интернету или его закрывает корпоративная сеть. %s"
-                         % (code, " | ".join(tail)))
-    dropped = _drop_new_launchers()
-    if dropped:
-        say("убраны лишние лаунчеры: %s" % ", ".join(dropped))
+        pip_install(["yt-dlp"], note=note, upgrade=True)
+    except FetchError as err:
+        raise FetchError(str(err).replace("Поставить не вышло", "Обновить не вышло")) from err
     for name in [n for n in list(sys.modules) if n == "yt_dlp" or n.startswith("yt_dlp.")]:
         sys.modules.pop(name, None)
     after = version()

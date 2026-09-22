@@ -113,6 +113,52 @@ def _service_alive(port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _settings_port() -> int:
+    """Порт из settings.json — прочитанный напрямую: модули программы ещё не загружены."""
+    import json
+
+    try:
+        with io.open(PROJECT / "settings.json", encoding="utf-8") as fh:
+            return int(json.load(fh).get("port") or 8787)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 8787
+
+
+def apply_update(args: argparse.Namespace) -> dict | None:
+    """Поставить подготовленное обновление (hagen/updates.py) — первым делом.
+
+    Здесь, до загрузки любого другого модуля программы: её файлы ещё не
+    прочитаны, и их можно менять. Не трогаем ничего, если на порту уже
+    работает другой экземпляр программы: его файлы заняты.
+    """
+    if args.prepare or getattr(args, "shortcuts", False) or os.environ.get("HAGEN_UPDATED"):
+        return None
+    from hagen import updates
+
+    if not updates.pending():
+        return None
+    if _service_alive(args.port or _settings_port(), timeout=1.0):
+        return None
+    try:
+        return updates.apply_pending()
+    except Exception as err:          # обновление не должно мешать запуститься
+        return {"phase": "failed", "error": str(err)}
+
+
+def restart_updated() -> None:
+    """Код заменён: дальше работает уже новый run.py, в этом же процессе.
+
+    Не отдельным процессом — его может не пустить антивирус. Старые модули
+    программы выгружаются из памяти, чтобы подгрузились новые.
+    """
+    import runpy
+
+    os.environ["HAGEN_UPDATED"] = "1"
+    for name in [n for n in sys.modules if n == "hagen" or n.startswith("hagen.")]:
+        sys.modules.pop(name, None)
+    runpy.run_path(str(PROJECT / "run.py"), run_name="__main__")
+
+
 def _window_icon() -> str | None:
     """Значок окна и панели задач. Нет файла — pywebview поставит свой (17.09)."""
     from hagen import platform
@@ -338,6 +384,9 @@ def main() -> int:
     ap.add_argument("--log-level", default="INFO")
     ap.add_argument("--prepare", action="store_true",
                     help="только подготовить модели (экспорт в ONNX) и выйти")
+    ap.add_argument("--shortcuts", action="store_true",
+                    help="только создать ярлыки «Hagen» на рабочем столе и в «Пуске» и выйти "
+                         "(так делает установщик)")
     args = ap.parse_args()
 
     os.environ.setdefault("OMP_NUM_THREADS", "7")
@@ -345,11 +394,24 @@ def main() -> int:
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+    # Код на диске сменился (обновление или откат) — дальше работает тот, что
+    # на диске. Итог пишет в журнал служба при старте (server._startup).
+    update = apply_update(args)
+    if update and update.get("phase") in ("applied", "rolled_back"):
+        restart_updated()
+        return 0
+
     from hagen import platform
 
     platform.system().set_console_title("Hagen — служба (не закрывайте во время записи)")
     setup_logging(args.log_level)
     log = logging.getLogger("hagen.run")
+    if args.shortcuts:
+        # Ярлыки для установщика — те же, что программа потом сама поправляет
+        # (ensure_portable), со значком программы.
+        for link in platform.system().make_shortcuts():
+            log.info("ярлык: %s", link)
+        return 0
 
     # Заставку поднимаем как можно раньше — до импорта моделей и оболочки окна:
     # именно они съедают те самые две секунды. Запуск сразу в трей и подготовка

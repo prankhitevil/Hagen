@@ -526,6 +526,7 @@
       <button class="tab" data-tab="t-features">Возможности</button>
       <button class="tab" data-tab="t-keys" title="Все сочетания клавиш программы в одном месте">Сочетания</button>
       <button class="tab" data-tab="t-advanced" data-feature="advanced" title="Тонкая настройка распознавания и разметки говорящих">Продвинутые</button>
+      <button class="tab" data-tab="t-about" title="Версия программы и обновление">О программе</button>
     </nav>
 
     <div class="set-panes">
@@ -1208,6 +1209,40 @@
           мало. Выход из режима правки запас не сбрасывает: нажали «Готово», вернулись — отменить
           прежние правки всё ещё можно, пока не вышел срок. 0 — хранить, пока жива запись.</span>
       </label>
+    </div>
+
+    <!-- О программе: версия и обновление. Проверка — только по кнопке: сама
+         программа в интернет не ходит. -->
+    <div id="t-about" class="tabpane hidden">
+      <div class="field"><b>Hagen, Your Consigliere</b> — версия <b id="about-version">—</b>
+        <span class="tiny muted">Записи, стенограммы и голоса остаются на этом компьютере.
+          В интернет программа ходит только по вашим кнопкам.</span>
+      </div>
+      <div class="field">Обновление
+        <span class="row dt-row"><button id="btn-upd-check" class="ghost small" type="button"
+                title="Спросить GitHub, есть ли выпуск новее. Сама программа этого не делает никогда">Проверить обновления</button>
+          <button id="btn-upd-file" class="ghost small" type="button"
+                  title="Архив выпуска Hagen-v…-windows.zip, скачанный со страницы релиза. Нужен, если GitHub отсюда не открывается">Установить из файла…</button>
+          <input id="upd-file" type="file" accept=".zip" hidden></span>
+        <span id="upd-state" class="tiny muted"></span>
+      </div>
+      <div id="upd-found" class="box hidden">
+        <div><b id="upd-found-title"></b></div>
+        <div id="upd-notes" class="tiny upd-notes"></div>
+        <span class="row dt-row"><button id="btn-upd-get" class="small" type="button"
+                title="Скачать архив выпуска и то, что поменялось в описи версий: библиотеки, ffmpeg. Пока идёт скачивание, программа работает как обычно">Скачать и подготовить</button></span>
+      </div>
+      <div id="upd-staged" class="box hidden">
+        <div id="upd-staged-text"></div>
+        <span class="row dt-row"><button id="btn-upd-discard" class="ghost small" type="button"
+                title="Не ставить подготовленное обновление">Отменить обновление</button></span>
+      </div>
+      <div class="tiny muted" style="margin-top:12px">Как идёт обновление: пока программа работает,
+        скачивается архив выпуска и то, что в нём поменялось; всё сверяется с контрольными суммами.
+        Замена — при следующем запуске, до загрузки остального. Если новая версия дважды не
+        запустится, вернётся прежняя.</div>
+      <div class="tiny muted" style="margin-top:8px">Лицензия GNU GPL v3. Правообладатель @prankhitevil.
+        Выпуски — <span id="about-repo"></span>.</div>
     </div>
     </div>
   </div>

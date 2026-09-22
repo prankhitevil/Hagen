@@ -148,13 +148,14 @@ def _ox_install(quant: str | None, size_mb: int) -> Callable[..., dict[str, Any]
     def run(note: Note | None = None) -> dict[str, Any]:
         from huggingface_hub import snapshot_download
 
-        from . import asr
+        from . import asr, lockfile
 
         _say(note, "Скачиваю точную модель для onnx-asr, %s (около %d МБ)…"
              % ("сжатые веса" if quant else "полные веса", size_mb))
         try:
             with config.hf_online():
                 snapshot_download(repo_id=asr.OX_REPO, local_dir=str(asr.OX_DIR),
+                                  revision=lockfile.model_revision(asr.OX_REPO),
                                   allow_patterns=asr.ox_files(quant))
         except Exception as err:
             raise NeedError(
@@ -179,18 +180,24 @@ def english_ready() -> bool:
 
 
 def english_install(note: Note | None = None) -> dict[str, Any]:
-    """Скачать Parakeet TDT: четыре файла из репозитория HuggingFace."""
+    """Скачать Parakeet TDT: четыре файла из репозитория HuggingFace.
+
+    Сеть к Hugging Face включается на время скачивания: если на диске уже есть
+    другие модели, программа работает с ним без сети (config.hf_online).
+    """
     from huggingface_hub import snapshot_download
 
-    from . import asr
+    from . import asr, lockfile
 
     _say(note, "Скачиваю английскую модель Parakeet (около 630 МБ)…")
     try:
-        snapshot_download(
-            repo_id="istupakov/parakeet-tdt-0.6b-v2-onnx",
-            local_dir=str(asr.EN_DIR),
-            allow_patterns=["*int8.onnx", "nemo128.onnx", "vocab.txt", "config.json"],
-        )
+        with config.hf_online():
+            snapshot_download(
+                repo_id=asr.EN_REPO,
+                local_dir=str(asr.EN_DIR),
+                revision=lockfile.model_revision(asr.EN_REPO),
+                allow_patterns=["*int8.onnx", "nemo128.onnx", "vocab.txt", "config.json"],
+            )
     except Exception as err:
         raise NeedError(
             "Английскую модель скачать не вышло: %s\n"

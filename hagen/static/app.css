@@ -851,6 +851,8 @@ table.keys td:first-child{white-space:nowrap;width:1%;color:var(--text)}
 .storage-box{display:flex;flex-direction:column;gap:6px}
 .storage-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .storage-row span{flex:1;min-width:200px;word-break:break-all}
+/* «Настройки → О программе»: что нового в свежем выпуске */
+.upd-notes{white-space:pre-wrap;max-height:180px;overflow:auto;margin:6px 0}
 
 /* Проект и теги записи (17.09): признаки для Obsidian в подвале карточки.
    Чипсы — уже введённые теги: щелчок дописывает тег в поле. */

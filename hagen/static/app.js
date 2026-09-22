@@ -2811,7 +2811,113 @@ async function openSettings() {
   // появляется только теперь.
   bindSettingsFields();
   bindPickFolder();
+  loadAbout();
   showDialog('dlg-settings');
+}
+
+/* «О программе»: версия и обновление. Проверка — только по кнопке, сама
+   программа в интернет не ходит. Всё решает служба (hagen/updates.py);
+   страница показывает и передаёт нажатия. */
+function updateLastText(last) {
+  if (!last) return '';
+  const when = (last.at || '').replace('T', ' ').slice(0, 16);
+  if (last.phase === 'applied' && last.confirmed) {
+    return `Обновлено с ${last.from} до ${last.to} (${when}).`
+      + ((last.models || []).length ? ' В этой версии обновилась модель распознавания — '
+        + 'скачайте её заново в «Настройки → Модели», когда будет удобно.' : '');
+  }
+  if (last.phase === 'rolled_back') {
+    return `Версия ${last.to} дважды не запустилась — вернулась ${last.from}. `
+      + 'Библиотеки остались новыми. Если что-то не работает, поставьте выпуск заново через Ustanovka.cmd.';
+  }
+  if (last.phase === 'failed') return `Обновление до ${last.to} не встало: ${last.error}. Осталась версия ${last.from}.`;
+  return '';
+}
+
+async function loadAbout() {
+  let st;
+  try { st = await api('/api/updates'); } catch (e) { return null; }
+  S.updates = st;
+  $('about-version').textContent = st.version || 'без номера';
+  $('about-repo').textContent = st.repo ? `github.com/${st.repo}` : '—';
+  const busy = (S.jobs || []).some((j) => j.kind === 'update' && ['queued', 'running'].includes(j.status));
+  $('btn-upd-check').disabled = !st.can_update || busy;
+  $('btn-upd-file').disabled = !st.can_update || busy;
+  $('upd-staged').classList.toggle('hidden', !st.staged);
+  if (st.staged) {
+    const extra = [];
+    if ((st.staged.wheels || []).length) extra.push(`библиотек: ${st.staged.wheels.length}`);
+    if (st.staged.ffmpeg) extra.push('новый ffmpeg');
+    $('upd-staged-text').textContent = `Обновление до ${st.staged.to} скачано и проверено`
+      + (extra.length ? ` (${extra.join(', ')})` : '')
+      + '. Закройте программу — значок у часов → «Выход» — и откройте снова: оно встанет при запуске.';
+    $('upd-found').classList.add('hidden');
+  }
+  $('upd-state').textContent = !st.can_update ? st.reason
+    : (busy ? 'Готовлю обновление — ход виден в блоке «В работе».' : updateLastText(st.last));
+  return st;
+}
+
+async function checkUpdates() {
+  $('btn-upd-check').disabled = true;
+  $('upd-state').textContent = 'Спрашиваю GitHub…';
+  $('upd-found').classList.add('hidden');
+  try {
+    const r = await api('/api/updates/check', { method: 'POST' });
+    if (r.error) { $('upd-state').textContent = r.error; return; }
+    if (!r.newer) {
+      $('upd-state').textContent = r.latest ? `Стоит последняя версия: ${r.current}.` : 'Выпусков с архивом пока нет.';
+      return;
+    }
+    const mb = r.asset && r.asset.size ? ` — архив ${Math.round(r.asset.size / 1048576)} МБ` : '';
+    $('upd-found-title').textContent = `Есть версия ${r.latest}${mb}`;
+    $('upd-notes').textContent = (r.notes || '').trim() || 'Описания у выпуска нет.';
+    $('upd-found').classList.remove('hidden');
+    $('upd-state').textContent = `Сейчас стоит ${r.current}.`;
+  } catch (e) {
+    $('upd-state').textContent = e.message;
+  } finally {
+    $('btn-upd-check').disabled = !(S.updates && S.updates.can_update);
+  }
+}
+
+function bindAbout() {
+  $('btn-upd-check').onclick = checkUpdates;
+  $('btn-upd-get').onclick = async () => {
+    $('btn-upd-get').disabled = true;
+    try {
+      await api('/api/updates/download', { method: 'POST' });
+      $('upd-found').classList.add('hidden');
+      $('upd-state').textContent = 'Скачиваю и готовлю — ход виден в блоке «В работе». Программа работает как обычно.';
+    } catch (e) { notice(e.message, 'err'); } finally { $('btn-upd-get').disabled = false; }
+  };
+  $('btn-upd-file').onclick = () => $('upd-file').click();
+  $('upd-file').onchange = async () => {
+    const f = $('upd-file').files[0];
+    $('upd-file').value = '';
+    if (!f) return;
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    $('upd-state').textContent = `Беру «${f.name}»…`;
+    try {
+      await api('/api/updates/file', { method: 'POST', body: fd });
+      $('upd-state').textContent = 'Проверяю архив и докачиваю, что поменялось, — ход виден в блоке «В работе».';
+    } catch (e) { $('upd-state').textContent = e.message; }
+  };
+  $('btn-upd-discard').onclick = async () => {
+    try { await api('/api/updates/discard', { method: 'POST' }); } catch (e) { notice(e.message, 'err'); }
+    loadAbout();
+  };
+}
+
+/* Итог прошлого обновления — один раз, при запуске окна. */
+async function noticeLastUpdate() {
+  const st = await loadAbout();
+  const last = st && st.last;
+  if (!last || last.seen || (last.phase === 'applied' && !last.confirmed)) return;
+  const text = updateLastText(last);
+  if (text) notice(text, last.phase === 'applied' ? 'ok' : 'err');
+  try { await api('/api/updates/seen', { method: 'POST' }); } catch (e) {}
 }
 
 /* Строка под папкой заметок: на месте ли она и сколько в ней заметок. */
@@ -3668,8 +3774,13 @@ async function handleEvent(ev) {
       }
       // скачали тяжёлую часть — обновить список и разблокировать кнопки
       if (j.kind === 'needs' && ['done', 'error', 'cancelled'].includes(j.status)) loadNeeds();
+      // подготовка обновления кончилась — «О программе» говорит, что дальше
+      if (j.kind === 'update' && ['done', 'error', 'cancelled'].includes(j.status)) loadAbout();
       break;
     }
+    case 'updates':
+      loadAbout();
+      break;
     case 'sp_login':
       if (window.videoSpEvent) window.videoSpEvent(ev);
       break;
@@ -5369,6 +5480,8 @@ function bind() {
     notice('Служба не отвечает: ' + e.message, 'err');
   }
   loadLabels();
+  bindAbout();
+  noticeLastUpdate();
   // Диктовка могла уже идти, когда окно открыли: капсула должна это показать.
   try { S.dictate = await api('/api/dictate'); paintDictate(); } catch (e) {}
   await listDevices(false);

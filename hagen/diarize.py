@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
-from . import config, store, vad
+from . import config, release, store, vad
 
 log = logging.getLogger("hagen.diarize")
 
@@ -63,10 +63,10 @@ SPLIT_RATIO = 0.35
 MIN_PIECE_S = 0.7
 
 #: Какой движок в каком релизе. Нет файла или в нём мусор — pyannote, как было
-#: до появления второго движка.
-RELEASE_PATH = config.PROJECT_DIR / "release.json"
-ENGINES = ("pyannote", "onnx")
-DEFAULT_ENGINE = "pyannote"
+#: до появления второго движка (см. release.py).
+RELEASE_PATH = release.PATH
+ENGINES = release.ENGINES
+DEFAULT_ENGINE = release.DEFAULT_ENGINE
 
 _engine_name: str | None = None
 _engine_lock = threading.Lock()
@@ -85,13 +85,7 @@ class DiarizeCancelled(RuntimeError):
 
 def release_engine() -> str:
     """Движок, который назначил релиз (release.json)."""
-    try:
-        with io.open(RELEASE_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        name = str((data or {}).get("diarize") or "").strip().lower()
-    except (OSError, ValueError, AttributeError):
-        name = ""
-    return name if name in ENGINES else DEFAULT_ENGINE
+    return release.diarize_engine(RELEASE_PATH)
 
 
 def engine_name() -> str:

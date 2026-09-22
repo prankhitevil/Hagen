@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 __all__ = [
-    "ensure_portable", "write_shortcut", "screenshot_folders",
+    "ensure_portable", "write_shortcut", "make_shortcuts", "screenshot_folders",
     "watch_screenshots", "delete_shots", "shift_shots",
     "hidden_process_flags", "open_path", "open_link", "set_console_title",
     "hide_console", "restrict_to_owner",
@@ -59,6 +59,17 @@ def write_shortcut(link: Path, arguments: str, description: str,
                    icon: str | None = None) -> None:
     SHORTCUTS[str(link)] = {"arguments": arguments, "description": description,
                             "icon": icon}
+
+
+def make_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
+    """«Рабочий стол» и «Пуск» — папки внутри временной папки заглушки."""
+    folders = folders or {"desktop": ROOT / "desktop", "menu": ROOT / "menu"}
+    made = []
+    for folder in folders.values():
+        link = folder / "Hagen.lnk"
+        write_shortcut(link, "run.py --app", "Hagen, Your Consigliere", "hagen-idle.ico")
+        made.append(str(link))
+    return made
 
 
 def screenshot_folders() -> list[Path]:

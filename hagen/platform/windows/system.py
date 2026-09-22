@@ -22,6 +22,7 @@ from . import app
 __all__ = [
     "ensure_portable",
     "write_shortcut",
+    "make_shortcuts",
     "screenshot_folders",
     "watch_screenshots",
     "delete_shots",
@@ -48,6 +49,13 @@ def write_shortcut(link: Path, arguments: str, description: str,
     from . import portable
 
     portable.write_shortcut(link, arguments, description, icon)
+
+
+def make_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
+    """Ярлыки «Hagen» на рабочем столе и в «Пуске», со значком программы."""
+    from . import portable
+
+    return portable.make_shortcuts(folders)
 
 
 def screenshot_folders() -> list[Path]:

@@ -6,9 +6,10 @@ rem  with Unix line endings. All Russian text is printed by install.py.
 rem
 rem  Which Python runs install.py:
 rem   1) python\python.exe inside this folder (portable copy);
-rem   2) the "py" launcher of an installed Python;
+rem   2) an installed Python 3.12 via the "py" launcher;
 rem   3) otherwise portable Python 3.12 is downloaded from nuget.org
 rem      into python\ (no admin rights, nothing is registered).
+rem  Exactly 3.12: the libraries in lock.json are built for it.
 rem ============================================================
 setlocal
 cd /d "%~dp0"
@@ -19,9 +20,9 @@ if exist "python\python.exe" (
   goto done
 )
 
-where py >nul 2>&1
-if %ERRORLEVEL%==0 (
-  py -3 install.py %*
+py -3.12 -c "import sys" >nul 2>&1
+if not errorlevel 1 (
+  py -3.12 install.py %*
   goto done
 )
 

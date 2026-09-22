@@ -232,6 +232,18 @@ async def _startup() -> None:
     _media_ready()
     _recover_orphans()
     log.info("служба запущена на 127.0.0.1:%s", config.get("port"))
+    # Служба поднялась — если это первая работа новой версии, откатывать её
+    # не надо (hagen/updates.py). Итог прошлого обновления — в журнал.
+    try:
+        from . import updates
+
+        updates.confirm_started()
+        last = updates.status().get("last") or {}
+        if last and not last.get("seen"):
+            log.info("обновление %s → %s: %s%s", last.get("from"), last.get("to"),
+                     last.get("phase"), (" (%s)" % last["error"]) if last.get("error") else "")
+    except Exception as err:
+        log.warning("состояние обновления не прочиталось: %s", err)
     # Модели, которые прежняя программа держала, а выбор в настройках их уже не
     # просит, — удалить до прогрева: сейчас их никто не держит.
     try:

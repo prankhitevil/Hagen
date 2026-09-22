@@ -73,16 +73,30 @@
 
 | Программа | Как используется | Лицензия |
 |---|---|---|
-| FFmpeg | перекодирование звука и видео, вызывается как отдельная программа | GPL-3.0 (сборка gyan.dev «full») / LGPL для отдельных библиотек |
+| FFmpeg | перекодирование звука и видео, вызывается как отдельная программа | GPL-3.0 (сборка gyan.dev «essentials») / LGPL для отдельных библиотек |
 | Python | встроенный интерпретатор в папке `python\` | PSF License 2.0 |
 | yt-dlp | загрузка видео по ссылке | Unlicense (общественное достояние) |
 
-**Про FFmpeg.** В репозиторий бинарники не входят (`ffmpeg/` закрыт `.gitignore`),
-но в переносимую сборку они попадают. Сборка «full» от gyan.dev собрана с
-`--enable-gpl`, то есть распространяется под GPL-3.0. Hagen тоже под GPL-3.0,
-несовместимости нет, но у того, кто раздаёт архив, появляется обязанность
-сообщить, откуда взять исходный код этой сборки FFmpeg:
+**Про FFmpeg.** В репозиторий и в архив выпуска бинарники не входят: установщик
+качает сборку gyan.dev «essentials» той версии, что записана в описи
+`lock.json`, с GitHub-зеркала <https://github.com/GyanD/codexffmpeg/releases>.
+В полную сборку (всё уже поставлено, собирается по запросу) они попадают. Сборка
+собрана с `--enable-gpl`, то есть распространяется под GPL-3.0. Hagen тоже под
+GPL-3.0, несовместимости нет, но у того, кто раздаёт полную сборку, появляется
+обязанность сообщить, откуда взять исходный код этой сборки FFmpeg:
 <https://www.gyan.dev/ffmpeg/builds/> и <https://git.ffmpeg.org/ffmpeg.git>.
+
+## Готовые сборки пакетов в `vendor/`
+
+У трёх пакетов в открытых каталогах нет готовой сборки под Windows — только
+исходники. Чтобы установщику не нужны были git и компилятор, их сборки из
+исходников авторов лежат в `vendor/` и едут в выпуске без изменений:
+
+| Пакет | Версия | Откуда собран | Лицензия |
+|---|---|---|---|
+| gigaam | 0.2.0 | <https://github.com/salute-developers/GigaAM>, коммит `7447938` | MIT (© SaluteDevices) |
+| antlr4-python3-runtime | 4.9.3 | PyPI, исходный архив | BSD-3-Clause (© The ANTLR Project) |
+| proxy_tools | 0.1.0 | PyPI, исходный архив | MIT (© Jonathan Tushman) |
 
 ## Прямые зависимости Python
 
@@ -143,6 +157,9 @@
 `tests/make_meeting.py` и `tests/make_mic_test.py`.
 
 ## Как обновить этот список
+
+Точные версии всего окружения — в описи выпуска `lock.json`. Лицензии
+установленных пакетов:
 
 ```
 .venv\Scripts\python.exe -c "import importlib.metadata as m; [print(d.metadata['Name'], d.version, d.metadata.get('License-Expression') or d.metadata.get('License')) for d in sorted(m.distributions(), key=lambda d: d.metadata['Name'].lower())]"

@@ -132,6 +132,36 @@ try:
           and not portable._same_path("", new))
 
     say("")
+    say("=== 3б. Значок ярлыка ===")
+    # Прежний установщик писал ярлык сам и ставил значок Windows. Такой ярлык
+    # ведёт куда надо, и раньше его не трогали — значок так и оставался чужим.
+    own_icon = touch(new / "hagen" / "icons" / "hagen-idle.ico",
+                     (REAL_PROJECT / "hagen" / "icons" / "hagen-idle.ico").read_bytes())
+    check("«путь,номер» значка разбирается", portable._icon_path(r"C:\x\y.ico,0") == r"C:\x\y.ico"
+          and portable._icon_path(str(own_icon)) == str(own_icon) and portable._icon_path("") == "")
+    links_old = SANDBOX / "links-old"
+    old_link = links_old / portable.SHORTCUT_NAME
+    portable.write_shortcut(old_link, "run.py --app", "прежний установщик",
+                            r"C:\Windows\System32\imageres.dll,175")
+    fixed = portable.refresh_shortcuts({"test": links_old})
+    sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(old_link))
+    check("ярлык со значком Windows поправлен на значок программы",
+          fixed == [str(old_link)] and portable._same_path(portable._icon_path(sc.IconLocation), own_icon),
+          (fixed, sc.IconLocation))
+    check("и больше не трогается", portable.refresh_shortcuts({"test": links_old}) == [])
+    made = portable.make_shortcuts({"desktop": SANDBOX / "desk", "menu": SANDBOX / "menu"})
+    icons_ok = all(portable._same_path(portable._icon_path(
+        win32com.client.Dispatch("WScript.Shell").CreateShortcut(p).IconLocation), own_icon) for p in made)
+    check("установщик: ярлыки на рабочем столе и в «Пуске» — сразу со значком программы",
+          len(made) == 2 and icons_ok, made)
+    first = win32com.client.Dispatch("WScript.Shell").CreateShortcut(made[0])
+    check("ярлык запускает окно программы из её папки",
+          first.Arguments == "run.py --app" and portable._same_path(first.WorkingDirectory, new),
+          (first.Arguments, first.WorkingDirectory))
+    check("созданное установщиком запуск не переписывает",
+          portable.refresh_shortcuts({"desktop": SANDBOX / "desk", "menu": SANDBOX / "menu"}) == [])
+
+    say("")
     say("=== 4. Настоящая папка программы ===")
     config.PROJECT_DIR = REAL_PROJECT
     run_text = io.open(REAL_PROJECT / "run.py", encoding="utf-8").read()
@@ -139,6 +169,10 @@ try:
     # Оба места зовут систему через розетку — см. hagen/platform/base.py.
     check("run.py чинит пути при каждом запуске", "ensure_portable(" in run_text)
     check("автозапуск с Windows — через тот же ярлык", "write_shortcut(" in tray_text)
+    inst_text = io.open(REAL_PROJECT / "install.py", encoding="utf-8").read()
+    check("установщик делает ярлыки через программу, своего кода и значка Windows нет",
+          '"--shortcuts"' in inst_text and "imageres" not in inst_text
+          and "CreateShortcut" not in inst_text, "")
     base = REAL_PROJECT / "python" / "python.exe"
     if base.exists():
         env = {k: v for k, v in os.environ.items() if k.upper() not in ("PYTHONPATH", "PYTHONHOME")}
@@ -164,8 +198,8 @@ try:
         check("%s — только ASCII (иначе cmd.exe не разберёт)" % name, ascii_ok)
         check("%s — переносы строк CRLF" % name, raw.count(b"\n") == raw.count(b"\r\n") and raw.count(b"\n") > 5)
     ust = io.open(REAL_PROJECT / "Ustanovka.cmd", encoding="ascii").read()
-    check("установщик берёт python\\python.exe, иначе py, иначе скачивает",
-          ust.index("python\\python.exe") < ust.index("where py") < ust.index("curl.exe"))
+    check("установщик берёт python\\python.exe, иначе Python 3.12 через py, иначе скачивает",
+          ust.index("python\\python.exe") < ust.index("py -3.12") < ust.index("curl.exe"))
     check("Python скачивается по рабочему адресу nuget", "api.nuget.org/v3-flatcontainer/python/" in ust)
     dk = io.open(REAL_PROJECT / "Hagen.cmd", encoding="ascii").read()
     check("Hagen.cmd запускает python\\python.exe, запасной — .venv",

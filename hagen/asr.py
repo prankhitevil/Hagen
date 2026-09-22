@@ -40,6 +40,7 @@ ONNX_DIR = config.MODELS_DIR / "onnx"
 #: «умеренным»: 21-26 % ошибок против 6 % у Parakeet. Поэтому английский путь —
 #: отдельная модель NVIDIA Parakeet TDT 0.6B v2 на том же onnxruntime, без torch.
 EN_DIR = config.MODELS_DIR / "onnx-asr"
+EN_REPO = "istupakov/parakeet-tdt-0.6b-v2-onnx"
 EN_MODEL = "nemo-parakeet-tdt-0.6b-v2"
 #: Шаг сетки отметок времени: window_step 0,01 с × subsampling 8.
 EN_FRAME_S = 0.08

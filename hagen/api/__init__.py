@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 def include_all(app: FastAPI) -> None:
     """Подключить все роутеры к приложению."""
-    from . import dictation, media, speakers, tools, transcript, voices
+    from . import dictation, media, speakers, tools, transcript, updates, voices
 
     app.include_router(transcript.router)
     app.include_router(voices.router)
@@ -28,3 +28,4 @@ def include_all(app: FastAPI) -> None:
     app.include_router(media.router)
     app.include_router(dictation.router)
     app.include_router(speakers.router)
+    app.include_router(updates.router)

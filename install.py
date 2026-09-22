@@ -10,9 +10,12 @@ r"""Установка «Hagen» на компьютер с Windows.
 модели). Ничего не скачивается: исправляются пути к Python, создаются ярлыки,
 спрашивается папка хранилища Obsidian, печатаются файлы для антивируса.
 
-ЧИСТАЯ УСТАНОВКА (только код). Нужен интернет:
-    1. проверяет Python, ffmpeg (скачает сам) и место на диске;
-    2. создаёт окружение .venv и ставит зависимости (torch — CPU-сборкой);
+ЧИСТАЯ УСТАНОВКА (архив выпуска или исходники). Нужен интернет. Всё, что
+докачивается, — ровно тех версий, что в описи выпуска lock.json, и каждый файл
+сверяется с контрольной суммой (см. hagen/lockfile.py):
+    1. проверяет Python, ставит ffmpeg и проверяет место на диске;
+    2. создаёт окружение .venv и ставит библиотеки по описи (torch — сборкой
+       без CUDA);
     3. кладёт копию Python внутрь папки (узкое правило антивируса, переносимость);
     4. скачивает модель распознавания — по умолчанию одну точную, около 890 МБ;
        остальные выбираются потом в «Настройки → Модели»;
@@ -43,23 +46,26 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent
 VENV = PROJECT / ".venv"
 VENV_PY = VENV / "Scripts" / "python.exe"
-TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
-TORCH_PINS = ["torch==2.14.0", "torchaudio==2.11.0"]
+
+# Модули программы, которые берут только стандартную библиотеку Python, —
+# установщику они доступны и до появления окружения с библиотеками.
+sys.path.insert(0, str(PROJECT))
 
 
 def diarize_engine() -> str:
-    """Движок разметки этого релиза из release.json: "onnx" или "pyannote".
+    """Движок разметки этого релиза из release.json: "onnx" или "pyannote"."""
+    from hagen import release
 
-    Повторяет diarize.release_engine: установщик работает системным Python
-    ещё до того, как появится окружение с библиотеками программы, и
-    импортировать её модули не может.
-    """
-    try:
-        data = json.load(io.open(PROJECT / "release.json", encoding="utf-8"))
-        name = str((data or {}).get("diarize") or "").strip().lower()
-    except (OSError, ValueError, AttributeError):
-        name = ""
-    return name if name in ("onnx", "pyannote") else "pyannote"
+    return release.diarize_engine(PROJECT / "release.json")
+
+
+def lock() -> dict:
+    """Опись выпуска: точные версии библиотек, ffmpeg и моделей (hagen/lockfile.py)."""
+    from hagen import lockfile
+
+    return lockfile.read(PROJECT / "lock.json")
+
+
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 OK = "  [готово]"
@@ -123,20 +129,22 @@ def pick_folder(title: str, start: str) -> str | None:
 
 
 def check_python() -> bool:
+    """Python той же версии, что в описи: сборки библиотек сделаны под неё."""
     v = sys.version_info
     say("  Python: %d.%d.%d — %s" % (v.major, v.minor, v.micro, sys.executable))
-    if (v.major, v.minor) < (3, 10):
-        say("%s нужен Python 3.10 или новее" % BAD)
-        return False
     if os.name != "nt":
         say("%s приложение рассчитано на Windows" % BAD)
+        return False
+    want = str((lock().get("python") or {}).get("version") or "3.12")
+    if "%d.%d" % (v.major, v.minor) != ".".join(want.split(".")[:2]):
+        say("%s нужен Python %s: библиотеки в описи выпуска собраны под него." % (BAD, want))
+        say("       Запустите Ustanovka.cmd — он возьмёт нужный Python сам.")
         return False
     say("%s версия подходит" % OK)
     return True
 
 
 FFMPEG_DIR = PROJECT / "ffmpeg"
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 
 def _ffmpeg_in_project() -> Path | None:
@@ -158,115 +166,50 @@ def _ffmpeg_version(exe: Path | str) -> str:
         return str(exe)
 
 
-def _try_winget() -> bool:
-    if not shutil.which("winget"):
-        return False
-    say("  пробую поставить ffmpeg через winget…")
-    try:
-        res = subprocess.run(
-            ["winget", "install", "--id", "Gyan.FFmpeg", "-e", "--silent",
-             "--accept-package-agreements", "--accept-source-agreements"],
-            timeout=1800)
-    except Exception as err:
-        say("  winget не справился: %s" % err)
-        return False
-    if res.returncode != 0:
-        say("  winget вернул код %s" % res.returncode)
-        return False
-    # PATH в текущем процессе не обновится — ищем напрямую
-    base = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
-    for cand in base.glob("Gyan.FFmpeg*/**/bin/ffmpeg.exe"):
-        return _adopt_ffmpeg(cand.parent)
-    return bool(shutil.which("ffmpeg"))
-
-
-def _adopt_ffmpeg(bin_dir: Path) -> bool:
-    """Скопировать ffmpeg.exe и ffprobe.exe в папку проекта."""
-    try:
-        target = FFMPEG_DIR / "bin"
-        target.mkdir(parents=True, exist_ok=True)
-        taken = 0
-        for name in ("ffmpeg.exe", "ffprobe.exe"):
-            src = bin_dir / name
-            if src.exists():
-                shutil.copy2(src, target / name)
-                taken += 1
-        if taken:
-            say("%s ffmpeg перенесён в папку проекта (%d файла)" % (OK, taken))
-            return True
-    except Exception as err:
-        say("  не удалось перенести ffmpeg: %s" % err)
-    return False
-
-
 def _download_ffmpeg() -> bool:
-    """Скачать переносимую сборку ffmpeg прямо в папку проекта."""
-    import urllib.request
-    import zipfile
+    """Скачать сборку ffmpeg из описи выпуска и распаковать в папку программы."""
+    from hagen import download, lockfile
 
-    say("  скачиваю переносимую сборку ffmpeg (около 45 МБ)…")
+    entry = lock().get("ffmpeg") or {}
+    if not entry.get("url"):
+        say("%s в описи выпуска нет ffmpeg" % BAD)
+        return False
+    say("  скачиваю ffmpeg %s (около %d МБ)…"
+        % (entry.get("version", "?"), int(entry.get("size") or 0) // 1048576))
     tmp_zip = PROJECT / "_ffmpeg.zip"
     try:
-        with urllib.request.urlopen(FFMPEG_URL, timeout=120) as src, \
-                open(tmp_zip, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+        download.fetch(entry["url"], tmp_zip, sha256=entry.get("sha256"), size=entry.get("size"))
+        lockfile.unpack_ffmpeg(tmp_zip, FFMPEG_DIR)
     except Exception as err:
-        say("%s скачать не вышло: %s" % (BAD, err))
-        tmp_zip.unlink(missing_ok=True)
-        return False
-
-    try:
-        with zipfile.ZipFile(tmp_zip) as zf:
-            names = [n for n in zf.namelist()
-                     if n.endswith(("/bin/ffmpeg.exe", "/bin/ffprobe.exe"))]
-            if not names:
-                say("%s в архиве нет ffmpeg.exe" % BAD)
-                return False
-            target = FFMPEG_DIR / "bin"
-            target.mkdir(parents=True, exist_ok=True)
-            for n in names:
-                with zf.open(n) as src, open(target / Path(n).name, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-        say("%s ffmpeg распакован в папку проекта" % OK)
-        return True
-    except Exception as err:
-        say("%s распаковать не вышло: %s" % (BAD, err))
+        say("%s ffmpeg поставить не вышло: %s" % (BAD, err))
         return False
     finally:
         tmp_zip.unlink(missing_ok=True)
+    say("%s ffmpeg %s в папке программы" % (OK, entry.get("version", "")))
+    return True
 
 
 def check_ffmpeg() -> bool:
-    """Найти ffmpeg, а если его нет — поставить самим.
+    """Свой ffmpeg в папке программы — той версии, что в описи выпуска.
 
-    Порядок: своя копия в папке проекта, затем PATH, затем winget, затем
-    скачивание переносимой сборки. Так установка работает и на чистой машине.
+    Нет своего — скачиваем сборку из описи, с проверкой суммы. Не скачался —
+    берём ffmpeg из системы, если он есть: работать будет, хоть и не той версии,
+    на которой выпуск проверен.
     """
     mine = _ffmpeg_in_project()
     if mine:
-        say("%s ffmpeg свой, в папке проекта: %s" % (OK, _ffmpeg_version(mine)))
-        return True
-
-    exe = shutil.which("ffmpeg")
-    if exe:
-        say("%s ffmpeg в системе: %s" % (OK, _ffmpeg_version(exe)))
-        say("       (своя копия в папке проекта не делается: полные сборки весят")
-        say("        сотни мегабайт. На другом компьютере установщик достанет")
-        say("        лёгкую переносимую сборку сам.)")
-        return True
-
-    say("  ffmpeg не найден — ставлю сам.")
-    if _try_winget() and (_ffmpeg_in_project() or shutil.which("ffmpeg")):
-        say("%s ffmpeg установлен" % OK)
+        say("%s ffmpeg свой, в папке программы: %s" % (OK, _ffmpeg_version(mine)))
         return True
     if _download_ffmpeg():
         return True
-
-    say("%s ffmpeg поставить не удалось." % BAD)
-    say("       Сделайте это вручную и запустите установку заново:")
-    say("           winget install Gyan.FFmpeg")
-    say("       или скачайте %s" % FFMPEG_URL)
-    say("       и положите ffmpeg.exe и ffprobe.exe в папку %s" % (FFMPEG_DIR / "bin"))
+    exe = shutil.which("ffmpeg")
+    if exe:
+        say("%s беру ffmpeg из системы: %s" % (OK, _ffmpeg_version(exe)))
+        say("       Он не той версии, на которой проверен выпуск. Если видео или звук")
+        say("       не откроются — запустите установку заново, когда будет интернет.")
+        return True
+    say("%s ffmpeg поставить не удалось. Нужен интернет до github.com —" % BAD)
+    say("       запустите установку заново, когда он будет.")
     return False
 
 
@@ -297,25 +240,42 @@ def pip(*args: str) -> list[str]:
     return [str(VENV_PY), "-m", "pip", "--disable-pip-version-check", *args]
 
 
-def install_deps(offline_models: bool = False) -> bool:
-    if not run(pip("install", "--upgrade", "pip", "setuptools", "wheel"),
-               "обновляю pip", 900):
+def install_deps() -> bool:
+    """Поставить библиотеки ровно по описи выпуска (lock.json).
+
+    Каждая сборка качается из своего открытого каталога (PyPI, сайт pytorch)
+    или берётся из vendor/ и сверяется с суммой в описи. Ставится из скачанного,
+    без поиска зависимостей: все они уже в описи, с точными версиями. Уже
+    стоящее той же версии не трогается — повторный запуск докачивает только
+    недостающее. Релизу с pyannote добавляются его пакеты.
+    """
+    from hagen import download, lockfile
+
+    data = lock()
+    pkgs = lockfile.packages(data, diarize_engine())
+    if not pkgs:
+        say("%s нет описи выпуска lock.json рядом с install.py" % BAD)
         return False
-    if not run(pip("install", *TORCH_PINS, "--index-url", TORCH_INDEX),
-               "ставлю torch (сборка для процессора, без CUDA)", 3600):
+    need = lockfile.to_install(pkgs, lockfile.installed(PROJECT), lockfile.floor(data))
+    if not need:
+        say("%s библиотеки уже стоят по описи" % OK)
+        return True
+    say("  скачиваю библиотеки по описи: %d из %d…" % (len(need), len(pkgs)))
+    wheels = PROJECT / "data" / "_install"
+
+    def step(i: int, total: int, name: str) -> None:
+        say("    [%d/%d] %s" % (i + 1, total, name))
+
+    try:
+        files = lockfile.fetch_packages(need, wheels, PROJECT, progress=step)
+    except (lockfile.LockError, download.DownloadError) as err:
+        say("%s %s" % (BAD, err))
         return False
-    # Релизу с pyannote нужен ещё и он; набор включает requirements.txt.
-    name = "requirements-pyannote.txt" if diarize_engine() == "pyannote" else "requirements.txt"
-    req = PROJECT / name
-    if not req.exists():
-        say("%s нет файла %s рядом с install.py" % (BAD, name))
+    if not run(pip(*lockfile.install_args(files, PROJECT)), "ставлю библиотеки", 3600):
         return False
-    # torch уже стоит нужной версии — не даём его переустановить
-    con = PROJECT / "constraints.txt"
-    with io.open(con, "w", encoding="utf-8") as fh:
-        fh.write("torch==2.14.0+cpu\ntorchaudio==2.11.0+cpu\n")
-    return run(pip("install", "-c", str(con), "-r", str(req)),
-               "ставлю остальные зависимости", 3600)
+    lockfile.drop_new_launchers(PROJECT)
+    shutil.rmtree(wheels, ignore_errors=True)
+    return True
 
 
 
@@ -549,39 +509,15 @@ def configure() -> None:
 
 
 def make_shortcuts() -> None:
+    """Ярлыки «Hagen» на рабочем столе и в «Пуске» — их делает сама программа.
+
+    Раньше установщик писал их своим кодом и ставил значок Windows вместо
+    значка программы. Теперь ярлык один на всех (hagen/platform, run.py
+    --shortcuts): со значком программы, и программа сама его поправит, если
+    папку перенесут.
+    """
     head("Ярлыки")
-    ps = r'''
-$proj = '%s'
-$py = Join-Path $proj 'python\python.exe'
-if (-not (Test-Path $py)) { $py = Join-Path $proj '.venv\Scripts\python.exe' }
-$ws = New-Object -ComObject WScript.Shell
-$targets = @(
-  (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hagen.lnk'),
-  (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hagen.lnk')
-)
-foreach ($lnk in $targets) {
-  $sc = $ws.CreateShortcut($lnk)
-  $sc.TargetPath = $py
-  $sc.Arguments = 'run.py --app'
-  $sc.WorkingDirectory = $proj
-  $sc.Description = 'Your Consigliere'
-  $sc.IconLocation = "$env:SystemRoot\System32\imageres.dll,175"
-  $sc.WindowStyle = 7
-  $sc.Save()
-  Write-Output ('  создан: ' + $lnk)
-}
-''' % str(PROJECT)
-    tmp = PROJECT / "_mkshortcut.ps1"
-    with io.open(tmp, "w", encoding="utf-8-sig") as fh:
-        fh.write(ps)
-    try:
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-File", str(tmp)], timeout=120, creationflags=NO_WINDOW)
-        say("%s ярлыки созданы" % OK)
-    except Exception as err:
-        say("%s ярлыки не создались: %s" % (BAD, err))
-    finally:
-        tmp.unlink(missing_ok=True)
+    run([str(VENV_PY), "run.py", "--shortcuts"], "создаю ярлыки «Hagen»", 180)
 
 
 def _real_interpreter() -> Path:
@@ -679,12 +615,14 @@ def main() -> int:
     if not make_venv():
         return 1
 
-    head("Зависимости")
+    head("Библиотеки по описи выпуска")
     if not install_deps():
         say("")
-        say("  Не удалось поставить зависимости. Частые причины:")
-        say("    - нет интернета или он через прокси;")
-        say("    - антивирус блокирует запись в папку проекта.")
+        say("  Не удалось поставить библиотеки. Частые причины:")
+        say("    - нет интернета или он через прокси (нужны pypi.org, files.pythonhosted.org,")
+        say("      download.pytorch.org);")
+        say("    - антивирус блокирует запись в папку программы.")
+        say("  Уже скачанное не пропадёт: запустите Ustanovka.cmd ещё раз.")
         return 1
 
     head("Свой Python внутри проекта")

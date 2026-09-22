@@ -10,7 +10,8 @@
 2. .venv\\pyvenv.cfg хранит полный путь к python\\. Через .venv\\Scripts\\python.exe
    запускаются проверки и pip; после переноса папки строка home переписывается.
 3. Ярлыки «Hagen» на рабочем столе, в «Пуске» и в «Автозагрузке», ведущие в
-   старую папку, пересоздаются на новую.
+   старую папку или с чужим значком, пересоздаются на новую, со значком
+   программы. Ставит их установщик — через make_shortcuts отсюда же.
 """
 from __future__ import annotations
 
@@ -168,8 +169,49 @@ def _same_path(a: Any, b: Any) -> bool:
     return bool(na) and na == nb
 
 
+#: Ярлыки, которые ставит установщик. «Автозагрузка» — не его: её ярлык
+#: появляется и пропадает галочкой в настройках (tray.set_autostart).
+INSTALL_FOLDERS = ("desktop", "menu")
+DESCRIPTION = "Hagen, Your Consigliere"
+
+
+def make_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
+    """Ярлыки «Hagen» на рабочем столе и в «Пуске» — на эту папку, со своим значком.
+
+    Раньше их писал сам установщик, отдельным кодом, и ставил значок Windows
+    вместо значка программы; а refresh_shortcuts такой ярлык не трогал — он вёл
+    куда надо. Теперь ярлык один на всех: этот.
+    """
+    try:
+        folders = folders or {k: v for k, v in _special_folders().items() if k in INSTALL_FOLDERS}
+    except Exception as err:
+        log.info("папки ярлыков не определились: %s", err)
+        return []
+    made = []
+    for folder in folders.values():
+        link = folder / SHORTCUT_NAME
+        try:
+            write_shortcut(link, "run.py --app", DESCRIPTION, app_icon())
+            made.append(str(link))
+        except Exception as err:
+            log.warning("ярлык %s не создан: %s", link, err)
+    return made
+
+
+def _icon_path(location: Any) -> str:
+    """Файл значка из IconLocation ярлыка: «путь,номер» → «путь»."""
+    text = str(location or "").strip()
+    head, sep, tail = text.rpartition(",")
+    return head if sep and tail.strip().lstrip("-").isdigit() else text
+
+
 def refresh_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
-    """Ярлыки «Hagen», которые ведут в другую папку или не тем Python, — на эту."""
+    """Ярлыки «Hagen», которые ведут в другую папку, не тем Python или с чужим
+    значком, — на эту папку и со значком программы.
+
+    Чужой значок — у ярлыков прежнего установщика (значок Windows): их
+    поправляет первый же запуск, переустанавливать не нужно.
+    """
     import win32com.client
 
     try:
@@ -178,6 +220,7 @@ def refresh_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
         log.info("папки ярлыков не определились: %s", err)
         return []
     shell = win32com.client.Dispatch("WScript.Shell")
+    icon = app_icon()
     fixed = []
     for folder in folders.values():
         link = folder / SHORTCUT_NAME
@@ -186,13 +229,13 @@ def refresh_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
         try:
             sc = shell.CreateShortcut(str(link))
             if (_same_path(str(sc.TargetPath), launcher())
-                    and _same_path(str(sc.WorkingDirectory), project())):
+                    and _same_path(str(sc.WorkingDirectory), project())
+                    and (not icon or _same_path(_icon_path(sc.IconLocation), icon))):
                 continue
             args = str(sc.Arguments or "run.py --app")
             sc.TargetPath = str(launcher())
             sc.WorkingDirectory = str(project())
             sc.Arguments = args
-            icon = app_icon()
             if icon:
                 sc.IconLocation = icon      # свой значок вместо питоновского (17.09)
             sc.Save()
@@ -200,7 +243,7 @@ def refresh_shortcuts(folders: dict[str, Path] | None = None) -> list[str]:
         except Exception as err:
             log.info("ярлык %s не обновлён: %s", link, err)
     if fixed:
-        log.info("ярлыки переведены на эту папку: %s", ", ".join(fixed))
+        log.info("ярлыки поправлены на эту папку и значок программы: %s", ", ".join(fixed))
     return fixed
 
 

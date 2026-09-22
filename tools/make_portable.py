@@ -76,10 +76,11 @@ sys.path.insert(0, str(PROJECT))
 import install  # noqa: E402  правила чистки общие с установщиком
 
 TOP_FILES = ("run.py", "install.py", "requirements.txt", "requirements-pyannote.txt",
-             "constraints.txt", "Hagen.cmd", "Ustanovka.cmd", "Как устроен Hagen.md",
+             "lock.json", "Hagen.cmd", "Ustanovka.cmd", "Как устроен Hagen.md",
              ".gitignore", "README.md", "LICENSE", "CONTRIBUTING.md")
 ENGINES = ("onnx", "pyannote")
-TOP_DIRS = ("hagen", "tools", "hagen-themes", "python", ".venv", "models", "ffmpeg", ".git")
+TOP_DIRS = ("hagen", "tools", "hagen-themes", "vendor", "python", ".venv", "models", "ffmpeg",
+            ".git")
 #: Метка в имени файла, закрытого от git и живущего только на этой машине.
 LOCAL_MARK = ".local."
 #: Куда в чужой сборке смотрят .venv\pyvenv.cfg и скрипты .venv\Scripts вместо
@@ -293,13 +294,14 @@ def machine_paths() -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
-def neutral_venv(stage: Path) -> None:
+def neutral_venv(stage: Path, paths: list[str] | None = None) -> None:
     """Пути этой машины в .venv — на нейтральную папку.
 
     В pyvenv.cfg строку home на новом месте переписывают установщик и сама
     программа при запуске (portable.fix_venv_cfg); остальные строки справочные.
     Скрипты пакетов в .venv\\Scripts несут в первой строке путь к python.exe этой
-    машины; программа их не запускает.
+    машины; программа их не запускает. ``paths`` — какие пути считать путями
+    этой машины (по умолчанию — machine_paths()).
     """
     import re
 
@@ -322,7 +324,7 @@ def neutral_venv(stage: Path) -> None:
     scripts = stage / ".venv" / "Scripts"
     if not scripts.is_dir():
         return
-    paths = [re.compile(re.escape(p), re.IGNORECASE) for p in machine_paths()]
+    paths = [re.compile(re.escape(p), re.IGNORECASE) for p in (paths or machine_paths())]
     for item in scripts.iterdir():
         if not item.is_file() or item.suffix.lower() in (".exe", ".dll", ".pyd"):
             continue
@@ -590,8 +592,11 @@ def main() -> int:
     # В открытом релизе чужих настроек нет вовсе: программа начнёт с заводских.
     if not args.public:
         settings_for(stage, keys=not args.no_keys, tester=args.for_tester)
+    from hagen import release
+
+    info = dict(release.read(), diarize=args.diarize)   # номер версии и адрес обновлений — как есть
     with io.open(stage / "release.json", "w", encoding="utf-8") as fh:
-        json.dump({"diarize": args.diarize}, fh, ensure_ascii=False, indent=2)
+        json.dump(info, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
     with io.open(stage / "КАК УСТАНОВИТЬ.txt", "w", encoding="utf-8-sig", newline="\r\n") as fh:
         fh.write(readme_for(args.diarize))
