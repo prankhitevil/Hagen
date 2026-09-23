@@ -284,6 +284,12 @@ async def _startup() -> None:
     _start_idle_watch()
     _start_retention()
     dictation.start()
+    # Записи с телефона: сторож папок входящих и страница в локальной сети.
+    # Оба сами решают по настройкам, есть ли им работа.
+    from . import inbox, lan
+
+    inbox.start()
+    asyncio.get_running_loop().run_in_executor(None, lan.apply)
 
 
 def _sweep_uploads(older_than_s: float = 86400.0) -> None:
@@ -419,9 +425,13 @@ def _warmup_async() -> None:
 
 
 async def _shutdown() -> None:
+    from . import inbox, lan
+
     recordings.shutdown()
     _stop_call_watcher()
     dictation.stop()
+    inbox.stop()
+    lan.stop()
 
 
 # ====================================================================== детект звонка
@@ -695,6 +705,8 @@ def _capabilities_fresh() -> dict[str, Any]:
         caps["minutes_models"] = minutes.models_hint()
         caps["connections"] = _prov.public_connections()
         caps["models_cached"] = {role: _prov.cached_models(role) or {} for role in _prov.ROLES}
+        # У моделей документов — во что обойдётся протокол часового звонка.
+        caps["models_cached"]["docs"] = minutes.label_models(caps["models_cached"]["docs"])
     except Exception as err:
         caps["engines_note"] = str(err)
     try:
@@ -765,6 +777,13 @@ async def api_settings_post(request: Request) -> JSONResponse:
         # запуске: иначе человек поменял бы клавишу и решил, что она не работает.
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, dictation.start)
+    if "features" in patch or any(k.startswith("lan_") for k in patch):
+        # Страница для телефона поднимается и гаснет сразу: QR-код в
+        # настройках должен показывать то, что слушает порт на самом деле.
+        from . import lan
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lan.apply)
     public = config.public()
     try:
         public["autostart_present"] = platform.shell().autostart_enabled()
@@ -1259,6 +1278,13 @@ async def api_document_kinds(rec_id: str = "") -> JSONResponse:
                  "Документ можно сделать и здесь, вручную."},
     ]
     kinds = [k for k in kinds if k["key"] in media.KINDS]
+    # Оценка до отправки — по длине стенограммы этой записи, для каждого вида
+    # документа своя (у коротких видов модель может быть быстрее и дешевле).
+    costs: dict[str, str] = {}
+    if meta is not None:
+        chars = len(minutes.build_transcript_text(rec_id))
+        for key in minutes.DOC_KINDS:
+            costs[key] = minutes.estimate_cost(chars, key).get("text", "")
     return JSONResponse({
         "docs": [{"key": k, "title": v["title"], "hint": v["hint"]}
                  for k, v in minutes.DOC_KINDS.items()],
@@ -1268,6 +1294,7 @@ async def api_document_kinds(rec_id: str = "") -> JSONResponse:
         "source": (meta or {}).get("source") or "live",
         "shots": len((meta or {}).get("screenshots") or []),
         "warning": minutes.cloud_warning(config.get("minutes_engine") or "claude_cli"),
+        "costs": costs,
     })
 
 

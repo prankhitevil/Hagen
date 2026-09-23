@@ -189,6 +189,34 @@ UI_DOCS = r"""
       meta.duration_s = keep; S.current.segments = segs;
       paintAll();
       return ok || 'блок записи и вкладки не поменялись местами'; });
+    // 23.09: пишется ДРУГАЯ запись — у готовой остаются вкладки и правка, а
+    // «Стоп» — строкой сверху. Раньше блок записи закрывал всё.
+    await t('пишется другая запись: вкладки и «Править» на месте, «Стоп» строкой', () => {
+      const keep = S.recordingId;
+      S.recordingId = '20200101-000000-0000';
+      paintAll();
+      const ok = hid('live-controls') && !hid('rec-tabs') && !hid('rec-actions')
+        && !hid('live-bar') && !$('btn-edit-transcript').disabled;
+      const r = JSON.stringify({live: hid('live-controls'), tabs: hid('rec-tabs'),
+        actions: hid('rec-actions'), bar: hid('live-bar')});
+      S.recordingId = keep;
+      paintAll();
+      return (ok && hid('live-bar')) || r; });
+    await t('«V» разворачивает и сворачивает выбор устройств', () => {
+      const keep = S.recordingId, cur = S.current;
+      S.recordingId = '20200101-000000-0000'; S.current = null;
+      paintAll();
+      const lc = $('live-controls'), btn = $('btn-devices-fold');
+      const a = lc.classList.contains('folded');
+      btn.click();
+      const b = !lc.classList.contains('folded') && lc.classList.contains('unfolded')
+        && /ic-fold$/.test(btn.querySelector('use').getAttribute('href'));
+      btn.click();
+      const c = lc.classList.contains('folded')
+        && /ic-unfold$/.test(btn.querySelector('use').getAttribute('href'));
+      S.recordingId = keep; S.current = cur; S.devicesUnfolded = false;
+      paintAll();
+      return (a && b && c) || JSON.stringify([a, b, c]); });
     await t('предупреждение про весь звук — полосой и не постоянно', () =>
       (hid('far-warning') && !!$('far-warning').closest('.ctl-warn')
        && !/петл/i.test($('far-warning').textContent)) || $('far-warning').textContent.slice(0, 60));
@@ -721,8 +749,9 @@ UI_VOICES = r"""
         const shown = tabs.filter((x) => x.offsetParent !== null);
         const cols = new Set(shown.map((x) => Math.round(x.getBoundingClientRect().left))).size;
         const panes = document.querySelector('#dlg-settings .set-panes');
-        // Одиннадцатый раздел — «О программе»: версия и обновление.
-        return (tabs.length === 11 && shown.length >= 6 && cols === 1 && !!panes
+        // Одиннадцатый раздел — «О программе»: версия и обновление;
+        // двенадцатый — «С телефона» (23.09), за возможностью «phone».
+        return (tabs.length === 12 && shown.length >= 6 && cols === 1 && !!panes
           && nav.scrollWidth <= nav.clientWidth + 1)
           || JSON.stringify({n: tabs.length, shown: shown.length, cols, panes: !!panes,
             scroll: nav.scrollWidth, client: nav.clientWidth});

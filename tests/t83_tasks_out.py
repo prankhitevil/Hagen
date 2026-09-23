@@ -62,6 +62,9 @@ def ok(label, cond, detail=""):
 | Собрать смету | Пётр | к четвергу |
 | Позвонить в банк | Иван | не указан |
 | Прибраться | не определён | не указан |
+
+---
+_Подготовил Hagen, consigliere · 21.09.2026 11:07 · движок: api._
 """
 
 rec_id = store.create(title="Планёрка", source="live")["id"]
@@ -78,12 +81,14 @@ store.update(rec_id, {"has_minutes": True})
 def _fake_request(method, path, **kw):
     if СБОЙ["on"]:
         raise todoist.TodoistError("Не удалось связаться с Todoist. Проверьте интернет.")
+    # Ответы в виде API v1: проекты постранично, у задачи нет поля url.
     if method == "GET" and path == "/projects":
-        return [{"id": "11", "name": "Работа"}, {"id": "22", "name": "Личное"}]
+        if not (kw.get("params") or {}).get("cursor"):
+            return {"results": [{"id": "11", "name": "Работа"}], "next_cursor": "p2"}
+        return {"results": [{"id": "22", "name": "Личное"}], "next_cursor": None}
     if method == "POST" and path == "/tasks":
         ОТПРАВЛЕНО.append(kw.get("json") or {})
-        return {"id": "t%d" % len(ОТПРАВЛЕНО),
-                "url": "https://todoist.com/showTask?id=t%d" % len(ОТПРАВЛЕНО)}
+        return {"id": "t%d" % len(ОТПРАВЛЕНО)}
     raise AssertionError("неожиданный запрос %s %s" % (method, path))
 
 
@@ -95,6 +100,8 @@ pre = todoist.preview(rec_id)
 ok("сказано, что токена нет", pre["configured"] is False)
 ok("поручения всё равно показаны", len(pre["items"]) == 3, str(len(pre["items"])))
 ok("предпросмотр ничего не отправил", not ОТПРАВЛЕНО)
+ok("подпись под документом — не поручение",
+   all("Подготовил" not in i["text"] for i in pre["items"]), str([i["text"] for i in pre["items"]]))
 config.save({"todoist_token": ТОКЕН})
 pre = todoist.preview(rec_id)
 ok("с токеном сказано, что можно", pre["configured"] is True)
@@ -135,7 +142,12 @@ print("\n=== 5. Отметка «уже отправлено» ===")
 pre2 = todoist.preview(rec_id)
 sent = [i for i in pre2["items"] if i["sent"]]
 ok("две отмечены отправленными", len(sent) == 2, str([i["clean"] for i in sent]))
-ok("ссылка сохранена", all(i["url"] for i in sent))
+ok("ссылка сохранена, хотя Todoist её не прислал",
+   all(i["url"].startswith("https://app.todoist.com/app/task/t") for i in sent),
+   str([i["url"] for i in sent]))
+ok("проекты собраны со всех страниц",
+   [p["name"] for p in todoist.projects()] == ["Работа", "Личное"])
+ok("адрес API — v1", todoist.API.endswith("/api/v1"), todoist.API)
 before = len(ОТПРАВЛЕНО)
 res2 = todoist.send(rec_id, ["| Собрать смету | Пётр | к четвергу |"], "11", confirmed=True)
 ok("повтор не создал задачу", len(ОТПРАВЛЕНО) == before, "ушло ещё %d" % (len(ОТПРАВЛЕНО) - before))

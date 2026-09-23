@@ -120,6 +120,7 @@ GPL-3.0, несовместимости нет, но у того, кто раз�
 | python-multipart | 0.0.32 | Apache-2.0 |
 | pywebview | 6.2.1 | BSD-3-Clause |
 | httpx | 0.28.1 | BSD-3-Clause |
+| segno | 1.6.6 | BSD-3-Clause |
 | pywin32 | 312 | PSF |
 | psutil | 7.2.2 | BSD-3-Clause |
 | windows-toasts | 1.3.1 | Apache-2.0 |

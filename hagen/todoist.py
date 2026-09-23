@@ -33,8 +33,14 @@ from . import config, store
 
 log = logging.getLogger("hagen.todoist")
 
-API = "https://api.todoist.com/rest/v2"
+# REST v2 Todoist отключил: с сентября 2026 он отвечает 410 и просит перейти
+# на /api/v1. Токен тот же, личный.
+API = "https://api.todoist.com/api/v1"
+TASK_URL = "https://app.todoist.com/app/task/%s"
 TIMEOUT = 20.0
+
+#: Больше страниц проектов не листаем: заслон от зацикливания на кривом курсоре.
+MAX_PAGES = 20
 
 #: Сколько поручений разрешаем отправить за один раз. Заслон от «выделил всё
 #: подряд на часовой встрече и залил в Todoist сорок строк».
@@ -80,6 +86,9 @@ def _explain(err: Exception) -> str:
                     "возможно, он отозван или скопирован не полностью.")
         if code == 404:
             return "Todoist не нашёл проект: возможно, его удалили. Выберите другой."
+        if code == 410:
+            return ("Todoist отключил адрес, по которому программа к нему ходит. "
+                    "Нужно обновить Hagen.")
         if code == 429:
             return "Todoist просит подождать: слишком много запросов подряд. Попробуйте позже."
         return "Todoist ответил ошибкой %d." % code
@@ -107,9 +116,31 @@ def _request(method: str, path: str, **kw: Any) -> Any:
 def projects() -> list[dict[str, str]]:
     """Проекты Todoist: куда можно класть задачи."""
     _require_token()
-    data = _request("GET", "/projects") or []
+    data: list[dict[str, Any]] = []
+    cursor = ""
+    for _ in range(MAX_PAGES):
+        page = _request("GET", "/projects",
+                        params={"cursor": cursor} if cursor else None) or []
+        # API v1 отдаёт страницу {results, next_cursor}; простой список — на
+        # случай, если ответ снова станет прежним.
+        if isinstance(page, list):
+            data.extend(page)
+            break
+        data.extend(page.get("results") or [])
+        cursor = str(page.get("next_cursor") or "")
+        if not cursor:
+            break
     return [{"id": str(p.get("id") or ""), "name": str(p.get("name") or "")}
             for p in data if p.get("id")]
+
+
+def task_url(task: dict[str, Any]) -> str:
+    """Ссылка на созданную задачу. В API v1 поля url у задачи нет — собираем по id."""
+    url = str(task.get("url") or "")
+    if url:
+        return url
+    tid = str(task.get("id") or "")
+    return TASK_URL % tid if tid else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -217,9 +248,10 @@ def send(rec_id: str, texts: list[str], project_id: str = "",
         except TodoistError as err:
             failed.append({"text": text, "error": str(err)})
             break          # сеть или токен: дальше по списку будет то же самое
-        sent[norm] = {"id": str(task.get("id") or ""), "url": str(task.get("url") or ""),
+        url = task_url(task)
+        sent[norm] = {"id": str(task.get("id") or ""), "url": url,
                       "at": datetime.now().isoformat(timespec="seconds"), "text": text}
-        created.append({"text": text, "url": str(task.get("url") or "")})
+        created.append({"text": text, "url": url})
 
     if created:
         store.update(rec_id, {"sent_tasks": {v.get("text", k): v for k, v in sent.items()}})

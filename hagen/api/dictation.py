@@ -139,6 +139,10 @@ async def api_models(role: str = "docs", refresh: bool = False) -> JSONResponse:
     except Exception as err:
         log.warning("список моделей не получен: %s", err)
         raise HTTPException(status_code=502, detail="Не удалось получить список моделей.")
+    if role == "docs":
+        from .. import minutes
+
+        data = minutes.label_models(data)   # цена протокола часового звонка у каждой
     return JSONResponse(data)
 
 

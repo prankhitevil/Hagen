@@ -143,17 +143,12 @@ async def api_media_link(request: Request) -> JSONResponse:
     return JSONResponse(media.submit_link(url, info, _media_opts(body or {})))
 
 
-@router.post("/api/media/upload")
-async def api_media_upload(file: UploadFile, opts: str = "") -> JSONResponse:
-    """Готовый файл: видео, аудио или сами субтитры (.vtt/.srt)."""
-    from .. import media, subs
+async def save_upload(file: UploadFile, name: str) -> Path:
+    """Принять присланный файл кусками в data\\_uploads. Пустой — ошибка 400.
 
-    no_recording_now()
-    name = Path(file.filename or "файл").name
-    if not (audio_io.is_media(name) or subs.is_transcript_name(name)):
-        raise HTTPException(
-            status_code=400,
-            detail="Такой формат не поддерживается: %s" % Path(name).suffix)
+    Общее для загрузки со страницы и для страницы телефона в локальной сети:
+    оба пути кладут файл в одно место, дальше им занимается `media`.
+    """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     tmp = UPLOAD_DIR / ("%s_%s" % (uuid.uuid4().hex[:8], name))
     size = 0
@@ -168,6 +163,21 @@ async def api_media_upload(file: UploadFile, opts: str = "") -> JSONResponse:
     if size == 0:
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Файл пустой")
+    return tmp
+
+
+@router.post("/api/media/upload")
+async def api_media_upload(file: UploadFile, opts: str = "") -> JSONResponse:
+    """Готовый файл: видео, аудио или сами субтитры (.vtt/.srt)."""
+    from .. import media, subs
+
+    no_recording_now()
+    name = Path(file.filename or "файл").name
+    if not (audio_io.is_media(name) or subs.is_transcript_name(name)):
+        raise HTTPException(
+            status_code=400,
+            detail="Такой формат не поддерживается: %s" % Path(name).suffix)
+    tmp = await save_upload(file, name)
     try:
         parsed = json.loads(opts) if opts else {}
     except ValueError:

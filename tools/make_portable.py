@@ -92,10 +92,11 @@ RUNTIME_DIRS = (".venv", "python", "ffmpeg")
 #: Что относится к этому компьютеру. asr_keep_parts и asr_pending_delete — что
 #: здесь оставить и что удалить при запуске: на новом месте другие файлы.
 MACHINE_KEYS = ("mic_device_index", "far_device_index", "mic_device_name", "vault_confirmed",
-                "asr_keep_parts", "asr_pending_delete")
+                "asr_keep_parts", "asr_pending_delete", "lan_address")
 #: Что вычищается из settings.json при --no-keys. yt_proxy — тоже секрет:
-#: адрес прокси обычно содержит логин и пароль.
-SECRET_KEYS = ("hf_token", "api_keys", "yt_proxy", "todoist_token")
+#: адрес прокси обычно содержит логин и пароль. lan_key — ключ в ссылке на
+#: страницу для телефона: с ним чужой в той же сети шлёт файлы в программу.
+SECRET_KEYS = ("hf_token", "api_keys", "yt_proxy", "todoist_token", "lan_key")
 #: Что не кладётся в архив, кроме моделей распознавания (о них — model_skips):
 #: это качается по требованию (решение 16.09). Путь — относительно папки
 #: программы.
@@ -116,6 +117,8 @@ TESTER_SETTINGS = {
     "prompt_overrides": {},
     "todoist_project": {},
     "screenshot_folders": [],
+    "inbox_folders": [],
+    "lan_enabled": False,
     "assets_dir": "",
     "autostart_windows": False,
     "categories": ["Встречи", "Звонки", "Заметки"],

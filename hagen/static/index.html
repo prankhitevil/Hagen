@@ -119,6 +119,15 @@
         </div>
       </header>
 
+      <!-- Идёт другая запись, а открыта готовая: полный блок записи здесь
+           закрыл бы вкладки и правку, поэтому — одна строка с «Стоп». -->
+      <div id="live-bar" class="live-bar hidden">
+        <span class="dot-st bad blink"></span>идёт запись
+        <button id="live-bar-open" class="linky" type="button" title="Открыть запись, которая сейчас пишется"></button>
+        <span class="fb-spacer"></span>
+        <button id="live-bar-stop" class="rec-btn small" type="button" title="Остановить запись и дописать стенограмму"><svg aria-hidden="true"><use href="/static/icons.svg#ic-stop"></use></svg> Стоп</button>
+      </div>
+
       <!-- Органы живой записи. У открытой видеозаписи весь блок скрыт: «Старт»
            там начал бы писать микрофон и завёл бы новую заметку — это работа
            раздела «Запись», а не обработки готового файла. -->
@@ -545,6 +554,7 @@
       <button class="tab" data-tab="t-voices" title="Разметка голосов и база голосов">Голоса</button>
       <button class="tab" data-tab="t-processing" title="Чем делать документы, задачи в Todoist, виды документов">Документы</button>
       <button class="tab" data-tab="t-dictate" data-feature="dictation" title="Диктовка текста в любое окно по горячей клавише">Диктовка</button>
+      <button class="tab" data-tab="t-phone" data-feature="phone" title="Папки входящих и страница для телефона в локальной сети">С телефона</button>
       <button class="tab" data-tab="t-minutes" title="Модели распознавания, файлы и видео, загруженные части">Модели</button>
       <button class="tab" data-tab="t-keys" title="Все сочетания клавиш программы в одном месте">Сочетания</button>
       <span class="nav-sep" aria-hidden="true"></span>
@@ -867,7 +877,9 @@
             <div class="sctl"><input id="set-apikey" class="w-m" type="password"><span id="apikey-state" class="sstate"></span></div>
           </div>
           <div class="srow">
-            <div class="slabel">Модель</div>
+            <!-- Под подписью — во что обойдётся протокол часового звонка этой
+                 моделью, если сервис назвал цену в списке моделей. -->
+            <div class="slabel">Модель<span id="model-cost" class="shint"></span></div>
             <div class="sctl"><span class="ac ac-combo w-m">
                 <input id="set-model" type="text" autocomplete="off"
                        placeholder="начните вводить имя или откройте список">
@@ -1052,6 +1064,73 @@
                     title="Удалить всё надиктованное из истории. Вернуть будет нельзя.">Очистить…</button></div>
         </div>
         <div id="dictate-history" class="hidden"></div>
+      </div>
+    </div>
+
+    <!-- ================================================ С телефона -->
+    <!-- Записи с телефона (23.09): две дороги в одни входящие. Пришедший файл
+         распознаётся и размечается, документ — по кнопке. -->
+    <div id="t-phone" class="tabpane hidden">
+      <h2 class="set-title">С телефона</h2>
+      <p class="set-lead">Запись с телефона попадает в программу сама: через папку, за которой
+        программа следит, или через страницу в локальной сети. Файл распознаётся и раскладывается по
+        голосам; документ по нему — кнопкой, когда посмотрите стенограмму.</p>
+
+      <div class="sgroup">
+        <div class="grp-title">Папки входящих</div>
+        <div class="srow">
+          <div class="slabel">Папки<span class="shint">новый звуковой или видеофайл берётся в работу ·
+            <button type="button" class="linky js-more" data-more="inbox-more">как наполнять</button></span></div>
+          <div class="sctl sctl-col">
+            <div id="inbox-folders-list" class="slist"></div>
+            <!-- Список хранится строками в этом поле; на экране — строками с «×». -->
+            <textarea id="set-inbox-folders" rows="2" hidden></textarea>
+            <button class="ghost small js-pick-folder" type="button" data-for="set-inbox-folders" data-add="line"
+                    title="Выбрать папку в окне, как в Проводнике, и добавить в список">+ добавить папку</button>
+            <span id="inbox-state" class="sstate"></span>
+          </div>
+        </div>
+        <div id="inbox-more" class="smore hidden">Что уже лежало в папке, когда её добавили, не берётся —
+          только то, что появится после. Чем наполнять папку, программе всё равно: LocalSend
+          («Поделиться → LocalSend» на телефоне, на компьютере — папка приёма), Quick Share, «Связь с
+          телефоном» в Windows 11, папка облачного диска, куда пишет диктофон телефона, или папка
+          загрузок Telegram Desktop — файл, отправленный себе в «Избранное», окажется в ней сам.
+          Файл берётся, когда дописан; оригинал остаётся на месте.</div>
+      </div>
+
+      <div class="sgroup">
+        <div class="grp-title">Страница в локальной сети</div>
+        <label class="scheck"><input type="checkbox" id="set-lan"><span>Открыть страницу для телефона
+          <span class="shint">телефон и компьютер — в одной сети Wi-Fi; телефон открывает ссылку по QR-коду и отправляет файл ·
+            <button type="button" class="linky js-more" data-more="lan-more">подробнее</button></span></span></label>
+        <div id="lan-more" class="smore hidden">Страница слушает свой порт и умеет одно — принять
+          файл; стенограммы и настройки через неё недоступны. Открывается только по ссылке с ключом —
+          QR-код и есть эта ссылка; «Новый ключ» делает старую недействительной. При первом включении
+          Windows может спросить, разрешить ли программе принимать подключения, — нужно разрешить для
+          частных сетей. Если телефон страницу не открывает: проверьте, что оба в одной сети (на
+          рабочем Wi-Fi устройства часто разведены), что выбран адрес Wi-Fi, а не адрес VPN, и что
+          брандмауэр или антивирус пропускает порт.</div>
+        <div id="lan-box" class="hidden">
+          <div class="srow">
+            <div class="slabel">Адрес компьютера<span class="shint">какой показывать в ссылке</span></div>
+            <div class="sctl"><select id="set-lan-address" class="w-m"></select>
+              <span class="q" tabindex="0" title="У компьютера может быть несколько адресов: Wi-Fi, кабель, туннель VPN. Телефону нужен адрес той сети, в которой он сам, — обычно 192.168.…">?</span></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Порт</div>
+            <div class="sctl"><input id="set-lan-port" type="number" class="w-s" min="1024" max="65535" step="1">
+              <span id="lan-state" class="sstate"></span></div>
+          </div>
+          <div class="srow">
+            <div class="slabel">Ссылка для телефона<span class="shint">наведите камеру телефона на код</span></div>
+            <div class="sctl sctl-col">
+              <div id="lan-qr" class="lan-qr"></div>
+              <span id="lan-url" class="lan-url"></span>
+              <button id="btn-lan-key" class="ghost small" type="button"
+                      title="Сменить ключ в ссылке: прежний QR-код перестанет работать">Новый ключ</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1579,6 +1658,9 @@
       <span id="doc-kind-note" class="tiny muted"></span>
     </label>
     <div id="tpl-list" class="tpl-list"></div>
+    <!-- Оценка до отправки: по длине стенограммы и цене модели из списка
+         сервиса. Есть только у сервиса по ключу, который цены сообщает. -->
+    <div id="doc-cost-note" class="tiny muted hidden"></div>
     <div id="doc-shots-note" class="tiny muted hidden"></div>
     <!-- Одно поле «что сделать» (20.09): и вопрос, и заказ документа. -->
     <label class="field hidden" id="question-field">Что сделать

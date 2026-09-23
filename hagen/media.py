@@ -608,12 +608,18 @@ def _new_record(title: str, opts: dict[str, Any], source: str,
     )
 
 
-def submit_file(tmp: Path, name: str, opts: dict[str, Any]) -> dict[str, Any]:
-    """Готовый файл: видео, аудио или сами субтитры."""
+def submit_file(tmp: Path, name: str, opts: dict[str, Any],
+                extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Готовый файл: видео, аудио или сами субтитры.
+
+    `extra` — дополнительные поля карточки записи: так входящие с телефона
+    помнят, откуда пришли (папка или страница в сети), оставаясь для страницы
+    и заметки обычной записью из файла.
+    """
     from . import subs
 
     is_subs = subs.is_transcript_name(name)
-    meta = _new_record(Path(name).stem, opts, "file", name)
+    meta = _new_record(Path(name).stem, opts, "file", name, extra)
     rec_id = meta["id"]
 
     def get_source(handle: Any) -> dict[str, Any]:

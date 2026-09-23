@@ -393,6 +393,16 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
   white-space:nowrap;max-width:420px}
 .dev-line .meter{width:56px}
 .fold-btn{margin-left:auto}
+/* Развёрнуто кнопкой: строки-сводки не нужны, а сама кнопка остаётся — ею же
+   блок и сворачивают обратно. */
+#live-controls.unfolded .ctl-summary{display:flex;flex:1;justify-content:flex-end}
+#live-controls.unfolded .dev-lines{display:none}
+
+/* Пишется другая запись: строка с «Стоп» над вкладками готовой записи. */
+.live-bar{flex:none;display:flex;align-items:center;gap:8px;min-width:0;
+  padding:6px var(--pad-main);border-bottom:1px solid var(--line);font-size:var(--fs-sm)}
+.live-bar #live-bar-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live-bar .rec-btn{min-height:0;padding:3px 12px}
 
 .draft{background:var(--draft-bg);border:1px solid var(--warn-line);border-top:0;
   padding:9px 16px;display:flex;gap:10px;align-items:baseline}
@@ -608,6 +618,11 @@ select.w-m{width:auto;min-width:220px;field-sizing:content}
 .slist-row:first-child{border-top:0}
 .slist-row .sl-main{flex:1;min-width:0;overflow-wrap:anywhere}
 .slist-add{display:flex;align-items:center;gap:8px;padding:6px 0;flex-wrap:wrap}
+/* QR-код для телефона: всегда на белом, иначе в тёмной теме камера его не читает. */
+.lan-qr{display:inline-block;padding:8px;background:#fff;border-radius:var(--radius-ctl);line-height:0}
+.lan-qr:empty{display:none}
+.lan-qr svg{width:180px;height:180px;display:block}
+.lan-url{font-family:ui-monospace,Consolas,monospace;font-size:var(--fs-xs);overflow-wrap:anywhere;user-select:all}
 .slist-tools{display:flex;align-items:center;gap:6px;margin:10px 0 4px}
 /* Свёрнутая группа (пороги узнавания): заголовок раскрывает её. */
 .sfold > summary{cursor:pointer;list-style:none}

@@ -925,9 +925,17 @@ function paintButtons() {
   // stopRecording и так останавливает S.recordingId, а не открытую запись.
   $('btn-stop').disabled = !S.recordingId || S.starting;
   // Во время записи выбор устройств сворачивается в строку с уровнями;
-  // развернули кнопкой — остаётся развёрнутым до конца этой записи.
+  // та же кнопка разворачивает и сворачивает обратно; до конца записи
+  // выбранный вид держится.
   if (!S.recordingId) S.devicesUnfolded = false;
+  const unfolded = !!S.recordingId && S.devicesUnfolded;
   $('live-controls').classList.toggle('folded', !!S.recordingId && !S.devicesUnfolded);
+  $('live-controls').classList.toggle('unfolded', unfolded);
+  const foldTip = unfolded ? 'Свернуть выбор устройств' : 'Показать выбор устройств';
+  $('btn-devices-fold').title = foldTip;
+  $('btn-devices-fold').setAttribute('aria-label', foldTip);
+  $('btn-devices-fold').querySelector('use')
+    .setAttribute('href', '/static/icons.svg#' + (unfolded ? 'ic-fold' : 'ic-unfold'));
   // Свёрнутые устройства — по строке на каждое: имя и уровень.
   const farOn = $('chk-far').checked;
   $('sum-mic-name').textContent = devLabel('mic-select');
@@ -984,12 +992,21 @@ function recIsFresh(m) {
 function paintRecShell() {
   const m = S.current && S.current.meta;
   const isVideo = !!m && isVideoRec(m) && !S.recordingId && S.mode === 'video';
-  // Пока идёт запись, блок виден на любой открытой записи: иначе человек
-  // остаётся без кнопки «Стоп» — потерять её нельзя ни на одном экране.
-  const live = !!S.recordingId || !m || m.status === 'recording' || recIsFresh(m);
+  // Блок записи — у той записи, что пишется, у новой и на пустом экране.
+  const live = !m || m.status === 'recording' || recIsFresh(m)
+    || (!!S.recordingId && m.id === S.recordingId);
+  // Открыта готовая запись, а пишется другая: «Стоп» потерять нельзя ни на
+  // одном экране, но и вкладки с правкой у готовой записи отнимать незачем.
+  const other = !!S.recordingId && !live;
   const show = live && !isVideo;
   $('live-controls').classList.toggle('hidden', !show);
   $('rec-mode-field').classList.toggle('hidden', !show);
+  $('live-bar').classList.toggle('hidden', !other);
+  if (other) {
+    const r = (S.recordings || []).find((x) => x.id === S.recordingId);
+    $('live-bar-open').textContent = (r && r.title) || 'открыть';
+    $('live-bar-stop').disabled = S.starting;
+  }
   $('rec-tabs').classList.toggle('hidden', live);
   $('rec-actions').classList.toggle('hidden', live);
   $('rec-status').classList.toggle('hidden', live);
@@ -2850,6 +2867,8 @@ const FEATURES = [
   { key: 'video_getcourse', name: 'Видео: GetCourse', note: 'Источник видео на вкладке «Видео».' },
   { key: 'video_sharepoint', name: 'Видео: SharePoint и Teams', note: 'Источник видео на вкладке «Видео».' },
   { key: 'video_password', name: 'Видео: сайт по паролю', note: 'Источник видео на вкладке «Видео».' },
+  { key: 'phone', name: 'Записи с телефона',
+    note: 'Папки входящих и страница в локальной сети: запись с телефона попадает в программу сама.' },
   { key: 'advanced', name: 'Тонкие настройки',
     note: 'Раздел «Тонкие настройки» и пороги узнавания в «Голосах»: распознавание, разметка голосов, отмена правок, язык инструкций.' },
 ];
@@ -2936,6 +2955,10 @@ async function openSettings() {
   $('set-shots').checked = s.screenshots_enabled !== false;
   $('set-shot-folders').value = (s.screenshot_folders || []).join('\n');
   loadShotFolders();
+  $('set-inbox-folders').value = (s.inbox_folders || []).join('\n');
+  loadInbox();
+  fillLan(s);
+  loadLan();
   $('set-mic-pill').checked = s.mic_pill !== false;
   $('set-fix-after').value = s.fix_suggest_after == null ? 3 : s.fix_suggest_after;
   loadFixes();
@@ -3191,6 +3214,72 @@ async function loadShotFolders() {
       : 'Список пуст, и сама программа ни одной папки снимков не нашла: добавьте ту, куда они сохраняются.');
 }
 
+/* «Настройки → С телефона»: папки входящих. Свой список — строками с «×»;
+   служба говорит, какой папки нет и сколько файлов уже взято. */
+async function loadInbox() {
+  const box = $('inbox-state');
+  const field = $('set-inbox-folders');
+  let res;
+  try { res = await api('/api/phone/inbox'); } catch (e) { box.textContent = e.message; return; }
+  const own = res.folders || [];
+  const list = $('inbox-folders-list');
+  list.innerHTML = own.map((r, i) => `<div class="slist-row">
+      <span class="sl-main">${esc(r.path)}</span>
+      ${r.exists ? '' : '<span class="sstate warn-line">папки нет</span>'}
+      <button type="button" class="ghost small js-inbox-del" data-i="${i}" title="Убрать папку из списка" aria-label="Убрать папку">×</button>
+    </div>`).join('');
+  list.querySelectorAll('.js-inbox-del').forEach((b) => {
+    b.onclick = async () => {
+      const raw = (own[Number(b.dataset.i)] || {}).raw;
+      field.value = field.value.split('\n').map((s) => s.trim())
+        .filter((s) => s && s !== raw).join('\n');
+      await applySettings(field);
+    };
+  });
+  const last = res.last && res.last.name ? ` · последний: ${res.last.name}` : '';
+  box.textContent = own.length
+    ? (own.some((r) => r.exists)
+      ? (res.taken ? `взято файлов: ${res.taken}${last}` : 'жду новые файлы')
+      : 'Ни одной из этих папок нет — входящие брать неоткуда.')
+    : 'Список пуст: добавьте папку, куда телефон присылает записи.';
+}
+
+/* Страница в локальной сети: галочка, адрес, порт, QR-код. Ссылку с ключом
+   и картинку делает служба; страница только показывает. */
+function fillLan(s) {
+  $('set-lan').checked = !!s.lan_enabled;
+  $('set-lan-port').value = s.lan_port || 8788;
+  $('lan-box').classList.toggle('hidden', !s.lan_enabled);
+}
+
+async function loadLan() {
+  const sel = $('set-lan-address');
+  const state = $('lan-state');
+  let res;
+  try { res = await api('/api/phone/lan'); } catch (e) { state.textContent = e.message; return; }
+  $('lan-box').classList.toggle('hidden', !res.enabled);
+  const ips = res.addresses || [];
+  sel.innerHTML = ips.length
+    ? ips.map((ip) => `<option value="${esc(ip)}">${esc(ip)}</option>`).join('')
+    : '<option value="">адрес не найден</option>';
+  sel.value = res.address || '';
+  $('lan-qr').innerHTML = res.qr_svg || '';
+  $('lan-url').textContent = res.url || '';
+  if (!res.enabled) { state.textContent = ''; return; }
+  state.textContent = res.running
+    ? `слушает порт ${res.port}`
+    : (res.error || 'служба не запущена');
+  state.classList.toggle('warn-line', !res.running);
+}
+
+async function newLanKey() {
+  try {
+    await api('/api/phone/lan/key', { method: 'POST', body: {} });
+    await loadLan();
+    notice('Ключ сменён — старая ссылка больше не работает', 'ok');
+  } catch (e) { notice(e.message, 'err'); }
+}
+
 /* «Настройки → Общие»: где лежит звук и видео, сколько занимает, что удалится по сроку. */
 async function loadStorage() {
   let st;
@@ -3377,6 +3466,7 @@ function modelItems(role) {
     value: m.id,
     hint: [m.title && m.title !== m.id ? m.title : '', priceLabel(m).replace(/^ — /, '')]
       .filter(Boolean).join(' · '),
+    hour_cost: m.hour_cost || '',
   }));
 }
 
@@ -3518,6 +3608,7 @@ async function refreshModels(role, btn) {
     S.models = S.models || {};
     S.models[role] = res;
     paintConnections();
+    paintModelCost();                    // список пришёл — цена под полем «Модель»
     const n = (role === 'asr' ? res.stt : res.chat) || [];
     notice(`Моделей получено: ${n.length}. Откройте список у поля «Модель» — `
       + 'начните вводить, и он сузится.', 'ok');
@@ -3552,18 +3643,31 @@ function bindConnections() {
   });
 }
 
-/* Цена модели, если сервис её сообщил. Сразу считаем «за час записи» и «за
-   протокол часового совещания»: голые цифры за миллион токенов человеку без
-   привычки ничего не говорят. */
+/* Цена модели, если сервис её сообщил. Голые цифры за миллион токенов
+   человеку без привычки ничего не говорят, поэтому: у распознавания — «за час
+   записи», у моделей документов — «за протокол часового звонка» (hour_cost
+   считает служба той же формулой, что и оценку в окне «Сделать документ»). */
 function priceLabel(m) {
   const p = m.price || {};
   const cur = p.currency === 'RUB' ? '₽' : (p.currency || '');
   if (p.per_minute) return ` — ${(p.per_minute * 60).toFixed(1)} ${cur} за час записи`;
-  if (p.in_per_million && p.out_per_million) {
-    const perDoc = p.in_per_million * 0.03 + p.out_per_million * 0.004;
-    return ` — примерно ${perDoc.toFixed(2)} ${cur} за протокол`;
-  }
+  if (m.hour_cost) return ` — ${m.hour_cost} за протокол часового звонка`;
   return '';
+}
+
+/* Под подписью «Модель» — во что обойдётся протокол часового звонка моделью,
+   вписанной в поле. Цены только из списка сервиса: нет списка — говорим, где
+   его взять; модель без цены — так и пишем. */
+function paintModelCost() {
+  const box = $('model-cost');
+  const id = $('set-model').value.trim();
+  if ($('set-engine').value !== 'api' || !id) { box.textContent = ''; return; }
+  const list = modelItems('docs');
+  if (!list.length) { box.textContent = 'цену покажет «Обновить список моделей»'; return; }
+  const m = list.find((x) => x.value === id);
+  box.textContent = m && m.hour_cost
+    ? `обработка протокола (час звонка) ${m.hour_cost}`
+    : 'сервис цену этой модели не сообщает';
 }
 
 /* Какие модели подставятся на самом деле. Строку считает служба (она знает
@@ -3576,6 +3680,7 @@ function refreshModelsHint() {
   const auto = $('set-engine').value === 'claude_cli' && !$('set-cli-model').value;
   $('quality-state').textContent = auto ? 'Модель подбирается сама по длине записи.' : now;
   $('quality-state').title = now;
+  paintModelCost();
 }
 
 /* Сеть для Claude CLI (23.09): режим — строками на выбор, как виды документов;
@@ -3880,6 +3985,12 @@ function collectSettings() {
     voice_suggest_threshold: parseFloat($('set-suggest').value) || 0.45,
     screenshots_enabled: $('set-shots').checked,
     screenshot_folders: $('set-shot-folders').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    inbox_folders: $('set-inbox-folders').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    lan_enabled: $('set-lan').checked,
+    lan_port: parseInt($('set-lan-port').value, 10) || 8788,
+    // Список адресов заполняет служба чуть позже открытия окна; пока он пуст —
+    // не затирать выбранный адрес пустотой.
+    lan_address: $('set-lan-address').value || (S.settings && S.settings.lan_address) || '',
     mic_pill: $('set-mic-pill').checked,
     fix_suggest_after: Number($('set-fix-after').value) || 3,
     tray_enabled: $('set-tray').checked,
@@ -3962,6 +4073,8 @@ async function applySettings(from) {
     // Сменили выбор моделей — служба пересчитает, что скачать и что не нужно.
     if (from && /^set-(asr|live-draft)/.test(from.id || '')) await loadAsrModels();
     if (from && from.id === 'set-shot-folders') await loadShotFolders();
+    if (from && from.id === 'set-inbox-folders') await loadInbox();
+    if (from && /^set-lan/.test(from.id || '')) await loadLan();
     await loadState();
     paintVaultState();
     // Строки под полями считает служба по сохранённому — перерисовываем их.
@@ -4005,6 +4118,7 @@ async function openMinutes() {
     notice(e.message, 'err'); return;
   }
   S.docKinds = res.docs || [];
+  const costs = res.costs || {};
   $('cloud-warning').textContent = '⚠ ' + (res.warning || '');
   const kinds = res.kinds || [];
   $('doc-video-kind').innerHTML = kinds.map((k) =>
@@ -4018,6 +4132,11 @@ async function openMinutes() {
     S.tplChosen = key;
     $('tpl-list').querySelectorAll('.tpl').forEach((x) => x.classList.toggle('sel', x.dataset.k === key));
     $('question-field').classList.toggle('hidden', key !== 'question');
+    // Оценка по длине стенограммы — только когда сервис назвал цену модели.
+    const cost = (costs[key] || '').replace(/^≈\s*/, '');
+    $('doc-cost-note').classList.toggle('hidden', !cost);
+    $('doc-cost-note').textContent = cost
+      ? `Примерно ${cost} за этот документ — оценка по длине стенограммы и цене модели.` : '';
   };
   $('tpl-list').innerHTML = S.docKinds.map((d) =>
     `<div class="tpl" data-k="${esc(d.key)}" title="${esc(d.hint)}">
@@ -5627,6 +5746,7 @@ function bindRecordActions() {
   $('acts-more').onclick = openActionsMenu;
   $('btn-features-all').onclick = enableAllFeatures;
   $('btn-features-default').onclick = resetFeatures;
+  $('btn-lan-key').onclick = newLanKey;
   // Словарь замен: своя замена — двумя полями и «+ добавить».
   $('btn-fix-add').onclick = async () => {
     const from = $('fix-new-from').value.trim();
@@ -5921,9 +6041,11 @@ function bindViewAndStorage() {
     b.onclick = () => saveView({ ui_density: b.dataset.densityPick });
   });
   $('btn-devices-fold').onclick = () => {
-    S.devicesUnfolded = true;
-    $('live-controls').classList.remove('folded');
+    S.devicesUnfolded = !S.devicesUnfolded;
+    paintButtons();
   };
+  $('live-bar-stop').onclick = stopRecording;
+  $('live-bar-open').onclick = () => { if (S.recordingId) openRecording(S.recordingId); };
   ['audio', 'videos'].forEach((what) => {
     $('btn-reveal-' + what).onclick = async () => {
       try { await api('/api/storage/reveal', { method: 'POST', body: { what: what } }); } catch (e) { notice(e.message, 'err'); }

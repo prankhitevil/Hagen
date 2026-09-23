@@ -545,24 +545,60 @@ def _auth_headers(kind: str, key: str) -> dict[str, str]:
 
 
 def _price_of(item: dict[str, Any]) -> dict[str, Any]:
-    """Цены, если сервис их отдаёт. У polza они приходят прямо в списке моделей."""
+    """Цены, если сервис их отдаёт — только тогда: таблиц цен в программе нет.
+
+    Два известных вида записи в списке моделей:
+      * polza — за миллион токенов, с валютой (prompt_per_million,
+        completion_per_million, stt_per_minute, currency). У моделей чата цена
+        лежит не в самой модели, а в top_provider.pricing — проверено живым
+        запросом 23.09;
+      * OpenRouter — за ОДИН токен строкой в долларах (prompt, completion);
+        «-1» там значит «цена плавающая», такую не показываем.
+    На выходе всегда одно: in_per_million, out_per_million, per_minute, currency.
+    """
     pricing = item.get("pricing")
+    if not isinstance(pricing, dict):
+        top = item.get("top_provider")
+        pricing = top.get("pricing") if isinstance(top, dict) else None
     if not isinstance(pricing, dict):
         return {}
     out: dict[str, Any] = {}
-    for key, dst in (("stt_per_minute", "per_minute"),
-                     ("prompt_per_million", "in_per_million"),
-                     ("completion_per_million", "out_per_million")):
+    fields = (("stt_per_minute", "per_minute", 1.0),
+              ("prompt_per_million", "in_per_million", 1.0),
+              ("completion_per_million", "out_per_million", 1.0),
+              ("prompt", "in_per_million", 1e6),
+              ("completion", "out_per_million", 1e6))
+    for key, dst, scale in fields:
         val = pricing.get(key)
-        if val in (None, ""):
+        if val in (None, "") or dst in out:
             continue
         try:
-            out[dst] = float(val)
+            num = float(val)
         except (TypeError, ValueError):
             continue
+        if num < 0:
+            continue
+        out[dst] = num * scale
     if out:
-        out["currency"] = str(pricing.get("currency") or "").strip()
+        currency = str(pricing.get("currency") or "").strip()
+        if not currency and ("prompt" in pricing or "completion" in pricing):
+            currency = "USD"
+        out["currency"] = currency
     return out
+
+
+def model_price(role: str, model_id: str) -> dict[str, Any]:
+    """Цена модели по уже полученному списку. Пусто — список не спрашивали,
+    модели в нём нет или сервис цен не сообщает."""
+    cached = cached_models(role) or {}
+    want = str(model_id or "").strip()
+    if not want:
+        return {}
+    for group in ("chat", "stt"):
+        for item in cached.get(group) or []:
+            if item.get("id") == want:
+                return dict(item.get("price") or {})
+    return {}
 
 
 def _entry(item: Any) -> dict[str, Any] | None:

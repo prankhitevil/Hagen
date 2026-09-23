@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Hagen — с телефона</title>
+<!-- Страница для телефона: открывается по QR-коду из настроек, шлёт файл в
+     обработку. Ключ — в адресе (?k=…), страница передаёт его в каждом запросе.
+     Оформление своё и короткое: страница живёт отдельно от основной и грузится
+     по Wi-Fi одним файлом. -->
+<style>
+  :root{color-scheme:light dark;--bg:#f6f5f2;--card:#fff;--ink:#1d1c1a;--muted:#6f6b64;
+    --line:#dcd8d0;--accent:#b8452f;--ok:#2f7a4b;--err:#b23a2f}
+  @media (prefers-color-scheme:dark){:root{--bg:#191817;--card:#242321;--ink:#ece9e3;
+    --muted:#9d988f;--line:#3a3834;--accent:#e0644c;--ok:#5fbf85;--err:#e06a5e}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:20px 16px calc(24px + env(safe-area-inset-bottom))}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .big{display:flex;align-items:center;justify-content:center;width:100%;min-height:64px;border:0;border-radius:12px;
+    background:var(--accent);color:#fff;font:600 18px system-ui,sans-serif;cursor:pointer}
+  .big:disabled{opacity:.5}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+  .hint{color:var(--muted);font-size:14px;margin:12px 0 0}
+  .state{font-size:14px;margin:0 0 10px}
+  .state.ok{color:var(--ok)} .state.err{color:var(--err)}
+  .item{padding:10px 0;border-top:1px solid var(--line);font-size:15px}
+  .item:first-child{border-top:0}
+  .name{overflow-wrap:anywhere}
+  .bar{height:8px;border-radius:4px;background:var(--line);margin-top:6px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+  .done .bar i{background:var(--ok)} .fail .bar i{background:var(--err)}
+  .st{font-size:13px;color:var(--muted);margin-top:4px}
+  .done .st{color:var(--ok)} .fail .st{color:var(--err)}
+</style>
+</head>
+<body>
+<h1>Hagen</h1>
+<p class="sub">Запись с телефона — в программу на компьютере</p>
+
+<div class="card">
+  <p id="link" class="state">Проверяю связь с компьютером…</p>
+  <label class="big" id="pick-btn" for="pick">Выбрать запись</label>
+  <input id="pick" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.aac,.flac,.wma,.mp4,.mkv,.mov,.webm" multiple>
+  <p class="hint">Диктофон, голосовое, видео — любой файл со звуком. На компьютере запись
+    распознается и разложится по голосам; документ по ней — кнопкой в самой программе.</p>
+</div>
+
+<div class="card" id="list-card" hidden>
+  <div id="list"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var key = new URLSearchParams(location.search).get('k') || '';
+  var $ = function (id) { return document.getElementById(id); };
+  var link = $('link');
+
+  function setLink(text, cls) { link.textContent = text; link.className = 'state ' + (cls || ''); }
+
+  fetch('/ping?k=' + encodeURIComponent(key)).then(function (r) {
+    if (!r.ok) throw new Error(r.status === 403 ? 'ссылка устарела — откройте QR-код заново' : 'ошибка ' + r.status);
+    setLink('Компьютер на связи', 'ok');
+  }).catch(function (e) { setLink('Нет связи с компьютером: ' + e.message, 'err'); });
+
+  var queue = [];
+  var busy = false;
+
+  function row(file) {
+    var el = document.createElement('div');
+    el.className = 'item';
+    el.innerHTML = '<div class="name"></div><div class="bar"><i></i></div><div class="st">в очереди</div>';
+    el.querySelector('.name').textContent = file.name;
+    $('list').appendChild(el);
+    $('list-card').hidden = false;
+    return el;
+  }
+
+  function send(file, el) {
+    return new Promise(function (resolve) {
+      var xhr = new XMLHttpRequest();
+      var fd = new FormData();
+      fd.append('k', key);
+      fd.append('file', file, file.name);
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) el.querySelector('.bar i').style.width = Math.round(100 * e.loaded / e.total) + '%';
+      };
+      xhr.onload = function () {
+        var msg = '';
+        try { msg = (JSON.parse(xhr.responseText) || {}).detail || ''; } catch (e) { msg = ''; }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          el.className = 'item done';
+          el.querySelector('.bar i').style.width = '100%';
+          el.querySelector('.st').textContent = 'отправлено — распознаётся на компьютере';
+        } else {
+          el.className = 'item fail';
+          el.querySelector('.st').textContent = 'не принято: ' + (msg || ('ошибка ' + xhr.status));
+        }
+        resolve();
+      };
+      xhr.onerror = function () {
+        el.className = 'item fail';
+        el.querySelector('.st').textContent = 'связь оборвалась — попробуйте ещё раз';
+        resolve();
+      };
+      xhr.open('POST', '/upload');
+      xhr.send(fd);
+      el.querySelector('.st').textContent = 'отправляю…';
+    });
+  }
+
+  function next() {
+    if (busy || !queue.length) return;
+    busy = true;
+    var item = queue.shift();
+    send(item.file, item.el).then(function () { busy = false; next(); });
+  }
+
+  $('pick').addEventListener('change', function () {
+    var files = Array.prototype.slice.call(this.files || []);
+    files.forEach(function (f) { queue.push({ file: f, el: row(f) }); });
+    this.value = '';
+    next();
+  });
+})();
+</script>
+</body>
+</html>

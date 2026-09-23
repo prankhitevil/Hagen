@@ -20,9 +20,12 @@
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -30,7 +33,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from . import config, jobs, platform, providers, store, vpn
 
@@ -61,6 +64,12 @@ CHUNK_LIMITS: dict[str, int] = {
 # Предел длины ответа. У Яндекса он вычитается из того же тесного контекста,
 # поэтому там просим меньше, иначе на входной текст места не остаётся.
 MAX_TOKENS_LIMITS: dict[str, int] = {"yandexgpt": 8000}
+
+# Оценка стоимости до отправки — по тем же замерам, что и пределы выше.
+CHARS_PER_HOUR = 60000          # час разговора — около 60 тысяч символов стенограммы
+CHARS_PER_TOKEN = 2.2           # русская речь: примерно 2,2 символа на токен
+DOC_OUT_TOKENS = 4000           # итоговый документ: протокол часового совещания
+DIGEST_OUT_TOKENS = 2000        # промежуточная выжимка по одному куску
 
 # Две модели там, где их имена известны заранее: быстрая и сильная. Сильная
 # пишет протокол, быстрая — короткие документы и промежуточные выжимки.
@@ -1501,7 +1510,7 @@ def models_hint(engine: str | None = None) -> str:
     target = _target_provider(engine)
     fast = _model_for(target, "fast")
     strong = _model_for(target, "strong")
-    hours = _chunk_limit(engine) / 60000.0     # ~60 тысяч символов на час разговора
+    hours = _chunk_limit(engine) / float(CHARS_PER_HOUR)
     tail = "В один запрос влезает примерно %s ч разговора: %s." % (
         ("%.1f" % hours).replace(".", ","),
         "час совещания уходит целиком" if hours >= 1.2
@@ -1548,6 +1557,7 @@ def _call_anthropic(c: dict[str, Any], prompt: str, text: str, key: str, model: 
         service=c["service"],
         secrets=[key],
     )
+    _note_usage("anthropic", data, model)
     if str(data.get("stop_reason")) == "refusal":
         raise RuntimeError("%s отказался обрабатывать этот текст." % c["service"])
     parts: list[str] = []
@@ -1577,6 +1587,7 @@ def _call_openai(c: dict[str, Any], prompt: str, text: str, key: str, model: str
         service=c["service"],
         secrets=[key],
     )
+    _note_usage("openai", data, model)
     out = _first_choice_text(data)
     if not out:
         raise RuntimeError("%s вернул пустой ответ." % c["service"])
@@ -1618,6 +1629,7 @@ def _call_gigachat(c: dict[str, Any], prompt: str, text: str, key: str, model: s
         service=c["service"],
         secrets=[key, token],
     )
+    _note_usage("gigachat", data, model)
     out = _first_choice_text(data)
     if not out:
         raise RuntimeError("%s вернул пустой ответ." % c["service"])
@@ -1653,6 +1665,7 @@ def _call_yandexgpt(c: dict[str, Any], prompt: str, text: str, key: str, model: 
         service=c["service"],
         secrets=[key],
     )
+    _note_usage("yandexgpt", data, model)
     alts = ((data or {}).get("result") or {}).get("alternatives") or []
     out = ""
     if alts:
@@ -1670,6 +1683,208 @@ CALLS: dict[str, Any] = {
     "gigachat": _call_gigachat,
     "yandexgpt": _call_yandexgpt,
 }
+
+
+# ---------------------------------------------------------------- стоимость
+#
+# Цены в программе не хранятся: показываем только то, что сервис сам назвал в
+# списке моделей (providers.model_price). Кто цен не отдаёт — у того остаются
+# одни токены; Claude CLI не сообщает и токенов.
+
+
+class Spend:
+    """Копилка одного документа: сколько токенов ушло и почём.
+
+    Наполняется по ходу запросов (_note_usage), а не возвращается из каждого
+    вызова: обработчики CALLS и _run_engine подменяются в проверках, и менять
+    их ответ ради учёта не хотелось.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.cost = 0.0
+        self.currency = ""
+        self.priced = True          # у КАЖДОГО запроса была цена
+
+    @property
+    def tokens(self) -> int:
+        return self.tokens_in + self.tokens_out
+
+    def add(self, tokens_in: int, tokens_out: int, price: dict[str, Any]) -> None:
+        self.calls += 1
+        self.tokens_in += max(0, int(tokens_in))
+        self.tokens_out += max(0, int(tokens_out))
+        pin, pout = price.get("in_per_million"), price.get("out_per_million")
+        if pin is None or pout is None:
+            self.priced = False
+            return
+        cur = str(price.get("currency") or "")
+        if self.currency and cur != self.currency:      # смесь валют не складывается
+            self.priced = False
+            return
+        self.currency = cur
+        self.cost += tokens_in * float(pin) / 1e6 + tokens_out * float(pout) / 1e6
+
+    def text(self) -> str:
+        """Хвост подписи документа. Пусто — сказать нечего (Claude CLI)."""
+        if not self.tokens:
+            return ""
+        out = "токенов: %s" % thousands(self.tokens)
+        if self.priced:
+            out += " · стоимость: %s" % money(self.cost, self.currency)
+        return out
+
+    def as_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
+                             "requests": self.calls}
+        if self.priced and self.tokens:
+            d["cost"] = round(self.cost, 4)
+            d["currency"] = self.currency
+        return d
+
+
+_SPEND: contextvars.ContextVar[Spend | None] = contextvars.ContextVar("hagen_spend", default=None)
+
+
+@contextlib.contextmanager
+def _tracking() -> Iterator[Spend]:
+    """Открыть копилку на время сборки документа. Сборка идёт в одном потоке,
+    и все запросы внутри блока попадают в неё."""
+    spend = Spend()
+    token = _SPEND.set(spend)
+    try:
+        yield spend
+    finally:
+        _SPEND.reset(token)
+
+
+#: Где в ответе сервиса лежит расход токенов: путь к usage и имена полей.
+_USAGE_FIELDS: dict[str, tuple[tuple[str, ...], str, str]] = {
+    "openai": (("usage",), "prompt_tokens", "completion_tokens"),
+    "gigachat": (("usage",), "prompt_tokens", "completion_tokens"),
+    "anthropic": (("usage",), "input_tokens", "output_tokens"),
+    "yandexgpt": (("result", "usage"), "inputTextTokens", "completionTokens"),
+}
+
+
+def _note_usage(kind: str, data: Any, model: str) -> None:
+    """Расход этого запроса — в открытую копилку. Нет копилки или usage — молча."""
+    spend = _SPEND.get()
+    path, key_in, key_out = _USAGE_FIELDS.get(kind) or _USAGE_FIELDS["openai"]
+    if spend is None or not isinstance(data, dict):
+        return
+    usage: Any = data
+    for step in path:
+        usage = usage.get(step) if isinstance(usage, dict) else None
+    if not isinstance(usage, dict):
+        return
+    try:
+        tokens_in = int(usage.get(key_in) or 0)
+        tokens_out = int(usage.get(key_out) or 0)
+    except (TypeError, ValueError):
+        return
+    if tokens_in <= 0 and tokens_out <= 0:
+        return
+    spend.add(tokens_in, tokens_out, providers.model_price("docs", model))
+
+
+CURRENCY_SIGNS = {"RUB": "₽", "USD": "$", "EUR": "€"}
+
+
+def money(amount: float, currency: str) -> str:
+    """«3,20 ₽», «0,04 $»; мелочь мельче копейки — тремя знаками."""
+    digits = 3 if 0 < amount < 0.01 else 2
+    text = ("%.*f" % (digits, amount)).replace(".", ",")
+    sign = CURRENCY_SIGNS.get(str(currency or "").upper(), str(currency or ""))
+    return "%s %s" % (text, sign) if sign else text
+
+
+def thousands(n: int) -> str:
+    """12345 → «12 345» (узкий неразрывный пробел)."""
+    return "{:,}".format(int(n)).replace(",", " ")
+
+
+def _prompt_chars(template: str) -> int:
+    """Длина инструкции, которая уходит вместе с текстом, — для оценки."""
+    try:
+        if template in ("meeting", "lecture", "interview"):
+            return len(video_prompt(template))
+        if template == "question":
+            return len(_final_prompt("question", "…"))
+        return len(_final_prompt("protocol", None))
+    except (ValueError, KeyError):        # незнакомый вид — типичная длина
+        return 4000
+
+
+def _cost_of(chars: int, template: str, price_final: dict[str, Any],
+             price_map: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    """Одна формула на все оценки: и «час звонка» в настройках, и «этот документ».
+
+    Повторяет ход generate(): стенограмма короче предела — один запрос;
+    длиннее — выжимка по каждому куску быстрой моделью и итог из выжимок.
+    Пусто — цены какой-то из нужных моделей нет.
+    """
+    def known(p: dict[str, Any]) -> bool:
+        return p.get("in_per_million") is not None and p.get("out_per_million") is not None
+
+    if chars <= 0 or not known(price_final):
+        return {}
+    n = max(1, math.ceil(chars / max(1, max_chars)))
+    prompt = _prompt_chars(template)
+    tokens_in = tokens_out = 0.0
+    cost = 0.0
+    if n > 1:
+        if not known(price_map):
+            return {}
+        map_in = n * (chars / n + len(_map_prompt(1, n))) / CHARS_PER_TOKEN
+        map_out = float(n * DIGEST_OUT_TOKENS)
+        cost += (map_in * float(price_map["in_per_million"])
+                 + map_out * float(price_map["out_per_million"])) / 1e6
+        tokens_in += map_in
+        tokens_out += map_out
+        final_in = map_out + prompt / CHARS_PER_TOKEN     # на вход итогу идут выжимки
+    else:
+        final_in = (chars + prompt) / CHARS_PER_TOKEN
+    final_out = float(DOC_OUT_TOKENS)
+    cost += (final_in * float(price_final["in_per_million"])
+             + final_out * float(price_final["out_per_million"])) / 1e6
+    tokens_in += final_in
+    tokens_out += final_out
+    currency = str(price_final.get("currency") or price_map.get("currency") or "")
+    return {"cost": round(cost, 4), "currency": currency,
+            "tokens_in": int(tokens_in), "tokens_out": int(tokens_out),
+            "requests": n if n == 1 else n + 1,
+            "text": "≈ " + money(cost, currency)}
+
+
+def estimate_cost(chars: int, template: str = "protocol",
+                  engine: str | None = None) -> dict[str, Any]:
+    """Во что обойдётся документ по стенограмме такой длины при нынешних
+    настройках. Пусто — движок не по ключу или цена неизвестна."""
+    engine = (engine or config.get("minutes_engine") or "claude_cli").strip()
+    if engine != "api":
+        return {}
+    target = _target_provider(engine)
+    price_final = providers.model_price("docs", _model_for(target, model_role(template, "final")))
+    price_map = providers.model_price("docs", _model_for(target, "fast"))
+    return _cost_of(chars, template, price_final, price_map, _chunk_limit(engine))
+
+
+def label_models(models: dict[str, Any] | None) -> dict[str, Any]:
+    """К списку моделей чата — «hour_cost»: протокол часового звонка этой
+    моделью. Для подсказки у поля «Модель» и для выпадающего списка."""
+    if not models:
+        return models or {}
+    out = dict(models)
+    chat = []
+    for m in models.get("chat") or []:
+        price = m.get("price") or {}
+        est = _cost_of(CHARS_PER_HOUR, "protocol", price, price, _chunk_limit("api"))
+        chat.append(dict(m, hour_cost=est.get("text", "")))
+    out["chat"] = chat
+    return out
 
 
 def document_lane(engine: str | None = None) -> str:
@@ -1911,7 +2126,8 @@ def stored_document(rec_id: str, key: str) -> str:
     return next((d["markdown"] for d in stored_documents(rec_id) if d["key"] == key), "")
 
 
-def _save_result(rec_id: str, template: str, markdown: str, engine: str) -> Path:
+def _save_result(rec_id: str, template: str, markdown: str, engine: str,
+                 spend: Spend | None = None) -> Path:
     """Куда лечь документу: у каждого вида свой файл (см. DOC_KINDS).
 
     Раздельно намеренно: протокол, саммари и ответы на вопросы, сложенные в один
@@ -1920,6 +2136,9 @@ def _save_result(rec_id: str, template: str, markdown: str, engine: str) -> Path
     Папку записи здесь НЕ создаём: если её уже нет, значит запись удалили, пока
     модель думала. Восстанавливать её документом нельзя — на диске осталась бы
     папка-призрак без meta.json, невидимая в списке.
+
+    spend — что ушло на документ (токены, а если сервис назвал цену — и деньги):
+    дописывается в подпись и в карточку записи.
     """
     doc = "meeting" if template == "video_summary" else template
     if doc not in DOC_KINDS:
@@ -1934,10 +2153,13 @@ def _save_result(rec_id: str, template: str, markdown: str, engine: str) -> Path
     # Подпись под документом. Протокол уходит коллегам, и
     # подпись работает и как знак авторства, и как единственная реклама
     # программы. Отключается настройкой: документ бывает и внутренним.
+    spent = spend.text() if spend is not None else ""
     if config.get("sign_documents", True):
-        sign = "_Подготовил Hagen, consigliere · %s · движок: %s._" % (stamp, engine)
+        sign = "_Подготовил Hagen, consigliere · %s · движок: %s%s._" % (
+            stamp, engine, (" · " + spent) if spent else "")
     else:
-        sign = "_Сформировано %s, движок: %s._" % (stamp, engine)
+        sign = "_Сформировано %s, движок: %s%s._" % (
+            stamp, engine, (", " + spent) if spent else "")
     footer = "\n\n---\n%s\n" % sign
     target = p["dir"] / DOC_KINDS[doc]["file"]
     if doc == "question":
@@ -1950,6 +2172,8 @@ def _save_result(rec_id: str, template: str, markdown: str, engine: str) -> Path
     meta = store.get(rec_id) or {}
     docs = dict(meta.get("documents") or {})
     docs[doc] = {"updated_at": datetime.now().isoformat(timespec="seconds"), "engine": engine}
+    if spend is not None and spend.tokens:
+        docs[doc]["spend"] = spend.as_dict()
     store.update(rec_id, {"has_minutes": True, "documents": docs, "last_document": doc})
     return target
 
@@ -2005,57 +2229,58 @@ def generate(
     handle.log("Движок: %s, модель: %s, кусков стенограммы: %d"
           % (engine, final_model or "по умолчанию", len(chunks)))
 
-    if len(chunks) == 1:
-        if handle.cancelled:
-            raise RuntimeError("Сборка протокола отменена.")
-        handle.progress(0.1, "отправляю стенограмму")
-        markdown = _run_engine(engine, final_prompt,
-                               _with_reminder(chunks[0], template),
-                               role=final_role, handle=handle)
-        handle.progress(0.95, "сохраняю")
-    else:
-        digests: list[str] = []
-        total = len(chunks)
-        # на выжимки отводим 80% шкалы, на сборку — остаток
-        for i, piece in enumerate(chunks, start=1):
+    with _tracking() as spend:
+        if len(chunks) == 1:
             if handle.cancelled:
                 raise RuntimeError("Сборка протокола отменена.")
-            handle.progress(0.8 * (i - 1) / total, "выжимка %d из %d" % (i, total))
-            part = _strip_tail_chatter(
-                _run_engine(engine, _map_prompt(i, total), as_data(piece), role=map_role,
-                            handle=handle))
-            digests.append("## Фрагмент %d из %d\n%s" % (i, total, part.strip()))
-            done = 0.8 * i / total
-            spent = time.time() - t0
-            if done > 0:
-                try:
-                    handle.eta(max(0.0, spent / done - spent))
-                except Exception:
-                    pass
-            handle.progress(done, "выжимка %d из %d готова" % (i, total))
-        if handle.cancelled:
-            raise RuntimeError("Сборка протокола отменена.")
-        handle.progress(0.85, "собираю итоговый документ")
-        combined = _reduce_digests(engine, digests, max_chars, handle=handle,
-                                   role=map_role)
-        markdown = _run_engine(
-            engine, _final_prompt(template, question,
-                                  extra=reduce_note(task_lang(template)) + dropped_note,
-                                  has_shots=shots),
-            _with_reminder(combined, template), role=final_role, handle=handle,
-        )
-        handle.progress(0.95, "сохраняю")
+            handle.progress(0.1, "отправляю стенограмму")
+            markdown = _run_engine(engine, final_prompt,
+                                   _with_reminder(chunks[0], template),
+                                   role=final_role, handle=handle)
+            handle.progress(0.95, "сохраняю")
+        else:
+            digests: list[str] = []
+            total = len(chunks)
+            # на выжимки отводим 80% шкалы, на сборку — остаток
+            for i, piece in enumerate(chunks, start=1):
+                if handle.cancelled:
+                    raise RuntimeError("Сборка протокола отменена.")
+                handle.progress(0.8 * (i - 1) / total, "выжимка %d из %d" % (i, total))
+                part = _strip_tail_chatter(
+                    _run_engine(engine, _map_prompt(i, total), as_data(piece), role=map_role,
+                                handle=handle))
+                digests.append("## Фрагмент %d из %d\n%s" % (i, total, part.strip()))
+                done = 0.8 * i / total
+                passed = time.time() - t0
+                if done > 0:
+                    try:
+                        handle.eta(max(0.0, passed / done - passed))
+                    except Exception:
+                        pass
+                handle.progress(done, "выжимка %d из %d готова" % (i, total))
+            if handle.cancelled:
+                raise RuntimeError("Сборка протокола отменена.")
+            handle.progress(0.85, "собираю итоговый документ")
+            combined = _reduce_digests(engine, digests, max_chars, handle=handle,
+                                       role=map_role)
+            markdown = _run_engine(
+                engine, _final_prompt(template, question,
+                                      extra=reduce_note(task_lang(template)) + dropped_note,
+                                      has_shots=shots),
+                _with_reminder(combined, template), role=final_role, handle=handle,
+            )
+            handle.progress(0.95, "сохраняю")
 
     markdown = _strip_tail_chatter(markdown or "")
     if not markdown:
         raise RuntimeError("Движок вернул пустой документ.")
 
-    saved = _save_result(rec_id, template, markdown, engine)
+    saved = _save_result(rec_id, template, markdown, engine, spend=spend)
     handle.progress(1.0, "готово")
     elapsed = round(time.time() - t0, 1)
-    log.info("протокол %s: шаблон %s, движок %s, модель %s, символов %d, кусков %d, %.1f c",
+    log.info("протокол %s: шаблон %s, движок %s, модель %s, символов %d, кусков %d, %.1f c%s",
              rec_id, template, engine, final_model or "по умолчанию",
-             len(text), len(chunks), elapsed)
+             len(text), len(chunks), elapsed, (", " + spend.text()) if spend.tokens else "")
     return {
         "markdown": markdown,
         "engine": engine,
@@ -2065,6 +2290,7 @@ def generate(
         "elapsed_s": elapsed,
         "cloud": True,
         "saved_to": str(saved),
+        "spend": spend.as_dict() if spend.tokens else {},
     }
 
 
@@ -2350,26 +2576,27 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
     handle.log("%s: движок %s, модель %s, кусков %d"
           % (what.capitalize(), engine, final_model or "по умолчанию", len(chunks)))
 
-    body = chunks[0]
-    if len(chunks) > 1:
-        digests: list[str] = []
-        for i, piece in enumerate(chunks, start=1):
-            if handle.cancelled:
-                raise RuntimeError("Сборка документа отменена.")
-            handle.progress(0.8 * (i - 1) / len(chunks),
-                      "выжимка %d из %d" % (i, len(chunks)))
-            part = _strip_tail_chatter(
-                _run_engine(engine, _map_prompt(i, len(chunks)), as_data(piece), role="fast",
-                            handle=handle))
-            digests.append("## Фрагмент %d из %d\n%s" % (i, len(chunks), part.strip()))
-        body = _reduce_digests(engine, digests, max_chars, handle=handle, role="fast")
-        body = reduce_note(task_lang(kind)) + "\n" + as_data(body)
-    else:
-        body = as_data(body)
+    with _tracking() as spend:
+        body = chunks[0]
+        if len(chunks) > 1:
+            digests: list[str] = []
+            for i, piece in enumerate(chunks, start=1):
+                if handle.cancelled:
+                    raise RuntimeError("Сборка документа отменена.")
+                handle.progress(0.8 * (i - 1) / len(chunks),
+                          "выжимка %d из %d" % (i, len(chunks)))
+                part = _strip_tail_chatter(
+                    _run_engine(engine, _map_prompt(i, len(chunks)), as_data(piece),
+                                role="fast", handle=handle))
+                digests.append("## Фрагмент %d из %d\n%s" % (i, len(chunks), part.strip()))
+            body = _reduce_digests(engine, digests, max_chars, handle=handle, role="fast")
+            body = reduce_note(task_lang(kind)) + "\n" + as_data(body)
+        else:
+            body = as_data(body)
 
-    handle.progress(0.85, "собираю " + what)
-    video_tail = _VIDEO_TAIL_EN if task_lang(kind) == "en" else _VIDEO_TAIL
-    raw = _run_engine(engine, prompt + video_tail, body, role="strong", handle=handle)
+        handle.progress(0.85, "собираю " + what)
+        video_tail = _VIDEO_TAIL_EN if task_lang(kind) == "en" else _VIDEO_TAIL
+        raw = _run_engine(engine, prompt + video_tail, body, role="strong", handle=handle)
     try:
         data = _parse_summary_answer(raw)
     except RuntimeError as err:
@@ -2398,19 +2625,20 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
 
     title = str(data.get("title") or "").strip()
     folder = str(data.get("folder_name") or "").strip()
-    saved = _save_result(rec_id, kind, markdown, engine)
+    saved = _save_result(rec_id, kind, markdown, engine, spend=spend)
     patch: dict[str, Any] = {"has_minutes": True}
     if title:
         patch["summary_title"] = title[:200]
     store.update(rec_id, patch)
     handle.progress(1.0, "готово")
     elapsed = round(time.time() - t0, 1)
-    log.info("%s %s: движок %s, модель %s, кусков %d, %.1f c",
-             what, rec_id, engine, final_model or "по умолчанию", len(chunks), elapsed)
+    log.info("%s %s: движок %s, модель %s, кусков %d, %.1f c%s",
+             what, rec_id, engine, final_model or "по умолчанию", len(chunks), elapsed,
+             (", " + spend.text()) if spend.tokens else "")
     return {"markdown": markdown, "title": title, "folder_name": folder,
             "engine": engine, "model": final_model, "chunks": len(chunks),
             "elapsed_s": elapsed, "saved_to": str(saved), "cloud": True,
-            "document": kind}
+            "document": kind, "spend": spend.as_dict() if spend.tokens else {}}
 
 
 def document_path(rec_id: str) -> Path:
@@ -2463,6 +2691,12 @@ def strip_dropped(markdown: str, dropped: list[str]) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
+def is_signature(line: str) -> bool:
+    """Подпись под документом («Подготовил Hagen…» или «Сформировано…»)."""
+    body = str(line or "").strip().lstrip("_*")
+    return body.startswith("Подготовил") or body.startswith("Сформировано")
+
+
 def droppable_lines(markdown: str) -> list[str]:
     """Строки документа, которые ИМЕЕТ смысл вычёркивать.
 
@@ -2475,8 +2709,7 @@ def droppable_lines(markdown: str) -> list[str]:
         body = line.strip()
         if not body or body.startswith("#") or body.startswith("---"):
             continue
-        if (body.startswith("_Сформировано") or body.startswith("*Сформировано")
-                or body.startswith("_Подготовил") or body.startswith("*Подготовил")):
+        if is_signature(body):
             continue
         if set(body) <= set("|-: "):          # разделитель таблицы markdown
             continue
@@ -2511,6 +2744,11 @@ def open_items(rec_id: str) -> list[str]:
             if body.startswith("#"):
                 title = body.lstrip("#").strip().lower().rstrip(":")
                 inside = title in _TASK_HEADINGS
+                continue
+            # Черта отделяет подпись: раздел задач бывает последним, и без этого
+            # подпись уходила бы поручением в Todoist и в следующую встречу.
+            if body.startswith("---") or is_signature(body):
+                inside = False
                 continue
             if not inside or not body:
                 continue
