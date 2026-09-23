@@ -20,6 +20,7 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -396,6 +397,27 @@ def load_transcript(rec_id: str) -> dict[str, Any]:
 def save_transcript(rec_id: str, data: dict[str, Any]) -> None:
     with _lock_for(rec_id):
         _write_json(paths(rec_id)["transcript"], data)
+
+
+@contextmanager
+def edit_transcript(rec_id: str):
+    """Прочитать стенограмму, поправить на месте, записать — под замком записи.
+
+    Для тех, кто меняет реплики по одной, не пересобирая список: отсев эха
+    ставит и снимает пометки. Замок держится всё время правки, чтобы соседний
+    поток не вписал реплику поверх. Выход по исключению ничего не пишет.
+
+    Не пишем и тогда, когда править оказалось нечего: `return` из блока с
+    `with` всё равно доводит до конца, и стенограмма переписывалась бы на
+    каждой остановке записи, а у записи без стенограммы появлялся бы файл с
+    пустым списком реплик.
+    """
+    with _lock_for(rec_id):
+        data = load_transcript(rec_id)
+        before = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        yield data
+        if json.dumps(data, ensure_ascii=False, sort_keys=True) != before:
+            _write_json(paths(rec_id)["transcript"], data)
 
 
 def make_segment(

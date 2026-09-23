@@ -39,8 +39,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import audio_io, config, platform
-from ..obsidian import _clean_url
+from .. import audio_io, config, jobs, platform
+from ..obsidian import clean_url, safe_name
 
 log = logging.getLogger("hagen.sources.sharepoint")
 
@@ -110,53 +110,13 @@ __all__ = [
 
 # --------------------------------------------------------------------------- мелочи
 
-class _Cancelled(RuntimeError):
-    """Отмена пользователем.
-
-    Отдельный класс нужен ровно для одного: отмену нельзя спутать с сетевой
-    ошибкой. Иначе прерванное скачивание уходило бы в запасной путь и качало
-    файл заново — вместо того чтобы остановиться.
-    """
-
-
-def _progress(handle: Any, value: float, note: str = "") -> None:
-    if handle is None:
-        return
-    try:
-        handle.progress(max(0.0, min(1.0, float(value))), note)
-    except Exception:
-        pass
-
-
-def _note(handle: Any, msg: str) -> None:
-    log.info("%s", msg)
-    if handle is None:
-        return
-    try:
-        handle.log(msg)
-    except Exception:
-        pass
-
-
-def _cancelled(handle: Any) -> bool:
-    if handle is None:
-        return False
-    try:
-        return bool(handle.cancelled)
-    except Exception:
-        return False
-
-
-def _check(handle: Any) -> None:
-    if _cancelled(handle):
-        raise _Cancelled("отменено")
-
 
 def _sleep(seconds: float, handle: Any = None) -> None:
     """Пауза, которая слышит отмену: спим короткими кусками."""
+    handle = jobs.as_handle(handle)
     left = float(seconds)
     while left > 0:
-        _check(handle)
+        handle.check()
         time.sleep(min(0.5, left))
         left -= 0.5
 
@@ -175,37 +135,9 @@ def _safe(value: Any, limit: int = 200) -> str:
     Ссылки не рубим целиком, а чистим тем же способом, что и заметки Obsidian.
     """
     text = str(value or "")
-    text = _URL_IN_TEXT.sub(lambda m: _clean_url(m.group(0)) or "<ссылка скрыта>", text)
+    text = _URL_IN_TEXT.sub(lambda m: clean_url(m.group(0)) or "<ссылка скрыта>", text)
     text = _JWT_RE.sub("<токен скрыт>", text)
     return " ".join(text.split())[:limit]
-
-
-def direct_env() -> dict[str, str]:
-    """Окружение для дочернего ffmpeg/ffprobe — БЕЗ системного прокси.
-
-    Перенесено из саммаризатора и выстрадано там же. Локальный VPN-клиент
-    выставляет http_proxy/https_proxy на свой порт; дочерний процесс их читает и
-    уходит через VPN. Дальше две беды сразу: рвётся TLS, а преавторизованная
-    ссылка SharePoint перестаёт работать — её выписали на прямой IP, и с другого
-    адреса SharePoint отдаёт отказ. Наши запросы по той же причине идут с
-    trust_env=False.
-    """
-    env = dict(os.environ)
-    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-                "ALL_PROXY", "all_proxy"):
-        env.pop(key, None)
-    env["NO_PROXY"] = env["no_proxy"] = "*"
-    return env
-
-
-_BAD_CHARS = re.compile(r'[\\/:*?"<>|]')
-
-
-def _slug(text: str, maxlen: int = 60) -> str:
-    """Имя файла, которое переживёт Windows."""
-    s = _BAD_CHARS.sub("_", str(text or ""))
-    s = re.sub(r"_+", "_", s).strip(" ._")
-    return s[:maxlen].strip(" ._") or "meeting"
 
 
 def _is_transcript_name(name: str) -> bool:
@@ -390,6 +322,7 @@ def wait_login(handle: Any = None) -> bool:
     заново. Явный отказ и поломка на стороне Microsoft — исключение с понятным
     текстом.
     """
+    handle = jobs.as_handle(handle)
     with _lock:
         pending = _state.get("pending")
     if not pending:
@@ -407,7 +340,7 @@ def wait_login(handle: Any = None) -> bool:
             _remember(body)
             with _lock:
                 _state["pending"] = None
-            _note(handle, "Вход в Microsoft выполнен.")
+            handle.log("Вход в Microsoft выполнен.")
             return True
 
         err = str(body.get("error") or "")
@@ -427,7 +360,7 @@ def wait_login(handle: Any = None) -> bool:
 
     with _lock:
         _state["pending"] = None
-    _note(handle, "Вход не подтверждён вовремя — запросите код заново.")
+    handle.log("Вход не подтверждён вовремя — запросите код заново.")
     return False
 
 
@@ -618,6 +551,7 @@ def sp_search(token: str, query: str, year: int | None = None, months: Any = Non
     please try again») — это его нормальное поведение, а не наша ошибка, поэтому
     повторяем на 5xx и 429 с растущей паузой.
     """
+    handle = jobs.as_handle(handle)
     months_set = _months_set(months)
     kql = _kql(query, year, months_set)
 
@@ -632,8 +566,8 @@ def sp_search(token: str, query: str, year: int | None = None, months: Any = Non
                                   "from": start, "size": SEARCH_PAGE}]}
             resp = None
             for attempt in range(SEARCH_RETRIES):
-                _check(handle)
-                _progress(handle, 0.1, "ищу записи в SharePoint")
+                handle.check()
+                handle.progress(0.1, "ищу записи в SharePoint")
                 resp = cli.post("%s/search/query" % _GRAPH, headers=_bearer(token), json=body)
                 if resp.status_code < 400:
                     break
@@ -689,7 +623,7 @@ def sp_search(token: str, query: str, year: int | None = None, months: Any = Non
                             "size": size, "sizeMB": round(size / 1048576),
                             "kind": kind,
                             "has_video": kind == "video" and size >= EMPTY_CONTAINER_BYTES,
-                            "web_url": _clean_url(res.get("webUrl")),
+                            "web_url": clean_url(res.get("webUrl")),
                             "duration_s": _facet_duration(res),
                             "source_name": SOURCE_NAME,
                         })
@@ -711,8 +645,9 @@ def sp_search(token: str, query: str, year: int | None = None, months: Any = Non
 def search_ex(query: str, year: int | None = None, months: list[int] | None = None,
               meetings_only: bool = True, handle: Any = None) -> dict[str, Any]:
     """Поиск для окна: находки и сколько отброшено фильтром «только встречи»."""
+    handle = jobs.as_handle(handle)
     token = _access_token()
-    _progress(handle, 0.05, "ищу записи в SharePoint")
+    handle.progress(0.05, "ищу записи в SharePoint")
     items = sp_search(token, query, year, months, handle=handle)
     hidden = 0
     if meetings_only:
@@ -720,9 +655,9 @@ def search_ex(query: str, year: int | None = None, months: list[int] | None = No
         hidden = len(items) - len(kept)
         items = kept
     with_tr = sum(1 for i in items if i.get("has_transcript"))
-    _note(handle, "Найдено записей: %d (с готовым транскриптом: %d, скрыто не встреч: %d)"
+    handle.log("Найдено записей: %d (с готовым транскриптом: %d, скрыто не встреч: %d)"
           % (len(items), with_tr, hidden))
-    _progress(handle, 1.0, "поиск закончен")
+    handle.progress(1.0, "поиск закончен")
     return {"items": items, "hidden": hidden}
 
 
@@ -761,11 +696,12 @@ def check_transcripts(items: list[dict], handle: Any = None) -> dict[str, bool |
     Поиск её не видит — Teams привязывает расшифровку к самой записи, — поэтому
     спрашиваем про каждую запись отдельно. {id: True/False/None}.
     """
+    handle = jobs.as_handle(handle)
     token = _access_token()
     out: dict[str, bool | None] = {}
     with _client() as cli:
         for it in items[:60]:
-            _check(handle)
+            handle.check()
             iid, drive = str(it.get("id") or ""), str(it.get("driveId") or "")
             if not iid or not drive:
                 continue
@@ -823,7 +759,7 @@ def _download_url(url: str, dest: Path, headers: dict[str, str] | None = None,
                 shown = -1
                 with open(tmp, "wb") as fh:
                     for chunk in resp.iter_bytes(1 << 20):
-                        _check(handle)
+                        handle.check()
                         if not chunk:
                             continue
                         fh.write(chunk)
@@ -831,10 +767,10 @@ def _download_url(url: str, dest: Path, headers: dict[str, str] | None = None,
                         pct = int(done * 100 / total) if total else -1
                         if pct != shown:
                             shown = pct
-                            _progress(handle, (done / total) if total else 0.0,
+                            handle.progress((done / total) if total else 0.0,
                                       "скачиваю %s: %d%%" % (what, pct) if pct >= 0
                                       else "скачано %d МБ" % (done >> 20))
-    except _Cancelled:
+    except jobs.Cancelled:
         tmp.unlink(missing_ok=True)
         raise
     except httpx.HTTPError as err:
@@ -855,6 +791,7 @@ def _download_url(url: str, dest: Path, headers: dict[str, str] | None = None,
 def sp_download_file(token: str, drive_id: str, item_id: str, dest: Path,
                      handle: Any = None) -> Path:
     """Скачать элемент целиком — для .vtt/.srt, они маленькие."""
+    handle = jobs.as_handle(handle)
     return _download_url(sp_resolve_item(token, drive_id, item_id), Path(dest),
                          handle=handle, what="транскрипт")
 
@@ -867,6 +804,7 @@ def sp_download_content(token: str, drive_id: str, item_id: str, dest: Path,
     режет чтение потока по такой ссылке (особенно кусками, range-запросами).
     Через Graph файл отдаётся нормально, просто тянуть приходится целиком.
     """
+    handle = jobs.as_handle(handle)
     dest = Path(dest)
     _download_url("%s/drives/%s/items/%s/content" % (_GRAPH, drive_id, item_id),
                   dest, headers=_bearer(token), handle=handle)
@@ -952,6 +890,7 @@ def sp_stream_transcript(token: str, drive_id: str, item_id: str, dest: Path,
     поэтому ни поиск по filetype:vtt, ни перебор соседей его не находят.
     Возвращает путь или None — отсутствие транскрипта не ошибка.
     """
+    handle = jobs.as_handle(handle)
     try:
         with _client() as cli:
             hdr = _bearer(token)
@@ -966,7 +905,7 @@ def sp_stream_transcript(token: str, drive_id: str, item_id: str, dest: Path,
             lst = cli.get("%s/drives/%s/items/%s/media/transcripts" % (base, drive_id, item_id),
                           headers=sph)
             if lst.status_code >= 400:
-                _note(handle, "Транскрипт из Stream недоступен (код %d)" % lst.status_code)
+                handle.log("Транскрипт из Stream недоступен (код %d)" % lst.status_code)
                 return None
             data = lst.json()
             items = data.get("value") or data.get("transcripts") or []
@@ -992,12 +931,12 @@ def sp_stream_transcript(token: str, drive_id: str, item_id: str, dest: Path,
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(raw, encoding="utf-8")
-        _note(handle, "Транскрипт получен из Stream — распознавание не нужно")
+        handle.log("Транскрипт получен из Stream — распознавание не нужно")
         return dest
-    except _Cancelled:
+    except jobs.Cancelled:
         raise
     except Exception as err:
-        _note(handle, "Транскрипт из Stream не забрался: %s" % _safe(err, 120))
+        handle.log("Транскрипт из Stream не забрался: %s" % _safe(err, 120))
         return None
 
 
@@ -1018,20 +957,20 @@ def _attach_sp_transcript(token: str, dst_dir: Path, drive_id: str, item_id: str
         prefer = bool(config.get("prefer_transcript", True))
     if not prefer:
         return ""
-    _check(handle)
-    stem = _slug(Path(name).stem, 60)
+    handle.check()
+    stem = safe_name(Path(name).stem, limit=60)
 
     tr = transcript_item or sp_find_sibling_transcript(token, drive_id, item_id, name)
     if tr and tr.get("id"):
         dest = Path(dst_dir) / (stem + (Path(tr["name"]).suffix.lower() or ".vtt"))
         try:
             sp_download_file(token, tr["driveId"], tr["id"], dest, handle)
-            _note(handle, "Найден готовый транскрипт «%s» — распознавание не нужно" % tr["name"])
+            handle.log("Найден готовый транскрипт «%s» — распознавание не нужно" % tr["name"])
             return str(dest)
-        except _Cancelled:
+        except jobs.Cancelled:
             raise
         except Exception as err:
-            _note(handle, "Транскрипт «%s» не скачался: %s" % (tr["name"], _safe(err, 100)))
+            handle.log("Транскрипт «%s» не скачался: %s" % (tr["name"], _safe(err, 100)))
 
     got = sp_stream_transcript(token, drive_id, item_id, Path(dst_dir) / (stem + ".vtt"),
                                web_url, handle)
@@ -1059,7 +998,7 @@ def _probe_duration(path: Path) -> float:
     try:
         out = subprocess.run(
             cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120, creationflags=platform.system().hidden_process_flags(), env=direct_env(),
+            timeout=120, creationflags=platform.system().hidden_process_flags(), env=audio_io.direct_env(),
         )
         return round(float((out.stdout or "0").strip() or 0.0), 1)
     except Exception:
@@ -1095,7 +1034,7 @@ def resolve_link(url: str, token: str | None = None) -> dict[str, Any]:
         "modified": str(item.get("lastModifiedDateTime") or "")[:10],
         "sizeMB": round(int(item.get("size") or 0) / 1048576),
         "kind": "transcript" if _is_transcript_name(name) else "video",
-        "web_url": _clean_url(item.get("webUrl")) or _clean_url(link),
+        "web_url": clean_url(item.get("webUrl")) or clean_url(link),
         "duration_s": _facet_duration(item),
         "source_name": SOURCE_NAME,
     }
@@ -1113,6 +1052,7 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
     и «что хранить» (store_media). Если текст готов, а хранить видео и звук не
     просили — гигабайт не качаем вовсе.
     """
+    handle = jobs.as_handle(handle)
     opts = dict(opts or {})
     prefer = opts.get("prefer_transcript")
     prefer = bool(config.get("prefer_transcript", True)) if prefer is None else bool(prefer)
@@ -1128,7 +1068,7 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
         link = it.get("url") or it.get("web_url") or it.get("link") or ""
         if not link:
             raise RuntimeError("Нечего забирать: нужна ссылка или запись из поиска.")
-        _progress(handle, 0.02, "открываю ссылку")
+        handle.progress(0.02, "открываю ссылку")
         it = resolve_link(str(link), token)
         if not (it.get("id") and it.get("driveId")):
             raise RuntimeError("По ссылке не нашлось файла.")
@@ -1137,8 +1077,8 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
     title = Path(name).stem
     drive_id, item_id = str(it["driveId"]), str(it["id"])
     kind = it.get("kind") or ("transcript" if _is_transcript_name(name) else "video")
-    stem = _slug(title, 60)
-    _check(handle)
+    stem = safe_name(title, limit=60)
+    handle.check()
 
     extra: dict[str, Any] = {
         "drive_id": drive_id, "item_id": item_id, "file_name": name,
@@ -1149,20 +1089,20 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
     # Только транскрипт: встречу не записывали либо выбран сам файл .vtt/.srt.
     if kind == "transcript":
         dest = dst_dir / (stem + (Path(name).suffix.lower() or ".vtt"))
-        _note(handle, "Скачиваю готовый транскрипт (видео не записывалось)…")
+        handle.log("Скачиваю готовый транскрипт (видео не записывалось)…")
         sp_download_file(token, drive_id, item_id, dest, handle)
-        _progress(handle, 1.0, "транскрипт получен")
+        handle.progress(1.0, "транскрипт получен")
         return {
             "media": "", "transcript": str(dest), "title": title,
             "url": it.get("web_url", ""), "source_name": SOURCE_NAME,
             "duration_s": 0.0, "extra": dict(extra, has_video=False),
         }
 
-    _progress(handle, 0.05, "смотрю запись")
+    handle.progress(0.05, "смотрю запись")
     meta = _graph_item(token, drive_id, item_id)
     size = int(meta.get("size") or 0)
     web_url_raw = str(meta.get("webUrl") or "")
-    source_url = _clean_url(web_url_raw) or it.get("web_url", "")
+    source_url = clean_url(web_url_raw) or it.get("web_url", "")
     duration = _facet_duration(meta) or float(it.get("duration_s") or 0.0)
     extra["storage"] = _storage_kind(web_url_raw)
     extra["size_mb"] = round(size / 1048576)
@@ -1170,24 +1110,24 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
     transcript = _attach_sp_transcript(token, dst_dir, drive_id, item_id, name,
                                        it.get("transcript_item"), web_url_raw, handle,
                                        prefer=prefer)
-    _check(handle)
+    handle.check()
 
     media = ""
     if size < EMPTY_CONTAINER_BYTES:
         # Пустой контейнер: встречу не записывали, качать нечего.
-        _note(handle, "Видео у записи нет (пустой контейнер) — работаю только по транскрипту")
+        handle.log("Видео у записи нет (пустой контейнер) — работаю только по транскрипту")
         if not transcript:
             raise RuntimeError("У этой записи нет ни видео, ни транскрипта.")
     elif transcript and store_mode == "none":
         # Транскрипт готов, распознавание не нужно, а хранить видео и звук не
         # просили — значит, и качать гигабайт незачем.
-        _note(handle, "Транскрипт готов, а видео и звук не храним — скачивание пропускаю")
+        handle.log("Транскрипт готов, а видео и звук не храним — скачивание пропускаю")
     else:
         dest = dst_dir / (stem + (Path(name).suffix.lower() or ".mp4"))
-        _note(handle, "Скачиваю запись (%d МБ)…" % (size >> 20))
+        handle.log("Скачиваю запись (%d МБ)…" % (size >> 20))
         try:
             media = str(_download_media(token, drive_id, item_id, meta, dest, size, handle))
-        except _Cancelled:
+        except jobs.Cancelled:
             raise
         except RuntimeError as err:
             # Живой случай 13.09: запись в OneDrive организатора — видео 403, а
@@ -1195,14 +1135,14 @@ def fetch(item: dict, dst_dir: Path, handle: Any = None,
             # падать из-за видео незачем.
             if not (transcript and _forbidden(err)):
                 raise
-            _note(handle, "Видео скачать нельзя (скачивание разрешено только владельцу "
+            handle.log("Видео скачать нельзя (скачивание разрешено только владельцу "
                           "записи). Расшифровка получена — работаю по ней.")
             extra["video_forbidden"] = True
             media = ""
         if media and not duration:
             duration = _probe_duration(Path(media))
 
-    _progress(handle, 1.0, "запись получена")
+    handle.progress(1.0, "запись получена")
     extra["has_video"] = bool(media)
     return {
         "media": media, "transcript": transcript, "title": title,
@@ -1223,10 +1163,10 @@ def _download_media(token: str, drive_id: str, item_id: str, meta: dict,
     if url:
         try:
             return _download_url(url, dest, expect=size, handle=handle)
-        except _Cancelled:
+        except jobs.Cancelled:
             raise
         except Exception as err:
-            _note(handle, "Прямая ссылка файл не отдала (%s) — качаю через Graph"
+            handle.log("Прямая ссылка файл не отдала (%s) — качаю через Graph"
                   % _safe(err, 100))
-    _check(handle)
+    handle.check()
     return sp_download_content(token, drive_id, item_id, dest, handle)

@@ -13,7 +13,7 @@ from typing import Any, Callable
 __all__ = [
     "ensure_portable", "write_shortcut", "make_shortcuts", "screenshot_folders",
     "watch_screenshots", "delete_shots", "shift_shots",
-    "hidden_process_flags", "set_process_priority", "open_path", "open_link",
+    "hidden_process_flags", "set_process_priority", "process_alive", "open_path", "open_link",
     "set_console_title", "hide_console", "restrict_to_owner",
 ]
 
@@ -44,6 +44,9 @@ CONSOLE: dict[str, Any] = {"title": "", "hidden": False}
 #: Какой приоритет просили дочерним программам: (pid, уровень).
 PRIORITIES: list[tuple[int, str]] = []
 
+#: Номера процессов, которые заглушка считает ушедшими.
+GONE: set[int] = set()
+
 
 def reset() -> None:
     SHORTCUTS.clear()
@@ -52,6 +55,7 @@ def reset() -> None:
     OPENED.clear()
     RESTRICTED.clear()
     PRIORITIES.clear()
+    GONE.clear()
     CONSOLE.update({"title": "", "hidden": False})
 
 
@@ -85,10 +89,12 @@ class Watcher:
     """Сторож снимков, которому снимки подкладывает проверка."""
 
     def __init__(self, rec_id: str, position_s: Callable[[], float],
-                 on_shot: Callable[[dict[str, Any]], Any]) -> None:
+                 on_shot: Callable[[dict[str, Any]], Any],
+                 folder: Callable[[], Path] | None = None) -> None:
         self.rec_id = rec_id
         self.position_s = position_s
         self.on_shot = on_shot
+        self.folder = folder
         self.running = False
 
     def start(self) -> None:
@@ -106,13 +112,14 @@ class Watcher:
 
 
 def watch_screenshots(rec_id: str, position_s: Callable[[], float],
-                      on_shot: Callable[[dict[str, Any]], Any]) -> Watcher:
-    w = Watcher(rec_id, position_s, on_shot)
+                      on_shot: Callable[[dict[str, Any]], Any],
+                      folder: Callable[[], Path]) -> Watcher:
+    w = Watcher(rec_id, position_s, on_shot, folder)
     WATCHERS.append(w)
     return w
 
 
-def delete_shots(rec_id: str) -> int:
+def delete_shots(rec_id: str, folder: Path) -> int:
     DELETED.append(str(rec_id))
     return 0
 
@@ -132,6 +139,11 @@ def set_process_priority(pid: int, level: str) -> bool:
         raise ValueError("неизвестный уровень приоритета: %s" % level)
     PRIORITIES.append((int(pid), str(level)))
     return True
+
+
+def process_alive(pid: int, unknown: bool = True) -> bool:
+    """Заглушка знает про все процессы, поэтому `unknown` ей не нужен."""
+    return int(pid) not in GONE
 
 
 def open_path(path: str | Path) -> None:

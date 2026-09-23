@@ -28,31 +28,12 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
 
-LINES = []
-FAIL = []
 MADE = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 from hagen import config, store  # noqa: E402
@@ -186,7 +167,8 @@ try:
     api = io.open(PROJECT / "hagen" / "api" / "transcript.py", encoding="utf-8").read()
     check("задача, а не ожидание в запросе", 'jobs.submit("echo"' in api)
     check("повторный запуск отклоняется", 'jobs.busy_with("echo", rec_id)' in api)
-    check("запись считается занятой", '"media", "echo")' in srv)
+    core = io.open(PROJECT / "hagen" / "recordings.py", encoding="utf-8").read()
+    check("запись считается занятой", '"media", "echo")' in core)
 
     say("")
     say("=== 7. Страница ===")
@@ -209,9 +191,4 @@ finally:
         except Exception:
             pass
 
-say("")
-say("Всего замечаний: %d" % len(FAIL))
-for name in FAIL:
-    say("   — " + name)
-io.open(PROJECT / "tests" / "t84_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t84"))

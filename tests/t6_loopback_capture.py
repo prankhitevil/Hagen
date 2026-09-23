@@ -15,25 +15,12 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+from harness import LINES, FAIL, say  # noqa: E402
 
 import numpy as np  # noqa: E402
 
 from hagen import asr, audio_io, platform  # noqa: E402
 from hagen.platform.windows import loopback  # noqa: E402
-
-LINES = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
 
 
 def dump():

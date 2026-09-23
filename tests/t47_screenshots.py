@@ -30,35 +30,15 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 import win32clipboard  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from hagen import calls, config, obsidian, store  # noqa: E402
+from hagen import calls, config, obsidian, recordings, store  # noqa: E402
 from hagen.platform.windows import shots  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="t47_"))
@@ -137,7 +117,8 @@ try:
     rid = meta["id"]
     check("по умолчанию снимки только из папки", config.get("screenshots_from_clipboard") in (False, None),
           config.get("screenshots_from_clipboard"))
-    w0 = shots.ScreenshotWatcher(rid, position_s=lambda: 5.0, on_shot=lambda s: None)
+    w0 = shots.ScreenshotWatcher(rid, position_s=lambda: 5.0, on_shot=lambda s: None,
+                                 folder=lambda: obsidian.shots_dir(store.get(rid) or {}))
     w0.start()
     time.sleep(1.2)
     to_clipboard(picture(7))
@@ -153,7 +134,8 @@ try:
     to_clipboard(picture(8))                 # лежит в буфере ДО записи
     pos = {"s": 12.0}
     got = []
-    w = shots.ScreenshotWatcher(rid, position_s=lambda: pos["s"], on_shot=got.append)
+    w = shots.ScreenshotWatcher(rid, position_s=lambda: pos["s"], on_shot=got.append,
+                                folder=lambda: obsidian.shots_dir(store.get(rid) or {}))
     w.start()
     time.sleep(2.2)
     check("старый снимок из буфера и старый файл не взяты", w.count == 0, w.count)
@@ -249,15 +231,15 @@ try:
                                                                    "mode": "offline"})
         rec = started.json()["meta"]["id"]
         for _ in range(60):
-            if rec in server._shot_watchers:
+            if recordings.watching_shots(rec):
                 break
             time.sleep(0.2)
-        check("со стартом записи включилось наблюдение за снимками", rec in server._shot_watchers)
+        check("со стартом записи включилось наблюдение за снимками", recordings.watching_shots(rec))
         time.sleep(3.0)
         picture(5).save(SHOTS_IN / "Снимок экрана 5.png")   # как Win+Shift+S в «Снимки экрана»
         time.sleep(3.0)
         cli.post("/api/recordings/%s/stop" % rec, headers=ORIGIN, json={})
-        check("после стопа наблюдение выключено", rec not in server._shot_watchers)
+        check("после стопа наблюдение выключено", not recordings.watching_shots(rec))
         m = store.get(rec) or {}
         sh = m.get("screenshots") or []
         check("снимок попал в живую запись", len(sh) == 1, len(sh))
@@ -310,9 +292,4 @@ finally:
     config.get = _real_get
     shutil.rmtree(TMP, ignore_errors=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t47_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t47"))

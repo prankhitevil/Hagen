@@ -32,30 +32,10 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 from hagen import asr  # noqa: E402
@@ -125,7 +105,7 @@ try:
     check("её зовёт загрузка состояния",
           "S.asr = S.caps.asr || { state: 'loading' };" in JS and "paintProgramState();" in JS)
     check("её же зовёт событие службы",
-          re.search(r"case 'ready':\s*\n\s*S\.asr = ev\.asr", JS) is not None)
+          re.search(r"ready\(ev\) \{\s*\n\s*S\.asr = ev\.asr", JS) is not None)
     check("есть все четыре состояния",
           all(x in JS for x in ["'ready'", "'error'", "'offline'", "модель загружается…"]))
     check("у ошибки есть «повторить»", "js-asr-retry" in JS and "/api/asr/warmup" in JS)
@@ -178,9 +158,4 @@ except Exception as err:                       # noqa: BLE001
     FAIL.append("проверка оборвалась")
     say("ОБОРВАЛОСЬ: %s: %s" % (type(err).__name__, err))
 
-say("")
-say("Всего замечаний: %d" % len(FAIL))
-for name in FAIL:
-    say("   — " + name)
-io.open(PROJECT / "tests" / "t85_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t85"))

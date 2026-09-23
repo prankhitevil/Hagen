@@ -25,6 +25,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings(asr_count=1, asr_single="precise", asr_engine="torch")
@@ -34,29 +35,9 @@ import psutil  # noqa: E402
 
 from hagen import asr, audio_io, live, needs, store  # noqa: E402
 
-LINES = []
-FAIL = []
 SR = asr.SR
 ONE_TORCH = "live=torch,voice=torch,files=torch"
 ONE_OX_FP32 = "live=ox_fp32,voice=ox_fp32,files=ox_fp32"
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 def memory_mb():
@@ -201,9 +182,4 @@ if asr.ox_available(None)[0]:
 else:
     say("   (пропуск: файлов onnx-asr в папке нет)")
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t89_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t89"))

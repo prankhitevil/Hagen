@@ -29,37 +29,16 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings(record_far=True, mode="online", mic_pill=False)
-
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name
-        + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 import uvicorn  # noqa: E402
 import webview  # noqa: E402
 
-from hagen import platform, server, store  # noqa: E402
+from hagen import dictation, platform, recordings, server, store  # noqa: E402
 from hagen.platform import fake  # noqa: E402
 
 # Все устройства «сломаны»: ни микрофон, ни петля, ни запасной путь через
@@ -71,7 +50,7 @@ fake.audio.BROKEN.update(d["name"] for d in fake.audio.LOOPBACKS)
 
 # Горячую клавишу диктовки служба занимает при старте; рабочее сочетание
 # отбирать незачем, тем более что настоящий «Hagen» может быть запущен рядом.
-server._start_dictation = lambda: None
+dictation.start = lambda: None       # клавишу диктовки в проверке не занимаем
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -191,7 +170,7 @@ check("и в данных службы тоже", not leftover, [m["id"] for m i
 errs = result.get("errors_seen") or []
 check("сообщение об ошибке одно", len(errs) == 1, errs)
 check("и оно про звук — то, что служба сказала",
-      errs and errs[0] == server.NO_AUDIO_HINT, errs[:1])
+      errs and errs[0] == recordings.NO_AUDIO_HINT, errs[:1])
 check("ошибок JavaScript нет", result.get("js_errors") in ("[]", None), result.get("js_errors"))
 
 # Если проверка упала посреди отказа, пустая запись могла остаться — убираем.
@@ -201,9 +180,4 @@ for m in leftover:
     except Exception:
         pass
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t31_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t31"))

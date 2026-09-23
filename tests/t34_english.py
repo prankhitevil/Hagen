@@ -13,29 +13,7 @@ sys.path.insert(0, str(PROJECT))
 
 from hagen import asr  # noqa: E402
 import isolate  # noqa: E402
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, got, want):
-    ok = got == want
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + ": " + repr(got)
-        + ("" if ok else "  (ждали " + repr(want) + ")"))
+from harness import LINES, FAIL, say, expect as check, finish  # noqa: E402
 
 
 say("=== 1. Сборка слов из потокенных отметок ===")
@@ -144,9 +122,4 @@ if ok:
                   all(res.words[i].start <= res.words[i + 1].start
                       for i in range(len(res.words) - 1)), True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t34_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t34"))

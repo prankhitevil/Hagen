@@ -24,29 +24,9 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 from hagen import jobs, store  # noqa: E402
@@ -353,9 +333,4 @@ html = (PROJECT / "hagen" / "static" / "index.html").read_text(encoding="utf-8")
 for el in ("sp-m1", "sp-m2", "sp-meetings", "btn-sp-process", "btn-sp-stop", "btn-sp-copy", "sp-count"):
     check("на странице есть %s" % el, 'id="%s"' % el in html)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t48_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t48"))

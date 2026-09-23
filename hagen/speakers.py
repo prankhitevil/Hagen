@@ -146,7 +146,7 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
         out["target"] = dict(owner, me=True)
         return out
 
-    typed = voices._norm_name(name)
+    typed = voices.norm_name(name)
     use = str(d.get("voice") or "")
     target: dict[str, Any] | None = None
     if use.startswith("use:"):
@@ -181,8 +181,8 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
                     return out
 
     if target is None:
-        people = voices._people()
-        new_name = voices._unique_name(typed, people) if d.get("namesake") else typed
+        people = voices.raw_people()
+        new_name = voices.unique_name(typed, people) if d.get("namesake") else typed
         out["target"] = {"id": None, "name": new_name, "new": True, "has_voice": False,
                          "kind": voices.KIND_SHARED if voices.looks_like_room(new_name) else voices.KIND_PERSON}
     else:
@@ -197,11 +197,11 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
     # Сначала голос, потом «тот же человек у другого говорящего»: если голос
     # явно чужой, предлагать объединение говорящих было бы неверно.
     if emb is not None and out["remember"] and not d.get("voice"):
-        match_thr, suggest_thr = voices._thresholds()
+        match_thr, suggest_thr = voices.match_thresholds()
         gap = voices.margin()
         own = None
         if tgt.get("id"):
-            rec = voices._people().get(tgt["id"]) or {}
+            rec = voices.raw_people().get(tgt["id"]) or {}
             if rec.get("centroid"):
                 own = voices.cosine(emb, rec["centroid"])
         others = [s for s in voices.voice_scores(emb) if s["person_id"] != tgt.get("id")]
@@ -231,7 +231,7 @@ def plan(rec_id: str, key: str, name: str, decision: dict[str, Any] | None = Non
         if others:
             other_emb = embedding_for(rec_id, others[0])
             alike = voices.cosine(emb, other_emb) if (emb is not None and other_emb is not None) else None
-            match_thr = voices._thresholds()[0]
+            match_thr = voices.match_thresholds()[0]
             if alike is None:
                 why = "Возможно, разметка разделила одного человека надвое."
             elif alike >= match_thr:
@@ -441,7 +441,7 @@ def learn_from_names(rec_id: str, result: dict[str, Any]) -> dict[str, Any]:
             if ov > 0:
                 row = shared.setdefault(str(s["speaker_key"]), {})
                 row[t["speaker"]] = row.get(t["speaker"], 0.0) + ov
-    match_thr, suggest_thr = voices._thresholds()
+    match_thr, suggest_thr = voices.match_thresholds()
     report: list[dict[str, Any]] = []
     key_embs: dict[str, Any] = {}
     for key, row in shared.items():
@@ -469,7 +469,7 @@ def learn_from_names(rec_id: str, result: dict[str, Any]) -> dict[str, Any]:
             elif person.get("kind") == voices.KIND_SHARED:
                 item["status"] = "shared"
             else:
-                rec = voices._people().get(person["id"]) or {}
+                rec = voices.raw_people().get(person["id"]) or {}
                 if rec.get("centroid") and voices.cosine(emb, rec["centroid"]) < suggest_thr:
                     item["status"] = "differs"
                 else:
@@ -527,11 +527,11 @@ def _pick_owner(labels: list[str], embs: dict[str, Any],
     if absent:
         return None, "вы отметили, что вас в записи не было — «Я» не поставлено никому", OWNER_ABSENT, None
     owner = voices.owner_person()
-    rec = voices._people().get(owner["id"]) or {}
+    rec = voices.raw_people().get(owner["id"]) or {}
     cent = rec.get("centroid") or []
     scored = [(voices.cosine(embs.get(lab), cent), lab) for lab in labels if embs.get(lab) and cent]
     if scored:
-        _match, suggest_thr = voices._thresholds()
+        _match, suggest_thr = voices.match_thresholds()
         best = max(scored)
         if best[0] >= suggest_thr:
             return best[1], "ваш голос узнан по образцу (%d %%)" % _pct(best[0]), OWNER_BY_SAMPLE, best[0]

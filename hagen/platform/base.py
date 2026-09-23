@@ -38,11 +38,34 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
 
 # --------------------------------------------------------------- общие мелочи
+
+
+@dataclass
+class ShellHooks:
+    """Что оболочка — значок у часов и уведомления — просит у ядра.
+
+    Раньше связка получала модуль службы целиком и звала его приватные
+    функции: слой платформы знал, как устроено ядро, и любая перестановка в
+    службе молча ломала трей. Теперь дверь узкая и названа по именам. Все
+    вызовы синхронные.
+    """
+
+    #: Номер идущей записи или None.
+    active_recording: Callable[[], str | None]
+    #: Начать запись как кнопкой «Старт». Возвращает номер записи.
+    start_recording: Callable[[], str]
+    #: Остановить запись и сохранить заметку — как «Стоп», когда окно спрятано.
+    stop_recording: Callable[[str], Any]
+    #: Подписать слушателя на вопросы автоматики: fn(вопрос | None).
+    add_prompt_listener: Callable[[Callable[[dict[str, Any] | None], Any]], Any]
+    #: Ответ на вопрос кнопкой уведомления: (номер вопроса, кнопка).
+    answer_prompt: Callable[[str, str], Any]
 
 
 @runtime_checkable
@@ -375,13 +398,14 @@ class Shell(Protocol):
     def sync_autostart(self) -> None:
         """Привести автозапуск в соответствие с настройкой."""
 
-    def app_shell(self, window: Any, server_mod: Any) -> Any:
+    def app_shell(self, window: Any, hooks: ShellHooks) -> Any:
         """Связка окна программы, значка и уведомлений.
 
-        Умеет `start()`, `open_window()`, держит поле `notifier`.
+        Умеет `start()`, `open_window()`, держит поле `notifier`. У ядра просит
+        только то, что перечислено в `ShellHooks`.
         """
 
-    def make_notifier(self, server_mod: Any, on_open: Callable[[], Any]) -> Any | None:
+    def make_notifier(self, hooks: ShellHooks, on_open: Callable[[], Any]) -> Any | None:
         """Уведомления с кнопками. Нет — программа работает, просто молча."""
 
     def ask_yes_no(self, title: str, text: str) -> bool:
@@ -453,11 +477,23 @@ class System(Protocol):
         """
 
     def watch_screenshots(self, rec_id: str, position_s: Callable[[], float],
-                          on_shot: Callable[[dict[str, Any]], Any]) -> Watcher:
-        """Сторож снимков на время записи: новый снимок — в запись по времени."""
+                          on_shot: Callable[[dict[str, Any]], Any],
+                          folder: Callable[[], Path]) -> Watcher:
+        """Сторож снимков на время записи: новый снимок — в запись по времени.
 
-    def delete_shots(self, rec_id: str) -> int:
-        """Убрать файлы снимков записи. Только свои."""
+        `folder` — куда класть снимок; спрашивается на каждый снимок, потому
+        что категорию записи могут поменять по ходу. Где в сейфе лежат снимки,
+        знает логика заметок, а не система: розетка папку не выбирает.
+        """
+
+    def delete_shots(self, rec_id: str, folder: Path) -> int:
+        """Убрать файлы снимков записи. Только свои.
+
+        `folder` — папка снимков этой записи; её называет логика заметок, как и
+        при съёмке. Файл вне этой папки розетка не трогает: путь снимка лежит в
+        карточке записи, и без такой проверки удаление записи могло бы стереть
+        чужую картинку из сейфа.
+        """
 
     def shift_shots(self, items: list[dict[str, Any]],
                     offset_s: float) -> list[dict[str, Any]]:
@@ -483,6 +519,18 @@ class System(Protocol):
         нагрузки она почти не замедляется; "lowest" — как «Режим
         эффективности» в Диспетчере задач: самый низкий приоритет и
         экономичные ядра на пониженной частоте. True — получилось.
+        """
+
+    def process_alive(self, pid: int, unknown: bool = True) -> bool:
+        """Жив ли процесс с таким номером.
+
+        Помощники (запись собеседников, разметка) так узнают, что программа
+        ушла: обрыва канала они не видят, если устройство молчит, и держали бы
+        его вечно. Сама программа так чистит остатки прежних запусков.
+
+        `unknown` — что отвечать, когда спросить не вышло. Помощнику лучше
+        считать, что программа жива, и не выходить зря; чистке остатков —
+        наоборот, иначе папки прежних запусков копились бы вечно.
         """
 
     def open_path(self, path: str | Path) -> None:

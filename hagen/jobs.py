@@ -31,7 +31,7 @@ import time
 import traceback
 import uuid
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Callable
 
 log = logging.getLogger("hagen.jobs")
@@ -269,6 +269,145 @@ class JobHandle:
                     _heavy_pass.release()
                 except ValueError:      # уже отпущен — отпускать второй раз нельзя
                     log.debug("пропуск на тяжёлый счёт уже был отпущен")
+
+    def check(self) -> None:
+        """Прерваться, если человек нажал «Остановить»."""
+        if self.cancelled:
+            raise Cancelled("отменено")
+
+
+class Cancelled(RuntimeError):
+    """Задачу остановили. Отдельный класс, чтобы отмену не путать с отказом сети
+    или файла: прерванное скачивание не должно уходить в запасной путь."""
+
+
+class Busy(RuntimeError):
+    """То же самое уже идёт: вторую разметку, запись или переразбор не ставим.
+
+    Ядро бросает её вместо кода ответа 409: о кодах знает только слой
+    маршрутов (`api/deps.as_http`)."""
+
+
+class NullHandle:
+    """Задача без карточки: тот же договор, что у JobHandle, но всё уходит в журнал.
+
+    Нужна там, где работу зовут и из очереди, и напрямую — из проверок или из
+    соседней задачи. Раньше каждый такой модуль носил свои `_say`/`_progress`/
+    `_check` с проверкой «а есть ли handle»; теперь handle есть всегда.
+    """
+
+    job_id = ""
+    where = "here"
+    paused_s = 0.0
+    cancelled = False
+
+    def progress(self, value: float, note: str = "") -> None:
+        pass
+
+    def eta(self, seconds: float | None) -> None:
+        pass
+
+    def log(self, msg: str) -> None:
+        log.info("%s", msg)
+
+    def yield_to_live(self) -> None:
+        pass
+
+    def check(self) -> None:
+        pass
+
+    @contextmanager
+    def heavy(self, note: str = ""):
+        yield
+
+
+class _Ducked:
+    """Чужой объект с частью методов карточки — например, подставной из проверки.
+
+    Чего у него нет, то молчит; что есть — зовётся, и его отказ работу не роняет.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    @property
+    def job_id(self) -> str:
+        return str(getattr(self._inner, "job_id", "") or "")
+
+    @property
+    def where(self) -> str:
+        return str(getattr(self._inner, "where", "here") or "here")
+
+    @where.setter
+    def where(self, value: str) -> None:
+        try:
+            setattr(self._inner, "where", value)
+        except Exception:
+            pass
+
+    @property
+    def paused_s(self) -> float:
+        return float(getattr(self._inner, "paused_s", 0.0) or 0.0)
+
+    @property
+    def cancelled(self) -> bool:
+        try:
+            return bool(getattr(self._inner, "cancelled", False))
+        except Exception:
+            return False
+
+    def _call(self, name: str, *args: Any) -> None:
+        fn = getattr(self._inner, name, None)
+        if fn is None:
+            return
+        try:
+            fn(*args)
+        except Exception:
+            log.debug("подставная карточка задачи: %s не отработал", name, exc_info=True)
+
+    def progress(self, value: float, note: str = "") -> None:
+        self._call("progress", value, note)
+
+    def eta(self, seconds: float | None) -> None:
+        self._call("eta", seconds)
+
+    def log(self, msg: str) -> None:
+        if getattr(self._inner, "log", None) is None:
+            log.info("%s", msg)
+        else:
+            self._call("log", msg)
+
+    def yield_to_live(self) -> None:
+        self._call("yield_to_live")
+
+    def check(self) -> None:
+        if self.cancelled:
+            raise Cancelled("отменено")
+
+    def heavy(self, note: str = ""):
+        take = getattr(self._inner, "heavy", None)
+        if take is None:
+            return nullcontext()
+        return take(note) if note else take()
+
+
+#: Одна пустышка на всех: состояния у неё нет.
+NULL = NullHandle()
+
+
+def as_handle(handle: Any) -> Any:
+    """Карточка задачи, с которой можно работать, не спрашивая «а есть ли она».
+
+    None — пустышка; своя карточка — как есть; всё остальное — в обёртку.
+    Зовётся на входе в модуль, дальше handle считается настоящим.
+    """
+    if handle is None:
+        # Своя пустышка на каждый вызов: в неё пишут (`where` у разметки), и
+        # общая на всю программу разнесла бы эту запись по чужим задачам.
+        return NullHandle()
+    if isinstance(handle, (JobHandle, NullHandle, _Ducked)):
+        return handle
+    return _Ducked(handle)
 
 
 def submit(

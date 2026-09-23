@@ -30,6 +30,8 @@ import logging
 import threading
 from typing import Any, Callable
 
+from .win32window import MessageWindow, bgr, kill_timer, set_timer, work_area
+
 log = logging.getLogger("hagen.miccapsule")
 
 #: Размер кружка и отступ от правого нижнего угла рабочей области.
@@ -104,46 +106,31 @@ def _hide_from_capture(hwnd: int) -> bool:
     return bool(ok)
 
 
-#: SetTimer и KillTimer в pywin32 не завёрнуты, поэтому зовём Windows напрямую —
-#: тот же приём, что у капсулы диктовки.
 #: Шаг движения волны: 36 шагов по 36 мс — тот же цикл 1,3 с, но вдвое мельче
 #: приращение, поэтому ход слитный. Скорость цикла снижена на 20 % по
 #: замечанию 17.09 (было 1,08 с).
 BREATH_MS = 36
 
 
-def _set_timer(hwnd: int, ms: int, timer_id: int = 1) -> None:
-    import ctypes
-
-    ctypes.windll.user32.SetTimer(ctypes.c_void_p(hwnd), timer_id, int(ms), None)
-
-
-def _kill_timer(hwnd: int, timer_id: int = 1) -> None:
-    import ctypes
-
-    try:
-        ctypes.windll.user32.KillTimer(ctypes.c_void_p(hwnd), timer_id)
-    except Exception:
-        log.debug("таймер кружка не снялся", exc_info=True)
-
-
-def _bgr(rgb: tuple[int, int, int]) -> int:
-    """Windows хранит цвет задом наперёд: 0x00BBGGRR."""
-    r, g, b = rgb
-    return (int(b) << 16) | (int(g) << 8) | int(r)
-
-
-class MicPill:
-    """Кружок микрофона поверх всех окон."""
+class MicPill(MessageWindow):
+    """Кружок микрофона поверх всех окон — на общем основании `MessageWindow`."""
 
     WM_SHOW = 0x0400 + 41        # WM_USER + 41
     WM_HIDE = 0x0400 + 42
     WM_REPAINT = 0x0400 + 43
+    CLASS_NAME = "HagenMicPill"
+    TITLE = "Микрофон"
+    THREAD_NAME = "mic-capsule"
+    FAIL_TEXT = "кружок микрофона не создался"
+    STYLE = 0x80000000            # WS_POPUP
+    EX_STYLE = 0x00000008 | 0x00000080 | 0x08000000 | 0x00080000   # TOPMOST|TOOLWINDOW|NOACTIVATE|LAYERED
+    SIZE = (SIZE, SIZE)
+    BACKGROUND = 0
+    CURSOR = 32649                # IDC_HAND
 
     def __init__(self, on_click: Callable[[], dict[str, Any]] | None = None,
                  on_change: Callable[[dict[str, Any]], None] | None = None) -> None:
-        self.hwnd: int | None = None
-        self.error: str | None = None
+        super().__init__()
         self.hidden_from_capture = False
         self.on_click = on_click
         self.on_change = on_change
@@ -152,10 +139,7 @@ class MicPill:
         self._recording = False     # идёт ли запись: от этого волна «дышит»
         self._phase = 0
         self._lock = threading.Lock()
-        self._ready = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="mic-capsule", daemon=True)
-        self._thread.start()
-        self._ready.wait(5.0)
+        self.start(5.0)
 
     # -------- наружу (можно звать из любого потока)
     def show(self, muted: bool, recording: bool = True) -> None:
@@ -164,12 +148,10 @@ class MicPill:
         with self._lock:
             self._muted = bool(muted)
             self._recording = bool(recording)
-        self._post(self.WM_SHOW)
+        self.post(self.WM_SHOW)
 
     def hide(self) -> None:
-        if not self.hwnd:
-            return
-        self._post(self.WM_HIDE)
+        self.post(self.WM_HIDE)
 
     def set_muted(self, muted: bool) -> None:
         """Перекрасить, не показывая и не пряча."""
@@ -177,8 +159,8 @@ class MicPill:
             if self._muted == bool(muted):
                 return
             self._muted = bool(muted)
-        if self.hwnd and self._shown:
-            self._post(self.WM_REPAINT)
+        if self._shown:
+            self.post(self.WM_REPAINT)
 
     def set_recording(self, recording: bool) -> None:
         """Идёт запись — волна «дышит»; остановились — замирает (17.09)."""
@@ -186,71 +168,40 @@ class MicPill:
             if self._recording == bool(recording):
                 return
             self._recording = bool(recording)
-        if self.hwnd and self._shown:
-            self._post(self.WM_SHOW)        # заново поставит или снимет таймер
+        if self._shown:
+            self.post(self.WM_SHOW)         # заново поставит или снимет таймер
 
     def visible(self) -> bool:
         return bool(self.hwnd) and self._shown
 
-    def stop(self) -> None:
-        import win32con
-
-        self._post(win32con.WM_CLOSE)
-        self._thread.join(timeout=3)
-
-    def _post(self, msg: int) -> None:
-        import win32gui
-
-        try:
-            win32gui.PostMessage(self.hwnd, msg, 0, 0)
-        except Exception:
-            log.debug("кружок не откликнулся на сообщение %s", msg, exc_info=True)
+    def stop(self, timeout: float = 3.0) -> None:
+        super().stop(timeout)
 
     # -------- своё окно
-    def _run(self) -> None:
-        import win32api
+    def _handlers(self) -> dict[int, Callable[..., int]]:
+        import win32con
+
+        return {
+            win32con.WM_PAINT: self._on_paint,
+            win32con.WM_ERASEBKGND: self._on_erase,
+            win32con.WM_TIMER: self._on_timer,
+            win32con.WM_LBUTTONUP: self._on_click,
+            self.WM_SHOW: self._on_show,
+            self.WM_HIDE: self._on_hide,
+            self.WM_REPAINT: self._on_repaint,
+        }
+
+    def _created(self, hwnd: int) -> None:
         import win32con
         import win32gui
 
-        try:
-            hinst = win32api.GetModuleHandle(None)
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = hinst
-            wc.lpszClassName = "HagenMicPill"
-            wc.hbrBackground = 0
-            wc.hCursor = win32gui.LoadCursor(0, win32con.IDC_HAND)
-            wc.lpfnWndProc = {
-                win32con.WM_PAINT: self._on_paint,
-                win32con.WM_ERASEBKGND: self._on_erase,
-                win32con.WM_TIMER: self._on_timer,
-                win32con.WM_LBUTTONUP: self._on_click,
-                win32con.WM_DESTROY: self._on_destroy,
-                self.WM_SHOW: self._on_show,
-                self.WM_HIDE: self._on_hide,
-                self.WM_REPAINT: self._on_repaint,
-            }
-            try:
-                win32gui.RegisterClass(wc)
-            except win32gui.error:
-                pass                      # класс уже зарегистрирован этим процессом
-            ex = (win32con.WS_EX_TOPMOST | win32con.WS_EX_TOOLWINDOW
-                  | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_LAYERED)
-            self.hwnd = win32gui.CreateWindowEx(
-                ex, wc.lpszClassName, "Микрофон", win32con.WS_POPUP,
-                0, 0, SIZE, SIZE, 0, 0, hinst, None)
-            # Цвет-невидимка плюс общая полупрозрачность: видно только значок.
-            win32gui.SetLayeredWindowAttributes(
-                self.hwnd, _bgr(_KEY), ALPHA,
-                win32con.LWA_COLORKEY | win32con.LWA_ALPHA)
-            self.hidden_from_capture = _hide_from_capture(self.hwnd)
-        except Exception as err:                      # noqa: BLE001
-            self.error = str(err)
-            log.warning("кружок микрофона не создался: %s", err)
-            self.hwnd = None
-            self._ready.set()
-            return
-        self._ready.set()
-        win32gui.PumpMessages()
+        # Цвет-невидимка плюс общая полупрозрачность: видно только значок.
+        win32gui.SetLayeredWindowAttributes(hwnd, bgr(_KEY), ALPHA,
+                                            win32con.LWA_COLORKEY | win32con.LWA_ALPHA)
+        self.hidden_from_capture = _hide_from_capture(hwnd)
+
+    def _destroying(self, hwnd: int) -> None:
+        self._shown = False
 
     # -------- сообщения
     def _on_show(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
@@ -267,9 +218,9 @@ class MicPill:
         with self._lock:
             breathing = self._recording and not self._muted
         if breathing:
-            _set_timer(hwnd, BREATH_MS)
+            set_timer(hwnd, BREATH_MS)
         else:
-            _kill_timer(hwnd)
+            kill_timer(hwnd)
         win32gui.InvalidateRect(hwnd, None, False)
         return 0
 
@@ -278,7 +229,7 @@ class MicPill:
         import win32gui
 
         self._shown = False
-        _kill_timer(hwnd)
+        kill_timer(hwnd)
         win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
         return 0
 
@@ -325,28 +276,10 @@ class MicPill:
                 log.debug("о щелчке по кружку не удалось рассказать окну", exc_info=True)
         return 0
 
-    def _on_destroy(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        import win32gui
-
-        self.hwnd = None
-        self._shown = False
-        win32gui.PostQuitMessage(0)
-        return 0
-
     @staticmethod
     def _place() -> tuple[int, int]:
         """Правый нижний угол рабочей области — над панелью задач, а не под ней."""
-        import win32api
-        import win32con
-
-        try:
-            info = win32api.GetMonitorInfo(
-                win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY))
-            left, top, right, bottom = info["Work"]
-        except Exception:
-            left, top = 0, 0
-            right = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-            bottom = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        _left, _top, right, bottom = work_area()
         return right - SIZE - GAP_RIGHT, bottom - SIZE - GAP_BOTTOM
 
     # -------- рисование
@@ -368,7 +301,7 @@ class MicPill:
             bmp = win32gui.CreateCompatibleBitmap(hdc, w, h)
             old = win32gui.SelectObject(mem, bmp)
             # Всё поле красим цветом-невидимкой: на экране останется только значок.
-            fill = win32gui.CreateSolidBrush(_bgr(_KEY))
+            fill = win32gui.CreateSolidBrush(bgr(_KEY))
             win32gui.FillRect(mem, (0, 0, w, h), fill)
             win32gui.DeleteObject(fill)
             # Волна движется только во время записи; остановились — замерла на
@@ -408,8 +341,8 @@ class MicPill:
             return int(round(v * k))
 
         def box(x, y, bw, bh, color, radius=0.0):
-            brush = win32gui.CreateSolidBrush(_bgr(color))
-            pen = win32gui.CreatePen(win32con.PS_SOLID, 1, _bgr(color))
+            brush = win32gui.CreateSolidBrush(bgr(color))
+            pen = win32gui.CreatePen(win32con.PS_SOLID, 1, bgr(color))
             ob, op = win32gui.SelectObject(hdc, brush), win32gui.SelectObject(hdc, pen)
             if radius:
                 win32gui.RoundRect(hdc, px(x), px(y), px(x + bw), px(y + bh),
@@ -422,8 +355,8 @@ class MicPill:
             win32gui.DeleteObject(pen)
 
         # тёмный квадрат с обводкой
-        edge = win32gui.CreateSolidBrush(_bgr(_EDGE))
-        pen = win32gui.CreatePen(win32con.PS_SOLID, max(1, px(1.5)), _bgr(_EDGE))
+        edge = win32gui.CreateSolidBrush(bgr(_EDGE))
+        pen = win32gui.CreatePen(win32con.PS_SOLID, max(1, px(1.5)), bgr(_EDGE))
         ob, op = win32gui.SelectObject(hdc, edge), win32gui.SelectObject(hdc, pen)
         win32gui.RoundRect(hdc, px(0.75), px(0.75), px(63.25), px(63.25),
                            px(27), px(27))

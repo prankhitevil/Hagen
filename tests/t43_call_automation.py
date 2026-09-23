@@ -32,33 +32,14 @@ import numpy as np
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 
-LINES = []
-FAIL = []
 SR = 16000
 
 
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
-
-
-from hagen import audio_io, calls, config, store  # noqa: E402
+from hagen import audio_io, calls, config, recordings, store  # noqa: E402
 from hagen.platform.windows import desktop  # noqa: E402
 
 OVERRIDES = {}
@@ -364,7 +345,7 @@ if "--no-live" not in sys.argv:
             server._watcher.stop()          # настоящий наблюдатель не мешает сценарию
 
         auto.on_call_start({"process": "ms-teams.exe"}, {"subject": "Проверка 43"})
-        rec_a = server._call_active_recording()
+        rec_a = recordings.active_id()
         made.append(rec_a)
         check("звонок начал запись в службе", bool(rec_a), rec_a)
         st = cli.get("/api/state").json()
@@ -380,12 +361,12 @@ if "--no-live" not in sys.argv:
         check("ответ кнопкой окна принят", r.status_code == 200 and r.json().get("ok"), r.text[:200])
         meta_a = store.get(rec_a) or {}
         check("запись остановлена", meta_a.get("status") == "recorded" and
-              server._call_active_recording() is None, meta_a.get("status"))
+              recordings.active_id() is None, meta_a.get("status"))
         dur_a = float(meta_a.get("duration_s") or 0)
         say("   длительность первой записи: %.1f c" % dur_a)
 
         auto.on_call_start({"process": "ms-teams.exe"}, {"subject": "Проверка 43"})
-        rec_b = server._call_active_recording()
+        rec_b = recordings.active_id()
         made.append(rec_b)
         pr = cli.get("/api/prompt").json().get("prompt") or {}
         check("второй звонок — вопрос о склейке", pr.get("kind") == "call_resumed", pr.get("kind"))
@@ -394,8 +375,8 @@ if "--no-live" not in sys.argv:
         r = cli.post("/api/prompt/%s" % pr.get("id"), headers=ORIGIN, json={"answer": "merge"})
         check("«Дописать в прошлую» выполнено", r.status_code == 200 and r.json().get("ok"), r.text[:300])
         check("вторая запись влита и удалена", store.get(rec_b) is None)
-        check("запись продолжается в прошлой заметке", server._call_active_recording() == rec_a,
-              server._call_active_recording())
+        check("запись продолжается в прошлой заметке", recordings.active_id() == rec_a,
+              recordings.active_id())
         time.sleep(4.0)
         r = cli.post("/api/recordings/%s/stop" % rec_a, headers=ORIGIN, json={})
         check("остановка кнопкой «Стоп»", r.status_code == 200, r.status_code)
@@ -414,9 +395,4 @@ if "--no-live" not in sys.argv:
                 cli.delete("/api/recordings/%s?scope=all" % rid, headers=ORIGIN)
         check("тестовые записи убраны", all(store.get(r) is None for r in made if r))
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t43_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t43"))

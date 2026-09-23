@@ -12,34 +12,12 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящие база голосов и настройки не трогаются
+from harness import LINES, FAIL, say, expect as check, finish  # noqa: E402
 
 isolate.voices()
 # Служба при запуске переносит старые настройки и пишет их в файл: на
 # настоящем settings.json проверка переписала бы настройки человека.
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, got, want):
-    ok = got == want
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + ": " + repr(got)
-        + ("" if ok else "  (ждали " + repr(want) + ")"))
 
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -137,9 +115,4 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
     check("/api/providers убран (список сервисов стал полями)",
           cli.get("/api/providers").status_code, 404)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t36_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t36"))

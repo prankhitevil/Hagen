@@ -14,30 +14,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-import os
-import shutil
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import asr, audio_io, config, jobs, live, platform, store, vad
+from . import asr, config, dictation, diarize_jobs, jobs, platform, recordings, reread, store
+from .api import deps as api_deps
 
 log = logging.getLogger("hagen.server")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 UPLOAD_DIR = config.DATA_DIR / "_uploads"
-
-# Короче этого автоматическую разметку говорящих не запускаем: на обрывке в
-# пару секунд разделять нечего, а pyannote отнимет минуты процессорного времени.
-MIN_DIARIZE_SECONDS = 8.0
 
 SAFE_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 
@@ -49,7 +44,6 @@ SAFE_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 # роутеры. Имена здесь сохранены: остальной код
 # и проверки продолжают обращаться к server.hub и server.EventHub.
 from .events import EventHub, hub  # noqa: E402  (после импортов модуля)
-sessions = live.SessionManager(on_event=hub.publish)
 
 
 def _live_yield_reason() -> str:
@@ -63,7 +57,7 @@ def _live_yield_reason() -> str:
     """
     if config.get("processing_during_recording") == "run":
         return ""
-    return "идёт запись" if sessions.active_session() is not None else ""
+    return "идёт запись" if recordings.sessions.active_session() is not None else ""
 
 
 jobs.set_yield_rule(_live_yield_reason)
@@ -110,7 +104,7 @@ def _job_changed(job: dict[str, Any]) -> None:
         # Исключение: под одним именем нашлось несколько голосов — звук держим,
         # пока человек не решит, разделять ли их (решение 13.09).
         if job.get("kind") == "diarize" and job.get("status") == "done":
-            _drop_media_if_done(rec_id)
+            diarize_jobs.drop_media_if_done(rec_id)
         if job.get("kind") == "media" and broken:
             meta = store.get(rec_id) or {}
             if meta.get("status") in ("queued", "processing"):
@@ -214,7 +208,23 @@ class GuardMiddleware:
 
 # ====================================================================== приложение
 
-app = FastAPI(title="Hagen", docs_url=None, redoc_url=None, openapi_url=None)
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Запуск и остановка службы — одним контекстом, как просит FastAPI.
+
+    Остановка — в `finally`: при жёстком выходе сервер бросает отмену прямо в
+    это место, и без него остались бы занятыми звуковые устройства и горячая
+    клавиша диктовки.
+    """
+    await _startup()
+    try:
+        yield
+    finally:
+        await _shutdown()
+
+
+app = FastAPI(title="Hagen", docs_url=None, redoc_url=None, openapi_url=None,
+              lifespan=_lifespan)
 app.add_middleware(GuardMiddleware)
 
 
@@ -227,7 +237,6 @@ async def no_store(request: Request, call_next):
     return response
 
 
-@app.on_event("startup")
 async def _startup() -> None:
     config.ensure_dirs()
     # Разовый перенос возможностей с прежней установки: у того, кто обновился,
@@ -246,8 +255,7 @@ async def _startup() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     _sweep_uploads()
     hub.bind_loop(asyncio.get_running_loop())
-    _media_ready()
-    _recover_orphans()
+    recordings.recover_orphans()
     log.info("служба запущена на 127.0.0.1:%s", config.get("port"))
     # Служба поднялась — если это первая работа новой версии, откатывать её
     # не надо (hagen/updates.py). Итог прошлого обновления — в журнал.
@@ -275,7 +283,7 @@ async def _startup() -> None:
     _start_call_watcher()
     _start_idle_watch()
     _start_retention()
-    _start_dictation()
+    dictation.start()
 
 
 def _sweep_uploads(older_than_s: float = 86400.0) -> None:
@@ -300,18 +308,11 @@ def _sweep_uploads(older_than_s: float = 86400.0) -> None:
 _retention_thread: threading.Thread | None = None
 
 
-def _busy_record(rec_id: str) -> bool:
-    if sessions.get(rec_id) is not None and sessions.get(rec_id).active:
-        return True
-    return any(jobs.busy_with(kind, rec_id) for kind in ("diarize", "split", "retranscribe", "minutes",
-                                                          "summary", "media", "echo"))
-
-
 def _run_retention() -> dict[str, Any]:
     """Удалить звук звонков старше срока из настроек (если срок задан)."""
     from . import storage
 
-    res = storage.purge(busy=_busy_record)
+    res = storage.purge(busy=recordings.busy)
     if res["removed"]:
         for rec_id in res["removed"]:
             hub.publish({"type": "recording", "meta": store.get(rec_id)})
@@ -350,7 +351,7 @@ async def api_storage() -> JSONResponse:
     audio = await loop.run_in_executor(None, storage.audio_usage)
     assets = await loop.run_in_executor(None, storage.assets_usage)
     days = storage.retention_days()
-    due = storage.expired(days, busy=_busy_record) if days else []
+    due = storage.expired(days, busy=recordings.busy) if days else []
     return JSONResponse({"audio": audio, "videos": assets, "retention_days": days,
                          "due": {"records": len(due), "bytes": sum(d["bytes"] for d in due)}})
 
@@ -399,49 +400,6 @@ async def api_storage_purge() -> JSONResponse:
     return JSONResponse(res)
 
 
-def _recover_orphans() -> None:
-    """Записи, помеченные «пишется», после перезапуска службы уже не пишутся.
-
-    Видеозадачи сюда не попадают: у них своя карта этапов в meta["stages"], и
-    прерванная обработка продолжится с последнего сделанного этапа, а не
-    пометится «запись была прервана».
-
-    Служба могла быть закрыта во время записи. Звук на диске остался, поэтому
-    запись не теряем: закрываем её по фактической длине дорожек и помечаем как
-    прерванную, чтобы в списке не мигало «пишется» без конца.
-    """
-    fixed = 0
-    unfinished = 0
-    for meta in store.list_all():
-        if meta.get("status") not in ("recording", "processing"):
-            continue
-        if isinstance(meta.get("stages"), dict):
-            # Это видеозадача: её можно продолжить, а не закрывать как прерванную.
-            store.update(meta["id"], {"status": "queued"})
-            unfinished += 1
-            continue
-        rec_id = meta["id"]
-        tracks = store.existing_tracks(rec_id)
-        duration = 0.0
-        for tr in tracks:
-            # заголовок после краха отстаёт от файла — сначала чиним, потом меряем
-            audio_io.repair_wav_header(store.track_path(rec_id, tr))
-            duration = max(duration, audio_io.wav_duration(store.track_path(rec_id, tr)))
-        store.update(rec_id, {
-            "status": "recorded" if tracks else "empty",
-            "duration_s": round(duration, 2),
-            "tracks": tracks,
-            "interrupted": True,
-            "error": "запись была прервана закрытием службы",
-        })
-        fixed += 1
-    if fixed:
-        log.warning("восстановлено прерванных записей: %d", fixed)
-    if unfinished:
-        log.info("недоделанных видеозадач: %d — можно продолжить с последнего этапа",
-                 unfinished)
-
-
 def _warmup_async() -> None:
     try:
         # Точную модель на старте не греем — решение 14.09:
@@ -460,91 +418,52 @@ def _warmup_async() -> None:
                      "asr": {"state": "error", "error": str(err)[:300], "seconds": None}})
 
 
-@app.on_event("shutdown")
 async def _shutdown() -> None:
-    _level_stop.set()
-    for rec_id in list(_captures.keys()):
-        _stop_device_capture(rec_id)
-    try:
-        sessions.stop_all()
-    except Exception:
-        log.error("не удалось чисто остановить записи", exc_info=True)
+    recordings.shutdown()
     _stop_call_watcher()
-    _stop_dictation()
+    dictation.stop()
 
 
 # ====================================================================== детект звонка
 
 _watcher = None
-_call_state: dict[str, Any] = {"active": False, "asked": False, "meeting": None}
 _calls = None      # calls.CallAutomation — звонок → запись
 
 
-def _loop_call(coro, timeout: float = 120.0):
-    """Выполнить корутину службы из постороннего потока и дождаться итога."""
-    loop = hub._loop
-    if loop is None or loop.is_closed():
-        coro.close()
-        raise RuntimeError("служба ещё не запущена")
-    fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    try:
-        return fut.result(timeout=timeout)
-    except HTTPException as err:
-        raise RuntimeError(str(err.detail)) from None
-
-
-def _call_active_recording() -> str | None:
-    sess = sessions.active_session()
-    return sess.rec_id if sess is not None else None
-
-
 def _call_start_recording(meeting: dict[str, Any] | None) -> str:
+    """Звонок начался — запись как кнопкой «Старт», с именем по встрече."""
     body: dict[str, Any] = {"category": config.get("default_category")}
     if meeting:
         body["meeting"] = meeting
-    payload = _loop_call(_create_recording(body), timeout=60)
-    return str(payload["meta"]["id"])
+    return str(recordings.start(body)["meta"]["id"])
 
 
-def _call_stop_recording(rec_id: str) -> None:
-    """Остановка по звонку делает то же, что кнопка «Стоп» в окне, и сохраняет
-    стенограмму: окно в это время может быть спрятано в трей."""
-    _loop_call(api_recording_stop(rec_id), timeout=180)
-    if store.sorted_segments(rec_id):
-        try:
-            _loop_call(api_save_note(rec_id), timeout=60)
-        except Exception as err:
-            log.warning("стенограмму после остановки по звонку сохранить не вышло: %s", err)
+def _call_public() -> dict[str, Any]:
+    """Состояние звонка для страницы — то, что видит автоматика."""
+    state = dict(_calls.call) if _calls is not None else {"active": False}
+    state.setdefault("asked", False)
+    return state
 
 
-def _call_discard_recording(rec_id: str) -> None:
-    _stop_device_capture(rec_id)
-    sessions.stop(rec_id)
-    hub.publish({"type": "recording_state", "rec_id": rec_id, "active": False})
-    sync_mic_pill(False)
-    _loop_call(api_recording_delete(rec_id, "all"), timeout=60)
-    hub.publish({"type": "recordings"})
+def shell_hooks() -> platform.base.ShellHooks:
+    """Что значку у часов и уведомлениям можно просить у службы (розетка «Оболочка»)."""
+    def add_listener(fn: Any) -> None:
+        autom = _ensure_calls()
+        if autom is not None:
+            autom.add_listener(fn)
 
+    def answer(prompt_id: str, button: str) -> None:
+        autom = _ensure_calls()
+        if autom is not None:
+            autom.answer(prompt_id, button, source="toast")
 
-def _call_merge_and_resume(src_id: str, dst_id: str) -> None:
-    """Звонок вернулся и человек сказал «дописать в прошлую»: переносим то, что
-    уже успели записать, в прошлую заметку и продолжаем писать туда."""
-    from . import calls
-
-    dst = store.get(dst_id)
-    if not dst or dst.get("source") != "live" or dst.get("media_removed"):
-        raise RuntimeError("к прошлой заметке дописать нельзя")
-    _stop_device_capture(src_id)
-    sessions.stop(src_id)
-    hub.publish({"type": "recording_state", "rec_id": src_id, "active": False})
-    sync_mic_pill(False)
-    for job in jobs.for_recording(src_id):
-        if job.get("status") in ("queued", "running"):
-            jobs.cancel(job["id"])
-    calls.merge_recordings(src_id, dst_id)
-    hub.publish({"type": "recordings"})
-    _loop_call(_create_recording({"rec_id": dst_id, "category": dst.get("category")}),
-               timeout=60)
+    return platform.base.ShellHooks(
+        active_recording=recordings.active_id,
+        start_recording=lambda: str(recordings.start()["meta"]["id"]),
+        stop_recording=recordings.stop_and_save,
+        add_prompt_listener=add_listener,
+        answer_prompt=answer,
+    )
 
 
 def _ensure_calls() -> Any:
@@ -562,13 +481,14 @@ def _ensure_calls() -> Any:
         log.info("автоматика вопросов недоступна: %s", err)
         return None
     _calls = calls.CallAutomation(calls.Hooks(
-        active_recording=_call_active_recording,
+        active_recording=recordings.active_id,
         start_recording=_call_start_recording,
-        stop_recording=_call_stop_recording,
-        discard_recording=_call_discard_recording,
-        merge_and_resume=_call_merge_and_resume,
+        stop_recording=recordings.stop_and_save,
+        discard_recording=recordings.discard,
+        merge_and_resume=recordings.merge_and_resume,
         publish=hub.publish,
     ))
+    recordings.on_stopped(_calls.recording_stopped)
     return _calls
 
 
@@ -602,14 +522,12 @@ def _start_call_watcher() -> None:
                 meeting = platform.desktop().current_meeting(with_alternatives=True)
         except Exception as err:
             log.debug("встречу Outlook прочитать не вышло: %s", err)
-        _call_state.update({"active": True, "info": info, "meeting": meeting, "asked": False})
-        hub.publish({"type": "call", "call": dict(_call_state)})
         _calls.on_call_start(info, meeting)
+        hub.publish({"type": "call", "call": _call_public()})
 
     def on_end(info: dict[str, Any]) -> None:
-        _call_state.update({"active": False, "info": info, "asked": False})
-        hub.publish({"type": "call", "call": dict(_call_state)})
         _calls.on_call_end(info)
+        hub.publish({"type": "call", "call": _call_public()})
 
     try:
         _watcher = platform.desktop().watch_calls(on_call_start=on_start, on_call_end=on_end)
@@ -632,17 +550,6 @@ def _stop_call_watcher() -> None:
             _calls.stop_idle_watch()
         except Exception:
             pass
-
-
-# ====================================================================== диктовка
-
-# Диктовка — свой запуск и остановка: их зовут и жизненный цикл службы, и
-# маршруты /api/dictate, и сохранение настроек.
-from .api.deps import (dictation_status as _dictation_status,  # noqa: E402
-                       mic_pill,
-                       start_dictation as _start_dictation,
-                       stop_dictation as _stop_dictation,
-                       sync_mic_pill)
 
 
 # ====================================================================== страница
@@ -693,66 +600,6 @@ if STATIC_DIR.exists():
 # ====================================================================== состояние
 
 
-def _segments(rec_id: str) -> list[dict[str, Any]]:
-    return store.sorted_segments(rec_id)
-
-
-def _rec_paths(rec_id: str, meta: dict[str, Any]) -> list[dict[str, Any]]:
-    """Где у этой записи что лежит — для показа в карточке.
-
-    Отдаём только то, что ПРАВДА есть на диске: обещать файл, которого нет,
-    хуже, чем не обещать ничего.
-    """
-    out: list[dict[str, Any]] = []
-
-    def add(key: str, title: str, raw: str | Path | None) -> None:
-        if not raw:
-            return
-        p = Path(str(raw))
-        try:
-            if not p.exists():
-                return
-        except OSError:
-            return
-        out.append({"key": key, "title": title, "path": str(p),
-                    "is_dir": p.is_dir()})
-
-    add("video", "Видео", meta.get("video_path"))
-    folder = str(meta.get("assets_folder") or "")
-    if folder:
-        d = store.assets_dir(rec_id, folder)
-        add("transcript", "Текстовая копия стенограммы", d / "transcript.txt")
-        add("assets", "Папка с файлами записи", d)
-    add("note", "Заметка в хранилище", meta.get("vault_path"))
-    shots = [s for s in (meta.get("screenshots") or []) if s.get("path")]
-    if shots:
-        add("shots", "Снимки экрана (%d)" % len(shots), Path(str(shots[0]["path"])).parent)
-    add("data", "Служебная папка записи", store.rec_dir(rec_id))
-    return out
-
-
-def _recording_payload(rec_id: str) -> dict[str, Any]:
-    meta = store.get(rec_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Запись не найдена")
-    # У записей, сделанных до появления счётчика голосов, поля ещё нет:
-    # считаем один раз при открытии записи, а не при каждом показе списка.
-    if meta.get("voices") is None and meta.get("diarized"):
-        try:
-            store.refresh_participants(rec_id)
-            meta = store.get(rec_id) or meta
-        except Exception:
-            log.debug("счётчик голосов не посчитался", exc_info=True)
-    sess = sessions.get(rec_id)
-    return {
-        "meta": meta,
-        "segments": _segments(rec_id),
-        "session": sess.status() if sess is not None else None,
-        "jobs": jobs.for_recording(rec_id),
-        "paths": _rec_paths(rec_id, meta),
-    }
-
-
 @app.get("/api/state")
 async def api_state() -> JSONResponse:
     # Сбор состояния ходит в звуковой поток, к сейфу на Яндекс.Диске и ищет
@@ -764,14 +611,14 @@ async def api_state() -> JSONResponse:
 
 
 def _state_payload() -> dict[str, Any]:
-    active = sessions.active_session()
+    active = recordings.sessions.active_session()
     payload = {
         "recordings": store.list_all(),
         "settings": config.public(),
         "jobs": jobs.list_all(20),
         "active_recording": active.rec_id if active is not None else None,
         "session": active.status() if active is not None else None,
-        "call": dict(_call_state),
+        "call": _call_public(),
         "prompt": _calls.prompt if _calls is not None else None,
         "capabilities": _capabilities(),
         "vault": _vault_status(),
@@ -842,6 +689,8 @@ def _capabilities_fresh() -> dict[str, Any]:
         from . import providers as _prov
 
         caps["claude_cli"] = bool(minutes.resolve_claude_cli())
+        # Для сводки «Готов к записи»: слушает ли порт VPN. Сети не касается.
+        caps["claude_cli_net"] = minutes.cli_network_state() if caps["claude_cli"] else ""
         caps["engines"] = minutes.available_engines()
         caps["minutes_models"] = minutes.models_hint()
         caps["connections"] = _prov.public_connections()
@@ -910,12 +759,12 @@ async def api_settings_post(request: Request) -> JSONResponse:
             log.warning("автозапуск не переключился: %s", err)
     if "mic_pill" in patch:
         # Галочку сняли посреди записи — кружок должен исчезнуть сразу.
-        sync_mic_pill(_call_active_recording() is not None)
+        recordings.sync_mic_pill(recordings.active_id() is not None)
     if any(k.startswith("dictate_") for k in patch):
         # Сочетание клавиш занимается и освобождается сразу, а не при следующем
         # запуске: иначе человек поменял бы клавишу и решил, что она не работает.
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _start_dictation)
+        await loop.run_in_executor(None, dictation.start)
     public = config.public()
     try:
         public["autostart_present"] = platform.shell().autostart_enabled()
@@ -944,7 +793,7 @@ async def api_app_show() -> JSONResponse:
     return JSONResponse({"shown": True})
 
 
-# ====================================================================== диктовка
+# ====================================================================== записи
 
 
 @app.get("/api/recordings")
@@ -959,258 +808,19 @@ async def api_recording_create(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         pass
-    return JSONResponse(await _create_recording(body))
-
-
-async def _create_recording(body: dict[str, Any]) -> dict[str, Any]:
-    """Начать или продолжить живую запись. Общий путь кнопки «Старт» и звонка."""
-    # Одна запись за раз. Без этой проверки нетерпеливый повторный клик плодит
-    # пустые записи — ровно это и случилось на первом живом прогоне.
-    if sessions.active_session() is not None:
-        raise HTTPException(status_code=409,
-                            detail="Запись уже идёт. Сначала нажмите «Стоп».")
-
-    title = (body.get("title") or "").strip()
-    mode = body.get("mode") or config.get("mode") or "online"
-    category = body.get("category") or config.get("default_category")
-
-    # Продолжение уже открытой заметки: «Старт» после «Стоп» не должен плодить
-    # новые записи — человек ведёт ОДНУ заметку и дополняет её, сколько нужно.
-    resume_id = str(body.get("rec_id") or "").strip()
-    if resume_id:
-        meta = store.get(resume_id)
-        if meta is None:
-            raise HTTPException(status_code=404, detail="Заметка не найдена")
-        if meta.get("source") != "live":
-            raise HTTPException(
-                status_code=400,
-                detail="К заметке с импортированным файлом нельзя дописать запись. "
-                       "Создайте новую заметку.")
-        if meta.get("media_removed"):
-            # Звук этой заметки стёрли, а время новых реплик считается от
-            # начала записи: дописанное встало бы поверх старого текста.
-            raise HTTPException(
-                status_code=400,
-                detail="У этой заметки звук удалён — дописать к ней запись нельзя. "
-                       "Создайте новую заметку.")
-        store.update(resume_id, {"status": "recording", "mode": mode,
-                                 "category": category})
-        sess = sessions.start(resume_id, mode=mode)
-        capture_status: dict[str, Any] = {"state": "starting"}
-        want_far = bool(config.get("record_far")) and mode != "offline"
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, _start_device_capture, resume_id, sess, want_far, False)
-        meta = store.get(resume_id) or meta
-        hub.publish({"type": "recording", "meta": meta})
-        hub.publish({"type": "recordings"})
-        hub.publish({"type": "recording_state", "rec_id": resume_id, "active": True})
-        sync_mic_pill(True)
-        log.info("продолжаю запись %s: %s", resume_id, meta.get("title"))
-        payload = _recording_payload(resume_id)
-        payload["capture"] = capture_status
-        payload["resumed"] = True
-        return payload
-
-    meeting = body.get("meeting") if isinstance(body.get("meeting"), dict) else None
-    if not title and meeting is None and config.get("outlook_enabled"):
-        try:
-            desktop = platform.desktop()
-            meeting = desktop.current_meeting()
-            if meeting:
-                title = desktop.suggest_title(meeting)
-        except Exception as err:
-            log.debug("Outlook не дал встречу: %s", err)
-    if not title and meeting:
-        title = platform.desktop().suggest_title(meeting)
-
-    meta = store.create(title=title, mode=mode, category=category, source="live")
-    if meeting:
-        store.update(meta["id"], {"meeting": meeting})
-        meta = store.get(meta["id"]) or meta
-
-    sess = sessions.start(meta["id"], mode=mode)
-    store.update(meta["id"], {"status": "recording"})
-
-    # Устройства открываем В ФОНЕ и отвечаем сразу. Иначе при недоступном звуке
-    # ответ ждал бы больше десяти секунд, страница выглядела бы «зависшей»,
-    # и человек нажимал бы «Старт» ещё раз.
-    capture_status: dict[str, Any] = {"state": "starting"}
-    want_far = bool(config.get("record_far")) and mode != "offline"
     loop = asyncio.get_running_loop()
-    loop.run_in_executor(None, _start_device_capture, meta["id"], sess, want_far, True)
-
-    meta = store.get(meta["id"]) or meta
-    hub.publish({"type": "recording", "meta": meta})
-    hub.publish({"type": "recordings"})
-    hub.publish({"type": "recording_state", "rec_id": meta["id"], "active": True})
-    sync_mic_pill(True)
-    log.info("начата запись %s: %s", meta["id"], meta["title"])
-    payload = _recording_payload(meta["id"])
-    payload["capture"] = capture_status
-    return payload
-
-
-_captures: dict[str, Any] = {}
-
-
-NO_AUDIO_HINT = (
-    "Нет доступа к звукозаписи. Обычно это правило антивируса: нужно разрешить "
-    "доступ к микрофону файлу python.exe из папки приложения. Подробности — "
-    "в памятке «Диктофон — как пользоваться», раздел «Если запись не идёт»."
-)
-
-
-def _start_device_capture(rec_id: str, sess, want_far: bool,
-                          created: bool = False) -> dict[str, Any]:
-    """Открыть устройства. Выполняется в фоне, результат уходит событием.
-
-    created — запись заведена этим же «Стартом». Только такую, пустую, можно
-    убрать, если звук не открылся. Продолжение существующей заметки («Старт»
-    после «Стоп», «дописать в прошлую» по звонку) при отказе устройств должно
-    остаться как было: раньше папка записи удалялась целиком вместе со
-    стенограммой и звуком прошлых сеансов.
-    """
-    cap = live.DeviceCapture(sess)
     try:
-        status = cap.start(want_far=want_far)
-    except Exception as err:
-        log.error("захват не запустился: %s", err)
-        status = {"mic_error": str(err), "far_error": None, "mic": None, "far": None}
-
-    got_mic = status.get("mic") is not None
-    got_far = status.get("far") is not None
-
-    if got_mic or got_far:
-        _captures[rec_id] = cap
-        _ensure_level_pump()
-        _start_shots(rec_id, sess)
-        status["state"] = "ok"
-        if got_mic and not got_far and want_far:
-            hub.publish({"type": "notice", "level": "err",
-                         "text": "Пишется только микрофон: звук собеседников не открылся. "
-                                 "Подключение повторяется в фоне. Проверьте, на "
-                                 "какое устройство выводится звонок."})
-        else:
-            hub.publish({"type": "notice", "level": "ok",
-                         "text": "Идёт запись: %s"
-                                 % ("микрофон и собеседники" if got_far else "только микрофон")})
-        hub.publish({"type": "capture", "rec_id": rec_id, "status": status})
-        return status
-
-    # Ни одна дорожка не открылась. «Стоп» мог прийти раньше, чем устройства
-    # успели открыться, — тогда это не отказ звука, а просто короткая запись.
-    status["state"] = "failed"
-    stopped_early = bool(getattr(sess, "_stopping", False)) or not sess.active
-    try:
-        cap.stop()
-    except Exception:
-        pass
-    try:
-        sessions.stop(rec_id)
-    except Exception:
-        log.debug("сеанс уже остановлен", exc_info=True)
-
-    # Убираем только пустышку, заведённую этим же «Стартом»: без звука и без
-    # реплик. Заметку с прошлыми сеансами не трогаем ни при каких условиях.
-    fresh = created and not store.existing_tracks(rec_id) and not store.sorted_segments(rec_id)
-    if fresh:
-        log.error("запись %s: звук недоступен, отменяю её", rec_id)
-        try:
-            store.delete(rec_id)
-        except Exception:
-            log.debug("пустую запись удалить не вышло", exc_info=True)
-    else:
-        log.error("запись %s: звук недоступен, прошлые сеансы заметки сохранены", rec_id)
-    status["deleted"] = fresh
-
-    hub.publish({"type": "capture", "rec_id": rec_id, "status": status})
-    hub.publish({"type": "recordings"})
-    if stopped_early:
-        hub.publish({"type": "notice", "level": "ok",
-                     "text": "Запись остановлена раньше, чем открылись устройства."})
-    else:
-        hub.publish({"type": "notice", "level": "err", "text": NO_AUDIO_HINT})
-    return status
-
-
-def _stop_device_capture(rec_id: str) -> None:
-    cap = _captures.pop(rec_id, None)
-    if cap is not None:
-        try:
-            cap.stop()
-        except Exception as err:
-            log.warning("устройства не закрылись чисто: %s", err)
-    watcher = _shot_watchers.pop(rec_id, None)
-    if watcher is not None:
-        try:
-            watcher.stop()
-        except Exception as err:
-            log.warning("наблюдение за снимками экрана не остановилось: %s", err)
-
-
-_shot_watchers: dict[str, Any] = {}
-
-
-def _start_shots(rec_id: str, sess) -> None:
-    """Снимки экрана, сделанные во время записи, — в заметку по времени."""
-    if not config.get("screenshots_enabled", True) or rec_id in _shot_watchers:
-        return
-    try:
-        from . import obsidian
-
-        def on_shot(entry: dict[str, Any]) -> None:
-            hub.publish({"type": "notice", "level": "ok",
-                         "text": "Снимок экрана добавлен в запись — %s"
-                                 % obsidian._hms(entry.get("at_s"))})
-            hub.publish({"type": "recording", "meta": store.get(rec_id)})
-
-        watcher = platform.system().watch_screenshots(
-            rec_id, position_s=lambda: sess.duration, on_shot=on_shot)
-        watcher.start()
-        _shot_watchers[rec_id] = watcher
-    except Exception as err:
-        log.warning("наблюдение за снимками экрана не включилось: %s", err)
-
-
-_level_pump: threading.Thread | None = None
-_level_stop = threading.Event()
-
-
-def _ensure_level_pump() -> None:
-    """Шлёт в интерфейс уровни индикаторов, пока идёт запись."""
-    global _level_pump
-    if _level_pump is not None and _level_pump.is_alive():
-        return
-    _level_stop.clear()
-
-    def run() -> None:
-        while not _level_stop.is_set():
-            if not _captures:
-                time.sleep(0.3)
-                continue
-            for rec_id, cap in list(_captures.items()):
-                try:
-                    levels = cap.levels
-                    st = cap.status()
-                except Exception:
-                    continue
-                hub.publish({
-                    "type": "levels", "rec_id": rec_id, "levels": levels,
-                    "mic_silent": bool((st.get("mic") or {}).get("silent")),
-                    "far_silent": bool((st.get("far") or {}).get("silent")),
-                    "far_on": st.get("far") is not None or bool(st.get("far_lost")),
-                    "mic_lost": bool(st.get("mic_lost")),
-                    "far_lost": bool(st.get("far_lost")),
-                })
-            time.sleep(0.25)
-
-    _level_pump = threading.Thread(target=run, name="levels", daemon=True)
-    _level_pump.start()
+        return JSONResponse(await loop.run_in_executor(None, recordings.start, body))
+    except (LookupError, ValueError, jobs.Busy) as err:
+        raise api_deps.as_http(err) from None
 
 
 @app.get("/api/recordings/{rec_id}")
 async def api_recording_get(rec_id: str) -> JSONResponse:
-    return JSONResponse(_recording_payload(rec_id))
+    try:
+        return JSONResponse(recordings.payload(rec_id))
+    except LookupError as err:
+        raise api_deps.as_http(err) from None
 
 
 @app.patch("/api/recordings/{rec_id}")
@@ -1413,106 +1023,16 @@ async def api_vault_folders(q: str = "") -> JSONResponse:
     return JSONResponse({"folders": found})
 
 
-#: Три ответа диалога удаления — три объёма работы.
-DELETE_SCOPES = ("all", "media", "history")
-
-
 @app.delete("/api/recordings/{rec_id}")
 async def api_recording_delete(rec_id: str, scope: str = "all") -> JSONResponse:
-    """Удалить запись в одном из трёх объёмов.
-
-    all     — запись, видео и звук рядом с ней, заметка в хранилище;
-    media   — только видео и звук. Стенограмма остаётся, и по ней потом
-              собирается протокол или саммари: ради этого всё и затевалось —
-              гигабайты уходят, работа сохраняется;
-    history — убрать из программы вместе со стенограммой. Видео и заметка в
-              хранилище остаются лежать на диске.
-    """
-    from . import obsidian
-
-    scope = (scope or "all").strip().lower()
-    if scope not in DELETE_SCOPES:
-        raise HTTPException(status_code=400,
-                            detail="Неизвестный вид удаления: %s" % scope)
-    meta = store.get(rec_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Запись не найдена")
-    sess = sessions.get(rec_id)
-    if sess is not None and sess.active:
-        raise HTTPException(status_code=409, detail="Сначала остановите запись")
-
+    """Удалить запись: всё, только звук и видео или только из программы (recordings.delete)."""
     # Удаление файлов и заметки в сейфе — в фоне, чтобы не держать цикл событий.
     loop = asyncio.get_running_loop()
-    out = await loop.run_in_executor(None, _delete_recording, rec_id, scope, meta)
+    try:
+        out = await loop.run_in_executor(None, recordings.delete, rec_id, scope)
+    except (LookupError, ValueError, jobs.Busy, recordings.Locked) as err:
+        raise api_deps.as_http(err) from None
     return JSONResponse(out)
-
-
-def _delete_recording(rec_id: str, scope: str, meta: dict[str, Any]) -> dict[str, Any]:
-    from . import obsidian
-
-    # Задачи по этой записи снимаем заранее: иначе обработка продолжит писать
-    # в папку, которой уже нет, и вывалит непонятную ошибку. При удалении
-    # ОДНИХ МЕДИАФАЙЛОВ трогаем только то, чему нужен звук: сборка протокола
-    # или саммари идёт по стенограмме, она остаётся — обрывать её незачем.
-    kinds = ("diarize", "retranscribe", "media") if scope == "media" else None
-    stopped = 0
-    for job in jobs.for_recording(rec_id):
-        if job.get("status") not in ("queued", "running"):
-            continue
-        if kinds is not None and job.get("kind") not in kinds:
-            continue
-        if jobs.cancel(job["id"]):
-            stopped += 1
-
-    out: dict[str, Any] = {"scope": scope, "jobs_stopped": stopped,
-                           "deleted": scope != "media"}
-
-    if scope == "media":
-        res = store.drop_media(rec_id)
-        out.update({"freed_bytes": res.get("freed_bytes", 0),
-                    "files": res.get("files", 0),
-                    "ok": bool(res.get("ok")),
-                    "left": list(res.get("left") or [])})
-        hub.publish({"type": "recording", "meta": store.get(rec_id)})
-        hub.publish({"type": "recordings"})
-        log.info("удалены медиафайлы записи %s: %d файлов, %.1f МБ%s",
-                 rec_id, out["files"], out["freed_bytes"] / 1048576.0,
-                 (", не отдались: " + ", ".join(out["left"])) if out["left"] else "")
-        return out
-
-    freed = 0
-    note_gone = None
-    if scope == "all":
-        freed = store.drop_assets(rec_id)
-        try:
-            out["shots_deleted"] = platform.system().delete_shots(rec_id)
-        except Exception as err:            # снимки не должны мешать удалению
-            log.warning("снимки экрана убрать не вышло: %s", err)
-        try:
-            note = obsidian.delete_note(rec_id)
-            note_gone = bool(note.get("deleted"))
-        except Exception as err:            # заметка не должна мешать удалению
-            log.warning("заметку убрать не вышло: %s", err)
-            note_gone = False
-        out["note_deleted"] = note_gone
-
-    if not store.delete(rec_id):
-        # Различаем «нечего удалять» и «файл держит другая программа»: на
-        # Windows плеер или антивирус не отдают файл, и прежний ответ «Запись
-        # не найдена» звучал как неправда — запись-то на месте.
-        if store.rec_dir(rec_id).exists():
-            raise HTTPException(
-                status_code=409,
-                detail="Файлы записи занял другой процесс — обычно это открытый "
-                       "плеер или антивирус. Закройте его и попробуйте снова.")
-        raise HTTPException(status_code=404, detail="Запись не найдена")
-    out["freed_bytes"] = freed
-    # Что осталось снаружи — говорим по факту, а не по обещанию из диалога.
-    out["kept_video"] = bool(meta.get("video_path")) and scope == "history"
-    out["kept_note"] = bool(meta.get("vault_path")) and scope == "history"
-    hub.publish({"type": "recordings"})
-    log.info("запись %s удалена (%s)", rec_id, scope)
-    return out
 
 
 @app.post("/api/recordings/{rec_id}/reveal")
@@ -1534,7 +1054,7 @@ async def api_recording_reveal(rec_id: str, request: Request) -> JSONResponse:
     key = str(body.get("what") or "").strip()
 
     wanted = None
-    for item in _rec_paths(rec_id, meta):
+    for item in recordings.rec_paths(rec_id, meta):
         if item["key"] == key:
             wanted = item
             break
@@ -1558,54 +1078,11 @@ async def api_recording_reveal(rec_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/recordings/{rec_id}/stop")
 async def api_recording_stop(rec_id: str) -> JSONResponse:
-    meta = store.get(rec_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Запись не найдена")
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _stop_device_capture, rec_id)
-    status = await loop.run_in_executor(None, sessions.stop, rec_id)
-
-    # Эхо колонок отсеиваем до разметки говорящих: иначе pyannote будет разводить
-    # голоса на дорожке, где чужие слова числятся за владельцем микрофона.
     try:
-        from . import echo
-
-        marked = await loop.run_in_executor(None, echo.mark, rec_id)
-        if marked:
-            hub.publish({"type": "notice", "level": "ok",
-                         "text": "Убрал из стенограммы эхо колонок: реплик — %d. "
-                                 "В наушниках этого не происходит." % marked})
-    except Exception as err:
-        log.warning("отсев эха не выполнен: %s", err)
-
-    meta = store.get(rec_id) or meta
-    hub.publish({"type": "recording", "meta": meta})
-    hub.publish({"type": "recordings"})
-    hub.publish({"type": "recording_state", "rec_id": rec_id, "active": False})
-    sync_mic_pill(False)
-    if _calls is not None:
-        try:
-            _calls.recording_stopped(rec_id)
-        except Exception:
-            log.debug("автоматика звонков не узнала об остановке", exc_info=True)
-
-    # Разметка сама запускается только если размечать есть что. Случайно нажатый
-    # «Старт» даёт запись на пару секунд, и гонять на ней pyannote пять минут
-    # незачем — разделять там нечего. Кнопкой «Разметить говорящих» по-прежнему
-    # можно запустить вручную на любой записи.
-    duration = float((meta or {}).get("duration_s") or 0.0)
-    if config.get("diarize_auto") and store.existing_tracks(rec_id):
-        if duration < MIN_DIARIZE_SECONDS:
-            log.info("запись %s: %.1f c — коротко для разметки, пропускаю",
-                     rec_id, duration)
-        else:
-            try:
-                _queue_diarize(rec_id)
-            except Exception as err:
-                log.warning("автоматическая разметка не запустилась: %s", err)
-
-    return JSONResponse({"meta": meta, "session": status,
-                         "segments": _segments(rec_id)})
+        return JSONResponse(await loop.run_in_executor(None, recordings.stop, rec_id))
+    except LookupError as err:
+        raise api_deps.as_http(err) from None
 
 
 @app.get("/api/recordings/{rec_id}/audio/{track}")
@@ -1623,230 +1100,33 @@ async def api_recording_audio(rec_id: str, track: str) -> Response:
 # ====================================================================== говорящие
 
 
-# Помощники, которыми пользуются и маршруты, переехали в hagen/api/deps.py.
-# Прежние имена оставлены: остальной код
-# server.py и проверки продолжают звать _refresh_note и _plural_ru.
-from .api.deps import (plural_ru as _plural_ru,  # noqa: E402
-                       refresh_note as _refresh_note,
-                       refresh_note_async as _refresh_note_async)
-
-
-# Говорящие и голоса записи переехали в hagen/api/speakers.py вместе со
-# своими помощниками: очередь разметки и разделения, память о числе
-# голосов, переиспользование готовой разметки.
-# Имена здесь сохранены — остальной server.py зовёт их по-прежнему.
-from .api.speakers import (drop_media_if_done as _drop_media_if_done,  # noqa: E402
-                           queue_diarize as _queue_diarize,
-                           queue_split as _queue_split,
-                           remember_voices as _remember_voices,
-                           reuse_diarization as _reuse_diarization,
-                           voices_asked as _voices_asked)
-
-
 @app.post("/api/recordings/{rec_id}/retranscribe")
 async def api_retranscribe(rec_id: str, request: Request) -> JSONResponse:
-    """Перечитать точной моделью.
+    """Перечитать точной моделью (reread.submit).
 
-    ``speakers`` в теле — сколько голосов у собеседников (решение 14.09: число
-    спрашивается только здесь, и только если человек сам его
-    назвал). Названное число означает «ровно столько»: разметка считается
-    заново, а не берётся готовая, — иначе указывать число было бы незачем.
+    ``speakers`` в теле — сколько голосов у собеседников назвал человек.
     """
+    from .api.speakers import voices_asked
+
     body: dict[str, Any] = {}
     try:
         body = await request.json()
     except Exception:
         pass
-    _require_part(asr.precise_part())  # перечитываем точной моделью — она нужна на месте
-    want = _voices_asked(body)
-    meta = store.get(rec_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Запись не найдена")
-    if jobs.busy_with("retranscribe", rec_id):
-        raise HTTPException(status_code=409, detail="Уже перечитываю")
-    tracks = store.existing_tracks(rec_id)
-    if not tracks:
-        raise HTTPException(status_code=400, detail="Нет сохранённого звука")
-    _remember_voices(rec_id, others=want)
-
-    def work(handle) -> dict[str, Any]:
-        # Разделение микрофона помним ДО пересборки: реплики собираются заново,
-        # и прежнее разделение к ним не относится, но просьба «со мной в комнате
-        # были ещё люди» / «меня не было» остаётся в силе (15.09:
-        # раньше она молча пропадала, и все реплики снова становились «Я»).
-        before = store.get(rec_id) or {}
-        # Ручные решения «чьи это слова» помним отрезками времени: реплики
-        # пересобираются, а звук остаётся тем же (решение 17.09).
-        from . import edits as edits_mod
-
-        hand = edits_mod.hand_marks(rec_id)
-        mic_split = bool(before.get("room_shared") or (before.get("splits") or {}).get("me"))
-        mic_absent = bool(before.get("owner_absent"))
-        mic_voices = int((before.get("voices_hint") or {}).get("mine") or 0)
-        handle.log("перечитываю точной моделью")
-        all_segs: list[dict[str, Any]] = []
-        for i, track in enumerate(tracks):
-            pcm, _sr = audio_io.read_wav(store.track_path(rec_id, track))
-            spans = vad.split_for_asr(pcm)
-            handle.log("дорожка %s: %d фрагментов" % (track, len(spans)))
-
-            def prog(frac, _i=i, _track=track):
-                base = i / float(len(tracks))
-                handle.progress(base + frac / float(len(tracks)),
-                                "дорожка %s" % _track)
-
-            pieces = asr.transcribe_spans(pcm, spans, precise=True, words=True,
-                                          progress=prog)
-            from . import fixes
-
-            for p in pieces:
-                # Словарь из ручных правок применяем и здесь: текст распознан
-                # заново, значит имена и термины опять «как услышала модель».
-                seg = store.make_segment(track, p["start"], p["end"],
-                                         fixes.apply(p["text"]))
-                seg["words"] = fixes.apply_words(p.get("words") or [])
-                all_segs.append(seg)
-
-        all_segs.sort(key=lambda s: (float(s["start"]), s["track"]))
-        store.replace_segments(rec_id, all_segs)
-        # Реплики собраны заново — прежнее разделение голосов к ним не относится.
-        store.update(rec_id, {"splits": {}, "room_shared": False})
-        # Стенограмма пересобрана с нуля, значит и пометки эха пропали — иначе
-        # эхо колонок вернулось бы в текст после каждого переразбора.
-        from . import echo
-
-        echo.mark(rec_id)
-
-        # Переразбор меняет только ТЕКСТ реплик, звук остаётся тот же. Поэтому
-        # гонять pyannote заново незачем: готовая разметка лежит в
-        # diarization.json, и разнести новые реплики по голосам — это сравнение
-        # отрезков времени, без нейросети. На записи 9 минут это 5 минут против
-        # 0,1 секунды. Если сохранённой разметки нет или звук с тех пор
-        # изменился — честно ставим задачу в очередь, как раньше.
-        reused = False if want else _reuse_diarization(rec_id, handle)
-        # Ручные решения кладём ПОСЛЕ разметки: человек главнее модели.
-        # Текст правок не возвращается — он распознан заново, счётчик обнуляем.
-        back = edits_mod.apply_hand_marks(rec_id, hand)
-        if back:
-            handle.log("ручные решения о голосах вернулись на %d реплик" % back)
-        store.update(rec_id, {"edits_count": 0})
-        visible = store.sorted_segments(rec_id)
-        if not reused:
-            store.update(rec_id, {"diarized": False, "diarize_status": "none",
-                                  "speakers": {}})
-        hub.publish({"type": "recording", "meta": store.get(rec_id)})
-        hub.publish({"type": "segments", "rec_id": rec_id, "segments": visible})
-        hub.publish({"type": "notice", "level": "ok",
-                     "text": "Перечитано точной моделью: %d реплик" % len(visible)})
-        _refresh_note(rec_id, "Перечитать точнее")
-
-        # Число назвали — размечаем даже при выключенной авторазметке: человек
-        # попросил об этом сам.
-        if not reused and (want or config.get("diarize_auto")):
-            try:
-                _queue_diarize(rec_id, want or None, want or None)
-            except Exception:
-                pass
-        # Микрофон был разделён — делим заново уже новые реплики. «Я» встанет
-        # по образцу, остальные голоса узнаются по базе.
-        resplit = False
-        if (mic_split or mic_absent) and store.TRACK_MIC in tracks:
-            from . import speakers
-
-            if speakers.segments_of(rec_id, "me"):
-                store.update(rec_id, {"room_shared": mic_split, "owner_absent": mic_absent})
-                try:
-                    _queue_split(rec_id, "me", mic_voices if not mic_absent else 0)
-                    resplit = True
-                    handle.log("микрофон был разделён — разделяю голоса заново")
-                except Exception as err:
-                    detail = getattr(err, "detail", None) or str(err)
-                    log.warning("запись %s: микрофон заново не разделился: %s", rec_id, detail)
-                    store.update(rec_id, {"room_shared": False, "owner_absent": False})
-                    hub.publish({"type": "notice", "level": "err",
-                                 "text": "Голоса микрофона заново не разделились: %s" % detail})
-                hub.publish({"type": "recording", "meta": store.get(rec_id)})
-        return {"segments": len(visible), "diarization_reused": reused,
-                "speakers": want or None, "mic_resplit": resplit}
-
-    job_id = jobs.submit("retranscribe", work,
-                         "Перечитать точнее: %s" % meta.get("title"), rec_id=rec_id)
+    api_deps.require_part(asr.precise_part())  # перечитываем точной моделью — она нужна на месте
+    try:
+        job_id = reread.submit(rec_id, voices_asked(body))
+    except (LookupError, ValueError, jobs.Busy) as err:
+        raise api_deps.as_http(err) from None
     return JSONResponse({"job_id": job_id})
 
 
-# ====================================================================== файлы
-
-
-def _transcribe_media(rec_id: str, src: Path, name: str, handle,
-                      base_progress: float = 0.0) -> dict[str, Any]:
-    """Извлечь звук из медиафайла и распознать его целиком.
-
-    Общий путь для файла, перетащенного в окно, и для видео, скачанного по
-    ссылке: дальше извлечения звука разницы между ними нет. base_progress
-    сдвигает шкалу — у скачивания часть полосы уже занята загрузкой.
-    """
-    span = 1.0 - base_progress
-
-    handle.log("извлекаю звук из файла")
-    dst = store.track_path(rec_id, store.TRACK_FILE)
-    duration = audio_io.ffmpeg_to_wav16k(src, dst)
-    store.update(rec_id, {"duration_s": round(duration, 2),
-                          "status": "processing",
-                          "tracks": [store.TRACK_FILE]})
-    handle.progress(base_progress + span * 0.05, "звук извлечён, %.0f c" % duration)
-
-    pcm, _sr = audio_io.read_wav(dst)
-    spans = vad.split_for_asr(pcm)
-    handle.log("фрагментов речи: %d" % len(spans))
-    # скорость точной модели ~0.15 от реального времени
-    handle.eta(max(5.0, duration * 0.18))
-
-    segs: list[dict[str, Any]] = []
-
-    def prog(frac):
-        handle.progress(base_progress + span * (0.05 + 0.85 * frac),
-                        "распознано %.0f%%" % (frac * 100))
-        handle.eta(max(0.0, duration * 0.18 * (1.0 - frac)))
-
-    pieces = asr.transcribe_spans(pcm, spans, precise=True, words=True, progress=prog)
-    for p in pieces:
-        seg = store.make_segment(store.TRACK_FILE, p["start"], p["end"], p["text"],
-                                 speaker="Участник", speaker_key="file")
-        seg["words"] = p.get("words") or []
-        segs.append(seg)
-    store.replace_segments(rec_id, segs)
-    store.update(rec_id, {"status": "recorded"})
-    handle.progress(base_progress + span * 0.95, "готовлю результат")
-    hub.publish({"type": "segments", "rec_id": rec_id, "segments": segs})
-    hub.publish({"type": "recording", "meta": store.get(rec_id)})
-    hub.publish({"type": "notice", "level": "ok",
-                 "text": "Распознано: %s (%d реплик)" % (name, len(segs))})
-    try:
-        src.unlink(missing_ok=True)
-    except Exception:
-        pass
-    if config.get("diarize_auto"):
-        try:
-            _queue_diarize(rec_id)
-        except Exception:
-            pass
-    return {"segments": len(segs), "duration_s": duration}
-
-
 # Старые точки /api/upload и /api/fetch удалены намеренно: и файл, и ссылка
-# обрабатываются теперь одним конвейером в media.py через /api/media/*. Две
-# дороги к одному делу означали бы два разных поведения и двойную починку.
+# обрабатываются одним конвейером в media.py через /api/media/*. Две дороги к
+# одному делу означали бы два разных поведения и двойную починку.
 
 
-# ====================================================================== видео
-
-
-def _media_ready() -> None:
-    """Связать конвейер видео со службой. Вызывается один раз при импорте."""
-    from . import media
-
-    media.hooks["publish"] = hub.publish
-    media.hooks["queue_diarize"] = _queue_diarize
+# ====================================================================== документы
 
 
 @app.post("/api/recordings/{rec_id}/minutes")
@@ -2008,7 +1288,7 @@ async def api_prompts_get() -> JSONResponse:
         "prompt_lang": minutes.prompt_lang(),
         # Токен наружу не отдаём: только «задан» и хвостик (правило секретов).
         "todoist_set": bool(str(config.get("todoist_token") or "").strip()),
-        "todoist_hint": config._mask(config.get("todoist_token") or ""),
+        "todoist_hint": config.mask(config.get("todoist_token") or ""),
         "prompts": [{"key": k, "title": v["title"], "hint": v["hint"],
                      "default": minutes.DEFAULT_TASKS[k].strip(),
                      "current": minutes.task_text(k).strip(),
@@ -2113,13 +1393,6 @@ async def api_save_note(rec_id: str) -> JSONResponse:
     hub.publish({"type": "notice", "level": "ok",
                  "text": "Сохранено в Obsidian: %s" % res.get("relative")})
     return JSONResponse(res)
-
-
-# Сторожа «нужна скачанная часть» и «идёт запись» переехали в api/deps.py:
-# их зовут и маршруты видео, и остальной server.py.
-from .api.deps import (no_recording_now as _no_recording_now,  # noqa: E402
-                       require_media_parts as _require_media_parts,
-                       require_part as _require_part)
 
 
 @app.get("/api/needs")
@@ -2232,9 +1505,6 @@ async def api_vault_init() -> JSONResponse:
     return JSONResponse(obsidian.ensure_vault())
 
 
-# ====================================================================== голоса
-
-
 # ====================================================================== прочее
 
 
@@ -2261,7 +1531,7 @@ async def api_meeting() -> JSONResponse:
 
 @app.get("/api/call")
 async def api_call() -> JSONResponse:
-    state = dict(_call_state)
+    state = _call_public()
     if _watcher is not None:
         try:
             state["watcher"] = _watcher.state
@@ -2302,7 +1572,6 @@ async def api_call_dismiss(request: Request) -> JSONResponse:
     except Exception:
         pass
     seconds = float(body.get("seconds") or 900)
-    _call_state.update({"asked": False})
     if _watcher is not None:
         try:
             _watcher.snooze(seconds)
@@ -2411,10 +1680,9 @@ async def api_ffmpeg_diag() -> JSONResponse:
 
 @app.get("/api/health")
 async def api_health() -> JSONResponse:
-    active = sessions.active_session()
     return JSONResponse({
         "ok": True,
-        "recording": active.rec_id if active else None,
+        "recording": recordings.active_id(),
         "jobs_active": len(jobs.active()),
     })
 

@@ -40,7 +40,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import download, lockfile, release
+from . import download, jobs, lockfile, release
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
@@ -74,32 +74,21 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
+    """Целиком или никак — тем же способом, что настройки и карточки записей.
+
+    Своя подмена «tmp → replace» здесь была без `fsync` и без повтора на
+    «Отказано в доступе»: после потери питания файл состояния обновления мог
+    остаться пустым, а под антивирусом — не записаться вовсе. `config` берёт
+    только стандартную библиотеку, так что на раннем старте он не мешает.
+    """
+    from . import config
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with io.open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    config.atomic_json(path, data, indent=1)
 
 
 def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-
-
-def _say(handle: Any, text: str, frac: float | None = None) -> None:
-    """Ход работы — в задачу, если она есть (jobs.JobHandle)."""
-    if handle is None:
-        return
-    try:
-        if frac is not None:
-            handle.progress(frac, text)
-        else:
-            handle.log(text)
-    except Exception:
-        pass
-
-
-def _cancelled(handle: Any) -> bool:
-    return bool(getattr(handle, "cancelled", False))
 
 
 def _safe_rel(name: str) -> str | None:
@@ -188,6 +177,7 @@ def check(root: Path | None = None, releases: Any = None) -> dict[str, Any]:
 def download_latest(handle: Any = None, root: Path | None = None,
                     releases: Any = None) -> Path:
     """Скачать архив свежего выпуска. Адрес берём у GitHub сами, а не со страницы."""
+    handle = jobs.as_handle(handle)
     root = root or PROJECT_DIR
     info = check(root, releases)
     if not info.get("newer"):
@@ -199,12 +189,12 @@ def download_latest(handle: Any = None, root: Path | None = None,
     def progress(done: int, total: int) -> None:
         total = total or size
         if total:
-            _say(handle, "Скачиваю %s: %d из %d МБ" % (asset["name"], done >> 20, total >> 20),
-                 0.4 * done / total)
+            handle.progress(0.4 * done / total,
+                            "Скачиваю %s: %d из %d МБ" % (asset["name"], done >> 20, total >> 20))
 
-    _say(handle, "Скачиваю выпуск %s…" % info["latest"], 0.0)
+    handle.progress(0.0, "Скачиваю выпуск %s…" % info["latest"])
     download.fetch(asset["url"], dest, sha256=asset.get("sha256") or None, size=size or None,
-                   progress=progress, cancelled=lambda: _cancelled(handle))
+                   progress=progress, cancelled=lambda: handle.cancelled)
     return dest
 
 
@@ -258,6 +248,7 @@ def prepare(zip_path: str | Path, handle: Any = None, root: Path | None = None) 
     Ничего в папке программы не меняет: всё складывается в data\\_update\\staged,
     а заменяется при следующем запуске (apply_pending).
     """
+    handle = jobs.as_handle(handle)
     root = root or PROJECT_DIR
     ok, why = can_update(root)
     if not ok:
@@ -290,7 +281,7 @@ def prepare(zip_path: str | Path, handle: Any = None, root: Path | None = None) 
                               "заново — скачайте архив и запустите Ustanovka.cmd."
                               % (target, want_py, have_py))
         listing = _listing(zf, prefix)
-        _say(handle, "Распаковываю код выпуска %s…" % target, 0.45)
+        handle.progress(0.45, "Распаковываю код выпуска %s…" % target)
         write: list[str] = []
         for rel, sha in listing.items():
             safe = _safe_rel(rel)
@@ -318,18 +309,18 @@ def prepare(zip_path: str | Path, handle: Any = None, root: Path | None = None) 
     wheels: list[str] = []
     if need:
         def step(i: int, total: int, name: str) -> None:
-            _say(handle, "Библиотеки по описи: %s (%d из %d)" % (name, i + 1, total),
-                 0.5 + 0.35 * i / max(1, total))
+            handle.progress(0.5 + 0.35 * i / max(1, total),
+                            "Библиотеки по описи: %s (%d из %d)" % (name, i + 1, total))
 
         files = lockfile.fetch_packages(need, staged / "wheels", staged / "files",
-                                        progress=step, cancelled=lambda: _cancelled(handle))
+                                        progress=step, cancelled=lambda: handle.cancelled)
         wheels = [p.name for p in files]
     ffmpeg = new_lock.get("ffmpeg") or {}
     ffmpeg_new = bool(ffmpeg.get("url")) and ffmpeg.get("version") != (old_lock.get("ffmpeg") or {}).get("version")
     if ffmpeg_new:
-        _say(handle, "Скачиваю ffmpeg %s…" % ffmpeg.get("version"), 0.87)
+        handle.progress(0.87, "Скачиваю ffmpeg %s…" % ffmpeg.get("version"))
         download.fetch(ffmpeg["url"], staged / "ffmpeg.zip", sha256=ffmpeg.get("sha256"),
-                       size=ffmpeg.get("size"), cancelled=lambda: _cancelled(handle))
+                       size=ffmpeg.get("size"), cancelled=lambda: handle.cancelled)
     models = sorted(repo for repo, rev in (new_lock.get("models") or {}).items()
                     if (old_lock.get("models") or {}).get(repo) not in (None, rev))
     plan = {"from": current, "to": target, "write": write, "delete": delete,
@@ -337,7 +328,7 @@ def prepare(zip_path: str | Path, handle: Any = None, root: Path | None = None) 
             "notes": "", "prepared": _now()}
     _write_json(staged / "plan.json", plan)
     (staged / "ready").write_text(target, encoding="utf-8")
-    _say(handle, "Обновление до %s готово: закройте программу и откройте снова." % target, 1.0)
+    handle.progress(1.0, "Обновление до %s готово: закройте программу и откройте снова." % target)
     return plan
 
 

@@ -26,31 +26,12 @@ import numpy as np
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
-LINES = []
-FAIL = []
 MADE = []
 
 
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
-
-
-from hagen import asr, audio_io, config, diarize, jobs, speakers, store, voices  # noqa: E402
+from hagen import asr, audio_io, config, diarize, diarize_jobs, jobs, speakers, store, voices  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="t53_"))
 REAL_VOICES = voices.VOICES_PATH
@@ -263,7 +244,7 @@ try:
 
         diarize.diarize_pcm = fake_diarize_full
         before = voices.get_person(ivan["id"])["count"]
-        job = wait_job(server._queue_diarize(rt))
+        job = wait_job(diarize_jobs.queue_diarize(rt))
         diarize.diarize_pcm = real_diarize
         meta = store.get(rt) or {}
         rep = {x["key"]: x["status"] for x in meta.get("voices_learned") or []}
@@ -445,11 +426,11 @@ try:
         check("догадка отмечена — в плашке будет кнопка «Да, это мой голос»", sm.get("owner_guess") is True, sm)
         cand = ((diarize.load_result(m8) or {}).get("key_embeddings") or {}).get(speakers.OWNER_CANDIDATE)
         check("отпечаток угаданного голоса сохранён в разметке записи, но не в базе",
-              bool(cand) and not voices._people().get(owner["id"], {}).get("samples"))
+              bool(cand) and not voices.raw_people().get(owner["id"], {}).get("samples"))
         check("угаданный голос не ищется среди людей как отдельный говорящий",
               speakers.OWNER_CANDIDATE not in ((store.get(m8) or {}).get("speakers") or {}))
         r = cli.post("/api/recordings/%s/owner_voice" % m8, headers=ORIGIN)
-        rec_owner = voices._people().get(owner["id"]) or {}
+        rec_owner = voices.raw_people().get(owner["id"]) or {}
         check("«Да, это мой голос» — образец владельца сохранён", r.status_code == 200
               and r.json().get("voice_saved") is True and len(rec_owner.get("samples") or []) == 1, r.text[:200])
         sm = ((store.get(m8) or {}).get("splits") or {}).get("me") or {}
@@ -467,7 +448,7 @@ try:
               job.get("status") == "done" and "по образцу" in sm.get("owner_note", "")
               and sm.get("owner_guess") is False, sm.get("owner_note"))
         check("образец из подтверждения пережил повторное разделение",
-              len((voices._people().get(owner["id"]) or {}).get("samples") or []) == 1)
+              len((voices.raw_people().get(owner["id"]) or {}).get("samples") or []) == 1)
         voices.remove_samples_from(m8, "me")
         voices.add_sample(None, OWNER, person_id=owner["id"], rec_id="old", speaker_key="me")
 
@@ -569,7 +550,7 @@ try:
               not (((store.get(f2) or {}).get("speakers") or {}).get("SPEAKER_00") or {}).get("sample_offer"))
         voices.remove_samples_from(f2, "SPEAKER_00")
 
-        owner_before = len((voices._people().get(owner["id"]) or {}).get("samples") or [])
+        owner_before = len((voices.raw_people().get(owner["id"]) or {}).get("samples") or [])
         m13 = record("Проверка 53 — мой голос неуверенно", mic, track="mic", audio_s=52)
         _, job = run_mic(m13, mic_diarize({"Q": blend(OWNER, 0.62), "P": voice(NEIGHBOUR)}))
         sm = ((store.get(m13) or {}).get("splits") or {}).get("me") or {}
@@ -579,7 +560,7 @@ try:
         r = cli.post("/api/recordings/%s/speaker/add_sample" % m13, headers=ORIGIN, json={"speaker_key": "me"})
         sm = ((store.get(m13) or {}).get("splits") or {}).get("me") or {}
         check("добавлен ещё один образец вашего голоса", r.status_code == 200
-              and len((voices._people().get(owner["id"]) or {}).get("samples") or []) == owner_before + 1
+              and len((voices.raw_people().get(owner["id"]) or {}).get("samples") or []) == owner_before + 1
               and sm.get("owner_add") is False and "образец добавлен" in sm.get("owner_note", ""), (r.text[:120], sm))
         voices.remove_samples_from(m13, "me")
         m14 = record("Проверка 53 — мой голос уверенно", mic, track="mic", audio_s=52)
@@ -619,9 +600,4 @@ finally:
     voices._cache, voices._cache_stamp = None, None
     shutil.rmtree(TMP, ignore_errors=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t53_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t53"))

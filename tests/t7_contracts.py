@@ -7,20 +7,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-
-LINES = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
+from harness import LINES, FAIL, say  # noqa: E402
 
 
 NEED = {
@@ -39,7 +26,11 @@ NEED = {
     "minutes": [
         "TEMPLATES", "build_transcript_text", "resolve_claude_cli", "run_claude_cli",
         "available_engines", "chunk_transcript", "generate", "cloud_warning",
-        "check_claude_cli",
+        "check_claude_cli", "network_report", "cli_network_state",
+    ],
+    "vpn": [
+        "PORTS", "listening", "find_cli_proxy", "env_through", "yt_proxies", "scan_ports",
+        "probe_egress",
     ],
     "platform.windows.desktop": [
         "list_sessions", "list_capture_sessions", "detect_call", "call_output_device",

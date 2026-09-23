@@ -556,8 +556,10 @@ function capsRows() {
   rows.push('<div>Разметка голосов: ' + (c.diarize
     ? '<b>готова</b>'
     : '<b>не готова</b> — ' + esc(c.diarize_note || '')) + '</div>');
+  // Найден только файл CLI; про сеть — состояние порта VPN, без запросов наружу.
   rows.push('<div>Протокол: ' + (c.claude_cli
-    ? '<b>Claude CLI найден</b>' : 'нужен ключ API или Claude CLI') + '</div>');
+    ? '<b>Claude CLI найден' + (c.claude_cli_net ? ', ' + esc(c.claude_cli_net) : '') + '</b>'
+    : 'нужен ключ API или Claude CLI') + '</div>');
   rows.push('<div>Встреча из календаря: ' + (c.outlook ? '<b>доступна</b>' : 'недоступна') + '</div>');
   rows.push('<div>Замечать звонки: ' + (c.call_detect ? '<b>включено</b>' : 'выключено') + '</div>');
   rows.push('<div>Хранилище: ' + esc((S.vault && S.vault.root) || '') + '</div>');
@@ -2960,6 +2962,9 @@ async function openSettings() {
   $('set-engine').value = s.minutes_engine || 'claude_cli';
   $('set-cli-model').value = s.claude_cli_model || '';
   $('set-cli-timeout').value = s.claude_timeout_s || 600;
+  $('set-cli-proxy').value = s.claude_cli_proxy || 'auto';
+  paintNetModes(s.claude_cli_guard || 'port');
+  paintNetState();
   fillConnections();
   paintVaultState();
   $('outlook-state').textContent = S.caps.outlook
@@ -3573,6 +3578,83 @@ function refreshModelsHint() {
   $('quality-state').title = now;
 }
 
+/* Сеть для Claude CLI (23.09): режим — строками на выбор, как виды документов;
+   выбранный хранится в S.netMode и уходит вместе с остальными настройками. */
+function paintNetModes(mode) {
+  S.netMode = mode;
+  document.querySelectorAll('#net-modes .tpl').forEach((el) => {
+    el.classList.toggle('sel', el.dataset.mode === mode);
+  });
+  $('net-proxy-field').classList.toggle('hidden', mode !== 'port');
+}
+
+/* Короткая строка у кнопки «Сеть для CLI…»: режим и путь, без запросов в сеть. */
+function paintNetState() {
+  const mode = S.netMode || 'port';
+  const box = $('cli-network-state');
+  if (mode === 'off') { box.textContent = 'без защиты'; return; }
+  if (mode === 'probe') { box.textContent = 'как есть, с пробой перед запуском'; return; }
+  box.textContent = 'только через порт VPN';
+}
+
+/* Окно «Сеть для CLI»: порты и путь — сразу (наружу ничего не уходит),
+   адрес и ответ Anthropic — по кнопке. */
+function paintNetReport(rep) {
+  const rows = (rep.ports || []).map((p) =>
+    `<div class="net-port${p.listening ? ' on' : ''}"><b>${p.port}</b> — ${esc(p.client)}, ${esc(p.note)}: `
+    + `${p.listening ? 'слушает' : 'не слушает'}${p.http ? '' : ' (только SOCKS, для CLI не годится)'}</div>`).join('');
+  $('net-ports').innerHTML = rows || '<span class="muted">известных портов нет</span>';
+  $('net-route').textContent = (rep.ok ? '✓ CLI пойдёт ' : '⚠ ') + (rep.route || '');
+  $('net-route').className = 'tiny' + (rep.ok ? ' muted' : '');
+  const pr = rep.probe;
+  if (!pr) return;
+  const box = $('net-probe-state');
+  const verdict = { open: 'Anthropic пускает', blocked: 'Anthropic отказывает по региону',
+    unknown: 'ответ Anthropic не понять' }[pr.anthropic] || '';
+  const where = pr.ip ? `запросы уходят с адреса ${pr.ip}${pr.country ? ' (' + pr.country + ')' : ''}` : '';
+  const parts = [where, verdict + (pr.status ? ` (код ${pr.status})` : ''), pr.error].filter(Boolean);
+  box.textContent = (pr.anthropic === 'open' ? '✓ ' : '⚠ ') + parts.join('. ');
+  box.className = 'tiny' + (pr.anthropic === 'open' ? ' muted' : '');
+}
+
+async function loadNetReport(probe) {
+  const btn = $('btn-net-probe');
+  if (probe) { btn.disabled = true; $('net-probe-state').textContent = 'два коротких запроса без токена…'; }
+  try {
+    paintNetReport(await api('/api/engines/claude_cli/network', { method: 'POST', body: { probe: !!probe } }));
+  } catch (e) {
+    $('net-route').textContent = '⚠ ' + e.message;
+    $('net-route').className = 'tiny';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function bindNetDialog() {
+  $('btn-cli-network').onclick = () => {
+    showDialog('dlg-cli-network');
+    $('net-probe-state').textContent = '';
+    loadNetReport(false);
+  };
+  document.querySelectorAll('#net-modes .tpl').forEach((el) => {
+    el.onclick = async () => {
+      paintNetModes(el.dataset.mode);
+      paintNetState();
+      await applySettings(el);
+      loadNetReport(false);
+    };
+  });
+  // Поле порта — в окне поверх настроек, общий обработчик полей его не видит.
+  $('set-cli-proxy').addEventListener('blur', async () => {
+    await applySettings($('set-cli-proxy'));
+    loadNetReport(false);
+  });
+  $('set-cli-proxy').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('set-cli-proxy').blur(); }
+  });
+  $('btn-net-probe').onclick = () => loadNetReport(true);
+}
+
 /* Состояние выбранного способа делать документы — одной строкой рядом со
    списком. Про невыбранный способ здесь ничего не говорим. */
 function paintEngineState() {
@@ -3831,6 +3913,8 @@ function collectSettings() {
     minutes_engine: $('set-engine').value,
     claude_cli_model: $('set-cli-model').value,
     claude_timeout_s: parseInt($('set-cli-timeout').value, 10) || 600,
+    claude_cli_guard: S.netMode || 'port',
+    claude_cli_proxy: $('set-cli-proxy').value.trim() || 'auto',
   };
   const hf = $('set-hf').value.trim();
   if (hf) patch.hf_token = hf;
@@ -4018,153 +4102,158 @@ function connectEvents() {
   };
 }
 
+/* Обработчики событий службы — таблицей: имя события → что сделать.
+   Раньше это был один switch на полторы сотни строк; здесь каждое событие
+   читается отдельно, а добавить новое — одна запись. */
+const EVENT_HANDLERS = {
+  segment(ev) {
+    if (ev.rec_id === S.currentId && S.current) {
+      S.current.segments.push(ev.segment);
+      S.current.segments.sort((a, b) => a.start - b.start || (a.track > b.track ? 1 : -1));
+      paintTranscript();
+    }
+  },
+  segments(ev) {
+    if (ev.rec_id === S.currentId && S.current) {
+      S.current.segments = ev.segments || [];
+      paintTranscript();
+    }
+  },
+  draft(ev) {
+    if (ev.rec_id === S.currentId) { S.drafts = ev.drafts || {}; paintDraft(); }
+  },
+  level(ev) {
+    if (ev.rec_id === S.currentId) { S.levels[ev.track] = ev.level; paintMeters(); }
+  },
+  levels(ev) {
+    if (ev.rec_id !== S.currentId) return;
+    S.levels = ev.levels || { mic: 0, far: 0 };
+    S.micSilent = !!ev.mic_silent;
+    S.farSilent = !!ev.far_silent;
+    S.farOn = !!ev.far_on;
+    S.micLost = !!ev.mic_lost;
+    S.farLost = !!ev.far_lost;
+    paintMeters();
+  },
+  async capture(ev) {
+    const st = ev.status || {};
+    if (ev.rec_id === S.currentId) S.captureStatus = st;
+    if (st.state === 'failed' && ev.rec_id === S.recordingId) {
+      // пустую запись служба убрала сама; продолжение заметки остаётся
+      S.recordingId = null;
+      S.starting = false;
+      stopTicker();
+      if (S.currentId === ev.rec_id && st.deleted !== false) { S.current = null; S.currentId = null; }
+      await loadState();
+      if (S.currentId === ev.rec_id) await refreshCurrent();
+    } else {
+      paintHead();
+      paintTranscript();     // «Включаются устройства…» → «Слушаю…»
+    }
+  },
+  recording(ev) {
+    const m = ev.meta;
+    // Запись могли удалить, пока событие летело: без этой проверки страница
+    // спотыкалась на пустом meta и переставала перерисовываться вовсе.
+    if (!m || !m.id) return;
+    const i = S.recordings.findIndex((r) => r.id === m.id);
+    if (i >= 0) S.recordings[i] = m; else S.recordings.unshift(m);
+    if (S.currentId === m.id && S.current) S.current.meta = m;
+    paintSidebar(); paintHead();
+    // Галочки микрофона и плашка разделения зависят от meta: без перерисовки
+    // после «Перечитать точнее» галочка оставалась нажатой, а разделения уже не было.
+    if (S.currentId === m.id && S.current) { paintRoomToggle(); paintSpeakerAlerts(); }
+  },
+  async recordings() {
+    S.recordings = await api('/api/recordings').catch(() => S.recordings);
+    paintSidebar();
+  },
+  job(ev) {
+    const j = ev.job;
+    const i = S.jobs.findIndex((x) => x.id === j.id);
+    if (i >= 0) S.jobs[i] = Object.assign(S.jobs[i], j); else S.jobs.unshift(j);
+    paintJobs(); paintHead();
+    if (window.videoJobChanged) window.videoJobChanged();
+    const over = ['done', 'error', 'cancelled'].includes(j.status);
+    // обновление yt-dlp закончилось — вернуть кнопку и показать версию
+    if (j.kind === 'ytdlp' && over) {
+      if ($('btn-ytdlp')) $('btn-ytdlp').disabled = false;
+      showYtdlpVersion();
+    }
+    // скачали тяжёлую часть — обновить список и разблокировать кнопки
+    if (j.kind === 'needs' && over) loadNeeds();
+    // подготовка обновления кончилась — «О программе» говорит, что дальше
+    if (j.kind === 'update' && over) loadAbout();
+  },
+  updates() {
+    loadAbout();
+  },
+  sp_login(ev) {
+    if (window.videoSpEvent) window.videoSpEvent(ev);
+  },
+  minutes(ev) {
+    if (ev.rec_id === S.currentId) showMinutes(ev.markdown, ev.template);
+  },
+  needs(ev) {
+    S.needs = ev.parts || [];
+    paintNeeds();
+    loadAsrModels();      // скачали или сбросили модели — «нужное» и «ненужное» другие
+  },
+  notice(ev) {
+    notice(ev.text, ev.level === 'ok' ? 'ok' : (ev.level === 'err' ? 'err' : ''));
+  },
+  call(ev) {
+    S.call = ev.call || {};
+  },
+  mic(ev) {
+    S.mic = ev.mic || {};
+    paintMicButton();
+  },
+  dictate(ev) {
+    S.dictate = ev.dictate || {};
+    paintDictate();
+  },
+  prompt(ev) {
+    S.prompt = ev.prompt || null;
+    paintPrompt();
+  },
+  async recording_state(ev) {
+    // Запись могла начать или остановить служба сама — по звонку. Кнопки
+    // «Старт»/«Стоп» обязаны это видеть, иначе остановить было бы нечем.
+    if (ev.active && !S.recordingId) {
+      S.recordingId = ev.rec_id;
+      startTicker();
+      await loadState();
+      if (!S.currentId || S.currentId === ev.rec_id || S.mode !== 'video') await openRecording(ev.rec_id);
+      paintAll();
+    } else if (!ev.active && S.recordingId === ev.rec_id) {
+      S.recordingId = null;
+      stopTicker();
+      await loadState();
+      if (S.currentId === ev.rec_id) await refreshCurrent();
+      paintAll();
+    }
+  },
+  settings(ev) {
+    S.settings = ev.settings || S.settings;
+    applyView(S.settings);
+    paintProgramState();   // сменили движок документов — строка внизу это говорит
+    applyFeatures();
+    // «Сбросить всё» меняет выбор моделей сама служба — список на экране за ним.
+    if (!$('dlg-settings').classList.contains('hidden')) fillAsrModels();
+    if (S.current) paintTranscript();       // могло смениться имя владельца
+  },
+  ready(ev) {
+    S.asr = ev.asr || { state: 'ready' };
+    paintProgramState();
+  },
+};
+
 async function handleEvent(ev) {
-  switch (ev.type) {
-    case 'segment':
-      if (ev.rec_id === S.currentId && S.current) {
-        S.current.segments.push(ev.segment);
-        S.current.segments.sort((a, b) => a.start - b.start || (a.track > b.track ? 1 : -1));
-        paintTranscript();
-      }
-      break;
-    case 'segments':
-      if (ev.rec_id === S.currentId && S.current) {
-        S.current.segments = ev.segments || [];
-        paintTranscript();
-      }
-      break;
-    case 'draft':
-      if (ev.rec_id === S.currentId) { S.drafts = ev.drafts || {}; paintDraft(); }
-      break;
-    case 'level':
-      if (ev.rec_id === S.currentId) { S.levels[ev.track] = ev.level; paintMeters(); }
-      break;
-    case 'levels':
-      if (ev.rec_id === S.currentId) {
-        S.levels = ev.levels || { mic: 0, far: 0 };
-        S.micSilent = !!ev.mic_silent;
-        S.farSilent = !!ev.far_silent;
-        S.farOn = !!ev.far_on;
-        S.micLost = !!ev.mic_lost;
-        S.farLost = !!ev.far_lost;
-        paintMeters();
-      }
-      break;
-    case 'capture': {
-      const st = ev.status || {};
-      if (ev.rec_id === S.currentId) S.captureStatus = st;
-      if (st.state === 'failed' && ev.rec_id === S.recordingId) {
-        // пустую запись служба убрала сама; продолжение заметки остаётся
-        S.recordingId = null;
-        S.starting = false;
-        stopTicker();
-        if (S.currentId === ev.rec_id && st.deleted !== false) { S.current = null; S.currentId = null; }
-        await loadState();
-        if (S.currentId === ev.rec_id) await refreshCurrent();
-      } else {
-        paintHead();
-        paintTranscript();     // «Включаются устройства…» → «Слушаю…»
-      }
-      break;
-    }
-    case 'recording': {
-      const m = ev.meta;
-      // Запись могли удалить, пока событие летело: без этой проверки страница
-      // спотыкалась на пустом meta и переставала перерисовываться вовсе.
-      if (!m || !m.id) break;
-      const i = S.recordings.findIndex((r) => r.id === m.id);
-      if (i >= 0) S.recordings[i] = m; else S.recordings.unshift(m);
-      if (S.currentId === m.id && S.current) S.current.meta = m;
-      paintSidebar(); paintHead();
-      // Галочки микрофона и плашка разделения зависят от meta: без перерисовки
-      // после «Перечитать точнее» галочка оставалась нажатой, а разделения уже не было.
-      if (S.currentId === m.id && S.current) { paintRoomToggle(); paintSpeakerAlerts(); }
-      break;
-    }
-    case 'recordings':
-      S.recordings = await api('/api/recordings').catch(() => S.recordings);
-      paintSidebar();
-      break;
-    case 'job': {
-      const j = ev.job;
-      const i = S.jobs.findIndex((x) => x.id === j.id);
-      if (i >= 0) S.jobs[i] = Object.assign(S.jobs[i], j); else S.jobs.unshift(j);
-      paintJobs(); paintHead();
-      if (window.videoJobChanged) window.videoJobChanged();
-      // обновление yt-dlp закончилось — вернуть кнопку и показать версию
-      if (j.kind === 'ytdlp' && ['done', 'error', 'cancelled'].includes(j.status)) {
-        if ($('btn-ytdlp')) $('btn-ytdlp').disabled = false;
-        showYtdlpVersion();
-      }
-      // скачали тяжёлую часть — обновить список и разблокировать кнопки
-      if (j.kind === 'needs' && ['done', 'error', 'cancelled'].includes(j.status)) loadNeeds();
-      // подготовка обновления кончилась — «О программе» говорит, что дальше
-      if (j.kind === 'update' && ['done', 'error', 'cancelled'].includes(j.status)) loadAbout();
-      break;
-    }
-    case 'updates':
-      loadAbout();
-      break;
-    case 'sp_login':
-      if (window.videoSpEvent) window.videoSpEvent(ev);
-      break;
-    case 'minutes':
-      if (ev.rec_id === S.currentId) showMinutes(ev.markdown, ev.template);
-      break;
-    case 'needs':
-      S.needs = ev.parts || [];
-      paintNeeds();
-      loadAsrModels();      // скачали или сбросили модели — «нужное» и «ненужное» другие
-      break;
-    case 'notice':
-      notice(ev.text, ev.level === 'ok' ? 'ok' : (ev.level === 'err' ? 'err' : ''));
-      break;
-    case 'call':
-      S.call = ev.call || {};
-      break;
-    case 'mic':
-      S.mic = ev.mic || {};
-      paintMicButton();
-      break;
-    case 'dictate':
-      S.dictate = ev.dictate || {};
-      paintDictate();
-      break;
-    case 'prompt':
-      S.prompt = ev.prompt || null;
-      paintPrompt();
-      break;
-    case 'recording_state':
-      // Запись могла начать или остановить служба сама — по звонку. Кнопки
-      // «Старт»/«Стоп» обязаны это видеть, иначе остановить было бы нечем.
-      if (ev.active && !S.recordingId) {
-        S.recordingId = ev.rec_id;
-        startTicker();
-        await loadState();
-        if (!S.currentId || S.currentId === ev.rec_id || S.mode !== 'video') await openRecording(ev.rec_id);
-        paintAll();
-      } else if (!ev.active && S.recordingId === ev.rec_id) {
-        S.recordingId = null;
-        stopTicker();
-        await loadState();
-        if (S.currentId === ev.rec_id) await refreshCurrent();
-        paintAll();
-      }
-      break;
-    case 'settings':
-      S.settings = ev.settings || S.settings;
-      applyView(S.settings);
-      paintProgramState();   // сменили движок документов — строка внизу это говорит
-      applyFeatures();
-      // «Сбросить всё» меняет выбор моделей сама служба — список на экране за ним.
-      if (!$('dlg-settings').classList.contains('hidden')) fillAsrModels();
-      if (S.current) paintTranscript();       // могло смениться имя владельца
-      break;
-    case 'ready':
-      S.asr = ev.asr || { state: 'ready' };
-      paintProgramState();
-      break;
-  }
+  // Только своё: у обычного объекта есть ещё унаследованные имена
+  // (constructor, toString), и событие с таким type позвало бы их.
+  const fn = Object.hasOwn(EVENT_HANDLERS, ev.type) ? EVENT_HANDLERS[ev.type] : null;
+  if (fn) await fn(ev);
 }
 
 /* Вкладки записи: стенограмма, по вкладке на
@@ -5253,7 +5342,8 @@ async function checkDictate() {
 
 /* ====================================================== привязка событий */
 
-function bind() {
+/* Окно целиком: старт и стоп, окна-диалоги, вкладки настроек, режим. */
+function bindShell() {
   $('btn-new').onclick = newRecordingTab;
   // «Домой» в разделе «Видео» (20.09): вернуться к форме добавления. Запись с
   // экрана не убираем — она остаётся выбранной в списке, и к ней можно
@@ -5295,7 +5385,10 @@ function bind() {
         p.classList.toggle('hidden', p.id !== t.dataset.tab));
     };
   });
+}
 
+/* Настройки: обновления, сочетания клавиш, модели и подключения. */
+function bindSettings() {
   $('btn-ytdlp').onclick = updateYtdlp;
   document.querySelectorAll('#t-advanced .js-dt-reset').forEach((b) => {
     b.onclick = (ev) => {
@@ -5408,7 +5501,11 @@ function bind() {
       btn.textContent = 'Проверить';
     }
   };
+  bindNetDialog();
+}
 
+/* Карточка записи: название, категория, проект, теги, связи. */
+function bindRecordCard() {
   $('rec-title').onchange = async () => {
     if (!S.currentId) return;
     try {
@@ -5510,7 +5607,10 @@ function bind() {
       }
     } catch (e) { notice(e.message, 'err'); }
   };
+}
 
+/* Действия над записью: заметка, разметка, микрофон, меню, словарь, голоса. */
+function bindRecordActions() {
   $('btn-save').onclick = saveNote;
   // Число голосов здесь больше не спрашиваем: авторазметка идёт без вопросов,
   // и ручная должна вести себя так же. Указать число можно в «Перечитать
@@ -5553,6 +5653,10 @@ function bind() {
     const title = $('dict-title');
     if (title) title.scrollIntoView({ block: 'center' });
   };
+}
+
+/* Устройства и звук: микрофон, собеседники, эхо, «Перечитать точнее». */
+function bindDevices() {
   window.addEventListener('resize', fitActions);
   $('mic-select').onchange = async () => {
     const v = $('mic-select').value;
@@ -5627,6 +5731,10 @@ function bind() {
     b.onclick = () => runVoices(i);
     nums.appendChild(b);
   }
+}
+
+/* Вкладки записи и документы: сделать, скопировать, отправить, задачи. */
+function bindDocuments() {
   document.querySelectorAll('#rec-tabs .rtab[data-pane]').forEach((b) => {
     b.onclick = () => showPane(b.dataset.pane);
   });
@@ -5680,6 +5788,10 @@ function bind() {
       notice('Документ пересобирается без вычеркнутого…', 'ok');
     } catch (e) { notice(e.message, 'err'); }
   };
+}
+
+/* Правка стенограммы: клавиши, отмена, удаление записей. */
+function bindTranscriptEdit() {
   $('btn-edit-transcript').onclick = () => setEditMode(!S.editMode);
   // Alt+↑ / Alt+↓ — передать выделенные слова соседней реплике.
   document.addEventListener('keydown', (e) => {
@@ -5738,6 +5850,10 @@ function bind() {
       deleteRecording(el.dataset.scope);
     };
   });
+}
+
+/* Окно «Кто это говорит?» и разделение голосов. */
+function bindSpeakerDialog() {
   $('btn-save-speaker').onclick = () => saveSpeakerDialog({});
   // Переключение «только в этой записи» меняет, какую роль показывают поля.
   $('speaker-role-once').onchange = () => {
@@ -5794,6 +5910,10 @@ function bind() {
   };
   $('chk-room').onchange = () => setRoom($('chk-room').checked);
   $('chk-absent').onchange = () => setOwnerAbsent($('chk-absent').checked);
+}
+
+/* Вид, папки хранилища, база голосов. */
+function bindViewAndStorage() {
   document.querySelectorAll('[data-theme-pick]').forEach((b) => {
     b.onclick = () => saveView({ ui_theme: b.dataset.themePick });
   });
@@ -5828,8 +5948,10 @@ function bind() {
     else notice(res.data.detail || `Ошибка ${res.status}`, 'err');
     loadVoices();
   };
+}
 
-
+/* Файлы, брошенные в окно, — в раздел «Видео». */
+function bindDrop() {
   // Кнопка и поле ссылки теперь в разделе «Видео», обработчики — в video.js.
 
   // Файл можно бросать в любое место окна: удобнее, чем целиться в рамку.
@@ -5863,6 +5985,22 @@ function bind() {
     }
     setMode('video');
   });
+}
+
+/* Привязка обработчиков — по разделам, в том же порядке, в каком они шли
+   одной функцией на шестьсот строк. Порядок важен: часть кнопок появляется
+   только после привязки соседей. */
+function bind() {
+  bindShell();
+  bindSettings();
+  bindRecordCard();
+  bindRecordActions();
+  bindDevices();
+  bindDocuments();
+  bindTranscriptEdit();
+  bindSpeakerDialog();
+  bindViewAndStorage();
+  bindDrop();
 
   if (window.videoInit) window.videoInit();
 

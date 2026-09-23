@@ -32,31 +32,12 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
 
-LINES = []
-FAIL = []
 MADE = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 import numpy as np  # noqa: E402
@@ -213,9 +194,8 @@ try:
     check("счёт отпечатков берёт модель разметки",
           'def embed_spans' in src and 'eng.embed(' in src
           and all('def embed(' in e for e in engines))
-    srv = io.open(PROJECT / "hagen" / "server.py", encoding="utf-8").read()
-    # Разметка говорящих переехала в роутер.
-    spk = io.open(PROJECT / "hagen" / "api" / "speakers.py", encoding="utf-8").read()
+    # Задача разметки живёт в ядре (diarize_jobs.py), а не в маршрутах.
+    spk = io.open(PROJECT / "hagen" / "diarize_jobs.py", encoding="utf-8").read()
     check("отсев по голосу подключён к разметке говорящих", "mark_by_voice(rec_id)" in spk)
     check("неудача отсева не роняет разметку",
           "отсев эха по голосу не отработал" in spk)
@@ -230,9 +210,4 @@ finally:
         except Exception:
             pass
 
-say("")
-say("Всего замечаний: %d" % len(FAIL))
-for name in FAIL:
-    say("   — " + name)
-io.open(PROJECT / "tests" / "t72_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t72"))

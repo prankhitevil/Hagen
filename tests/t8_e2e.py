@@ -31,6 +31,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 def _hf_token() -> str:
     """Токен Hugging Face — единственное, что берётся из настоящих настроек.
@@ -54,32 +55,10 @@ isolate.settings(vault_path=str(VAULT), vault_subfolder="Meetings", vault_confir
                  minutes_engine="claude_cli", owner_name="Я", smart_folder_name=False,
                  hf_token=_hf_token())
 
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name
-        + (": " + str(detail)[:300] if detail != "" else ""))
-
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from hagen import minutes, server, store, voices  # noqa: E402
+from hagen import dictation, minutes, server, store, voices  # noqa: E402
 
 PROTOCOL = "ПРОТОКОЛ-ПРОВЕРКИ-8"
 
@@ -92,7 +71,7 @@ def fake_engine(engine, prompt, text, timeout=None, role="strong", handle=None):
 
 real_engine = minutes._run_engine
 minutes._run_engine = fake_engine
-server._start_dictation = lambda: None
+dictation.start = lambda: None       # клавишу диктовки в проверке не занимаем
 
 ORIGIN = {"Origin": "http://127.0.0.1:8787"}
 VIDEO = PROJECT / "tests" / "meeting_video.mp4"
@@ -237,9 +216,4 @@ finally:
             pass
     shutil.rmtree(VAULT, ignore_errors=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t8_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t8"))

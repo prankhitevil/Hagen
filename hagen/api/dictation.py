@@ -13,9 +13,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import platform
-from . import deps as deps_mod
-from .deps import dictation_status, start_dictation
+from .. import dictation, platform
+from .deps import as_http
 
 log = logging.getLogger("hagen.server")
 
@@ -24,24 +23,23 @@ router = APIRouter()
 
 @router.get("/api/dictate")
 async def api_dictate_get() -> JSONResponse:
-    return JSONResponse(dictation_status())
+    return JSONResponse(dictation.status())
 
 
 @router.post("/api/dictate/toggle")
 async def api_dictate_toggle() -> JSONResponse:
     """Начать или закончить диктовку из окна — без горячей клавиши."""
-    if deps_mod._dictation is None:
-        raise HTTPException(status_code=400, detail="Диктовка не включена в настройках")
     loop = asyncio.get_running_loop()
-    return JSONResponse(await loop.run_in_executor(None, deps_mod._dictation.toggle))
+    try:
+        return JSONResponse(await loop.run_in_executor(None, dictation.toggle))
+    except ValueError as err:
+        raise as_http(err) from None
 
 
 @router.post("/api/dictate/cancel")
 async def api_dictate_cancel() -> JSONResponse:
-    if deps_mod._dictation is None:
-        return JSONResponse(dictation_status())
     loop = asyncio.get_running_loop()
-    return JSONResponse(await loop.run_in_executor(None, deps_mod._dictation.cancel))
+    return JSONResponse(await loop.run_in_executor(None, dictation.cancel))
 
 
 @router.post("/api/dictate/open-recording")
@@ -53,7 +51,7 @@ async def api_dictate_open_recording(request: Request) -> JSONResponse:
     заметка ведёт себя как обычная диктовка.
     """
     body = await request.json()
-    rec_id = deps_mod.set_open_recording(body.get("rec_id"))
+    rec_id = dictation.set_open_recording(body.get("rec_id"))
     return JSONResponse({"rec_id": rec_id})
 
 
@@ -155,6 +153,25 @@ async def api_claude_cli_check() -> JSONResponse:
 
     loop = asyncio.get_running_loop()
     return JSONResponse(await loop.run_in_executor(None, minutes.check_claude_cli))
+
+
+@router.post("/api/engines/claude_cli/network")
+async def api_claude_cli_network(request: Request) -> JSONResponse:
+    """Сеть для Claude CLI: режим, порты VPN-клиентов, выбранный путь.
+
+    С «probe»: true в теле — ещё проба выхода (адрес, страна, ответ Anthropic)
+    тем путём, каким пойдёт CLI. Проба идёт в сеть, поэтому POST, и только по
+    кнопке; ждёт до нескольких секунд — в отдельном потоке.
+    """
+    from .. import minutes
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    probe = bool(isinstance(body, dict) and body.get("probe"))
+    loop = asyncio.get_running_loop()
+    return JSONResponse(await loop.run_in_executor(None, minutes.network_report, probe))
 
 
 # ====================================================================== записи

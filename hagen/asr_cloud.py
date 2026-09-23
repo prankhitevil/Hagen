@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from . import audio_io, config, platform, providers, store
+from . import audio_io, config, jobs, platform, providers, store
 
 log = logging.getLogger("hagen.asr_cloud")
 
@@ -33,22 +33,6 @@ MAX_BODY_MB = 14.0
 #: даёт прямую ошибку, у остальных поведение не описано. Поэтому пробуем и,
 #: если сервис ругается именно на этот параметр, повторяем без него.
 _WORD_HINT = ("whisper-1",)
-
-
-def _direct_env() -> dict[str, str]:
-    """Окружение для дочернего ffmpeg: без прокси.
-
-    При включённом локальном VPN унаследованные http_proxy/https_proxy рвут
-    ffmpeg, хотя он никуда и не ходит по сети в нашем случае. Дешевле убрать.
-    """
-    import os
-
-    env = dict(os.environ)
-    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-                "all_proxy", "ALL_PROXY"):
-        env.pop(key, None)
-    env["NO_PROXY"] = "*"
-    return env
 
 
 def available() -> tuple[bool, str]:
@@ -102,7 +86,7 @@ def split_to_chunks(src: Path, dst_dir: Path, minutes: int | None = None) -> lis
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=3 * 60 * 60,
                           creationflags=platform.system().hidden_process_flags(),
-                          env=_direct_env())
+                          env=audio_io.direct_env())
     if proc.returncode != 0:
         detail = providers.first_lines(proc.stderr, 2, 200)
         raise RuntimeError("Не удалось подготовить звук для отправки: %s" % detail)
@@ -166,6 +150,7 @@ def _transcribe_chunk(path: Path, model: str, fallback: str,
                       handle: Any = None, lang: str | None = None
                       ) -> tuple[dict[str, Any], str, bool, bool]:
     """Кусок с откатами. Возвращает (ответ, модель, есть ли слова, грубо ли)."""
+    handle = jobs.as_handle(handle)
     want_words = any(m in model for m in _WORD_HINT)
     try:
         data = _post_chunk(path, model, want_words, lang=lang)
@@ -179,11 +164,7 @@ def _transcribe_chunk(path: Path, model: str, fallback: str,
             raise
         log.info("основная модель не ответила (%s), пробую запасную %s",
                  providers.first_lines(str(err), 1, 120), fallback)
-        if handle is not None:
-            try:
-                handle.log("основная модель не ответила, пробую запасную")
-            except Exception:
-                pass
+        handle.log("основная модель не ответила, пробую запасную")
     # Запасная: сперва тоже с подробным ответом, и только потом «только текст».
     try:
         data = _post_chunk(path, fallback, False, lang=lang)
@@ -249,6 +230,7 @@ def _segments_from(data: dict[str, Any], offset: float) -> list[dict[str, Any]]:
 def transcribe_file(path: Path, handle: Any = None, lang: str | None = None,
                     progress: Callable[[float, str], None] | None = None) -> dict[str, Any]:
     """Распознать файл в облаке. Возвращает реплики и что именно получилось."""
+    handle = jobs.as_handle(handle)
     ok, why = available()
     if not ok:
         raise RuntimeError(why)
@@ -263,11 +245,7 @@ def transcribe_file(path: Path, handle: Any = None, lang: str | None = None,
     minutes = max(1, min(60, int(config.get("chunk_min") or 15)))
     work = src.parent / "_cloud"
     chunks = split_to_chunks(src, work, minutes)
-    if handle is not None:
-        try:
-            handle.log("кусков для отправки: %d (по %d мин)" % (len(chunks), minutes))
-        except Exception:
-            pass
+    handle.log("кусков для отправки: %d (по %d мин)" % (len(chunks), minutes))
 
     segments: list[dict[str, Any]] = []
     used_model = model
@@ -275,12 +253,7 @@ def transcribe_file(path: Path, handle: Any = None, lang: str | None = None,
     degraded = False
     try:
         for i, chunk in enumerate(chunks):
-            if handle is not None:
-                try:
-                    if handle.cancelled:
-                        raise RuntimeError("Распознавание отменено.")
-                except AttributeError:
-                    pass
+            handle.check()
             if progress is not None:
                 try:
                     progress(i / float(len(chunks)),

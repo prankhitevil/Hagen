@@ -29,6 +29,7 @@ __all__ = [
     "shift_shots",
     "hidden_process_flags",
     "set_process_priority",
+    "process_alive",
     "open_path",
     "open_link",
     "set_console_title",
@@ -67,18 +68,20 @@ def screenshot_folders(auto: bool = False) -> list[Path]:
 
 
 def watch_screenshots(rec_id: str, position_s: Callable[[], float],
-                      on_shot: Callable[[dict[str, Any]], Any]) -> Any:
+                      on_shot: Callable[[dict[str, Any]], Any],
+                      folder: Callable[[], Path]) -> Any:
     """Сторож снимков на время записи."""
     from . import shots
 
-    return shots.ScreenshotWatcher(rec_id, position_s=position_s, on_shot=on_shot)
+    return shots.ScreenshotWatcher(rec_id, position_s=position_s, on_shot=on_shot,
+                                   folder=folder)
 
 
-def delete_shots(rec_id: str) -> int:
-    """Убрать файлы снимков записи. Только свои."""
+def delete_shots(rec_id: str, folder: Path) -> int:
+    """Убрать файлы снимков записи. Только свои, из названной папки."""
     from . import shots
 
-    return shots.delete_shots(rec_id)
+    return shots.delete_shots(rec_id, folder)
 
 
 def shift_shots(items: list[dict[str, Any]], offset_s: float) -> list[dict[str, Any]]:
@@ -100,6 +103,11 @@ def hidden_process_flags() -> int:
 def set_process_priority(pid: int, level: str) -> bool:
     """Сколько процессора отдавать своей дочерней программе."""
     return app.set_process_priority(pid, level)
+
+
+def process_alive(pid: int, unknown: bool = True) -> bool:
+    """Жив ли процесс с таким номером."""
+    return app.process_alive(pid, unknown)
 
 
 def open_path(path: str | Path) -> None:

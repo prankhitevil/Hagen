@@ -28,33 +28,14 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 
-LINES = []
-FAIL = []
 MADE = []
 
 
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
-
-
-from hagen import config, obsidian, store  # noqa: E402
+from hagen import config, obsidian, recordings, store  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="t59_"))
 VAULT = TMP / "vault"
@@ -129,6 +110,7 @@ def spy_publish(ev):
 server.hub.publish = spy_publish
 keep = Keep()
 logging.getLogger("hagen.server").addHandler(keep)
+logging.getLogger("hagen.recordings").addHandler(keep)   # автообновление заметки живёт в ядре
 
 try:
     with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
@@ -140,7 +122,7 @@ try:
         say("")
         say("=== 2. Имена поменялись — заметка обновилась сама ===")
         rename(r1, "SPEAKER_00", "Сергей Фещенко")
-        server._refresh_note(r1, "проверка")
+        recordings.refresh_note(r1, "проверка")
         text = note_text(r1)
         check("свойства: участник по имени", "Сергей Фещенко" in props(text), text[:300])
         check("названия записи в тексте нет (формат 15.09)", "# Проверка 59" not in text)
@@ -159,7 +141,7 @@ try:
         edited = edited.replace("tags: [", "project: Hagen\ntags: [", 1)
         io.open(path, "w", encoding="utf-8", newline="\n").write(edited)
         rename(r1, "SPEAKER_01", "София Перелыгина")
-        server._refresh_note(r1, "проверка")
+        recordings.refresh_note(r1, "проверка")
         t3 = note_text(r1)
         check("заметка переписана из программы: новое имя на месте", "] София Перелыгина:**" in t3)
         check("правка стенограммы из Obsidian не сохранилась", "поправлено в Obsidian" not in t3)
@@ -199,7 +181,7 @@ try:
         say("=== 5. Заметки нет / заметка только с документами ===")
         r6 = record("Проверка 59 — без заметки")
         rename(r6, "SPEAKER_00", "Иван Петров")
-        server._refresh_note(r6, "проверка")
+        recordings.refresh_note(r6, "проверка")
         check("заметки нет — сама в хранилище ничего не кладёт",
               not (store.get(r6) or {}).get("vault_path")
               and obsidian.refresh_note(r6).get("skipped") == "no_note")
@@ -209,7 +191,7 @@ try:
         check("«Сделать документ» без заметки — заметка только с документами",
               "ПРОТОКОЛ БЕЗ СТЕНОГРАММЫ" in t6 and "# Стенограмма" not in t6, t6[:300])
         rename(r6, "SPEAKER_01", "Анна Нилова")
-        server._refresh_note(r6, "проверка")
+        recordings.refresh_note(r6, "проверка")
         t6b = note_text(r6)
         check("автообновление стенограмму туда не добавляет, участники свежие",
               "# Стенограмма" not in t6b and "Анна Нилова" in props(t6b), t6b[:300])
@@ -228,7 +210,7 @@ try:
         m7.pop("vault_transcript", None)
         io.open(meta_path, "w", encoding="utf-8").write(json.dumps(m7, ensure_ascii=False))
         rename(r7, "SPEAKER_00", "Олег Кузнецов")
-        server._refresh_note(r7, "проверка")
+        recordings.refresh_note(r7, "проверка")
         check("старая заметка со стенограммой обновилась, стенограмма на месте",
               "] Олег Кузнецов:**" in note_text(r7))
 
@@ -260,7 +242,7 @@ try:
             rename(r8, "SPEAKER_01", "Пётр Ошибкин")
             NOTICES.clear()
             keep.lines.clear()
-            server._refresh_note(r8, "проверка")
+            recordings.refresh_note(r8, "проверка")
             check("автообновление: ошибка на экране",
                   any(n.get("level") == "err" and "не обновилась" in n.get("text", "") for n in NOTICES), NOTICES)
             check("автообновление: ошибка в журнале", any("не обновилась" in x for x in keep.lines),
@@ -283,6 +265,7 @@ try:
 finally:
     server.hub.publish = _real_publish
     logging.getLogger("hagen.server").removeHandler(keep)
+    logging.getLogger("hagen.recordings").removeHandler(keep)
     config.get, config.save = _real_get, _real_save
     for rid in MADE:
         try:
@@ -291,9 +274,4 @@ finally:
             pass
     shutil.rmtree(TMP, ignore_errors=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t59_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t59"))

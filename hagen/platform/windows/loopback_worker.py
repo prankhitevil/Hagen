@@ -110,12 +110,9 @@ def main() -> int:
         # увидит и держал бы устройство вечно.
         if not args.parent_pid:
             return False
-        try:
-            import psutil
+        from . import app
 
-            return not psutil.pid_exists(int(args.parent_pid))
-        except Exception:
-            return False
+        return not app.process_alive(int(args.parent_pid))
 
     try:
         while True:

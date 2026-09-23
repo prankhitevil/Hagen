@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
-from . import config, release, store, vad
+from . import config, jobs, release, store, vad
 
 log = logging.getLogger("hagen.diarize")
 
@@ -353,7 +353,7 @@ class _Progress:
     """
 
     def __init__(self, handle: Any, t0: float):
-        self.handle = handle
+        self.handle = jobs.as_handle(handle)
         self.t0 = t0
         self.value = 0.0
         self.offsets: dict[str, tuple[float, float, str]] = {}
@@ -373,9 +373,7 @@ class _Progress:
         total: Any = None,
         **_kw: Any,
     ) -> None:
-        if self.handle is None:
-            return
-        if getattr(self.handle, "cancelled", False):
+        if self.handle.cancelled:
             raise DiarizeCancelled("Диаризация отменена")
 
         base, weight, title = self.offsets.get(
@@ -398,20 +396,11 @@ class _Progress:
         self.report(title)
 
     def report(self, note: str) -> None:
-        if self.handle is None:
-            return
-        try:
-            self.handle.progress(self.value, note)
-        except Exception:
-            pass
+        self.handle.progress(self.value, note)
         # Пока шла запись, задача стояла на паузе — это время в остаток не в счёт.
-        elapsed = time.time() - self.t0 - float(getattr(self.handle, "paused_s", 0.0) or 0.0)
+        elapsed = time.time() - self.t0 - float(self.handle.paused_s or 0.0)
         if self.value > 0.03 and elapsed > 1.0:
-            eta = max(0.0, elapsed / self.value - elapsed)
-            try:
-                self.handle.eta(eta)
-            except Exception:
-                pass
+            self.handle.eta(max(0.0, elapsed / self.value - elapsed))
 
 
 # ---------------------------------------------------------------- главная функция
@@ -432,6 +421,7 @@ def diarize_pcm(
     """
     from . import audio_io
 
+    handle = jobs.as_handle(handle)
     t0 = time.time()
     arr = np.ascontiguousarray(np.asarray(pcm, dtype=np.float32).reshape(-1))
     if int(sr) != SR:
@@ -452,11 +442,10 @@ def diarize_pcm(
     # посреди поиска речи: общая модель поиска речи при этом занята, но во время
     # записи она никому не нужна — у живой записи свои модели на каждую дорожку,
     # а диктовка во время записи спит.
-    hook = _Progress(handle, time.time()) if handle is not None else None
-    if hook is not None:
-        hook("speech", completed=0, total=100)
+    hook = _Progress(handle, time.time())
+    hook("speech", completed=0, total=100)
     try:
-        spans = vad.speech_timestamps(arr, progress=_speech_progress(hook) if hook else None)
+        spans = vad.speech_timestamps(arr, progress=_speech_progress(hook))
     except DiarizeCancelled:
         raise
     except Exception as err:
@@ -479,8 +468,8 @@ def diarize_pcm(
     )
 
     # --- шаг 2: модель
-    eng = _loaded(progress=(lambda v, n: _handle_note(handle, n)))
-    if handle is not None and getattr(handle, "cancelled", False):
+    eng = _loaded(progress=(lambda v, n: handle.log(n)))
+    if handle.cancelled:
         raise DiarizeCancelled("Диаризация отменена")
 
     glued = _glue(arr, pieces, glued_len)
@@ -512,12 +501,8 @@ def diarize_pcm(
         "диаризация готова: голосов %d, интервалов %d, %.1f c (RTF %.2f)",
         len(labels), len(turns), elapsed, result["rtf"],
     )
-    if handle is not None:
-        try:
-            handle.progress(1.0, "разметка готова")
-            handle.eta(0.0)
-        except Exception:
-            pass
+    handle.progress(1.0, "разметка готова")
+    handle.eta(0.0)
     return result
 
 
@@ -537,15 +522,6 @@ def _speech_progress(hook: _Progress) -> Callable[[float], None]:
             hook("speech", completed=whole, total=100)
 
     return report
-
-
-def _handle_note(handle: Any, note: str) -> None:
-    if handle is None:
-        return
-    try:
-        handle.log(note)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------- где считать
@@ -571,10 +547,10 @@ def diarize_track(path: str | Any, min_speakers: int | None = None,
     """
     from . import audio_io
 
+    handle = jobs.as_handle(handle)
     est = estimate_seconds(audio_io.wav_duration(path))
-    if handle is not None:
-        handle.eta(est)
-        handle.log("примерная оценка: %.0f мин" % (est / 60.0))
+    handle.eta(est)
+    handle.log("примерная оценка: %.0f мин" % (est / 60.0))
     if isolated:
         from . import diarize_worker
 
@@ -582,10 +558,9 @@ def diarize_track(path: str | Any, min_speakers: int | None = None,
             return diarize_worker.run(path, min_speakers, max_speakers, handle)
         except diarize_worker.NotStarted as err:
             log.warning("помощник разметки не запустился (%s) — размечаю в самой программе", err)
-            _handle_note(handle, "помощник не запустился — размечаю в самой программе")
+            handle.log("помощник не запустился — размечаю в самой программе")
         finally:
-            if handle is not None and hasattr(handle, "where"):
-                handle.where = "here"
+            handle.where = "here"
     pcm, sr = audio_io.read_wav(path)
     return diarize_pcm(pcm, sr=sr, min_speakers=min_speakers, max_speakers=max_speakers,
                        handle=handle)

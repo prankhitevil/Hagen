@@ -27,28 +27,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name
-        + (": " + str(detail)[:300] if detail != "" else ""))
+from harness import LINES, FAIL, say, check  # noqa: E402
 
 
 from hagen import platform  # noqa: E402
@@ -170,7 +149,7 @@ try:
     check("щелчок записан", fake.input.CLICKS == ["start"], fake.input.CLICKS)
 
     shots = []
-    sw = platform.system().watch_screenshots("rec1", position_s=lambda: 12.3,
+    sw = platform.system().watch_screenshots("rec1", position_s=lambda: 12.3, folder=lambda: Path("."),
                                              on_shot=shots.append)
     sw.start()
     sw.fire("экран.png")

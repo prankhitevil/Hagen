@@ -36,36 +36,17 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 import uvicorn  # noqa: E402
 import webview  # noqa: E402
 
 from hagen import config as config_mod  # noqa: E402
-from hagen import server  # noqa: E402
+from hagen import dictation, server  # noqa: E402
 
 # Настройки в памяти: страница сохраняет сюда «складывать по проектам», и
 # настоящий settings.json проверка не трогает.
@@ -85,7 +66,7 @@ config_mod.get = lambda k, d=None: VIEW[k] if k in VIEW else _real_get(k, d)
 config_mod.public = lambda: dict(_real_public(), **VIEW)
 
 # Горячую клавишу диктовки не занимаем: рядом может работать сам Hagen.
-server._start_dictation = lambda: None
+dictation.start = lambda: None       # клавишу диктовки в проверке не занимаем
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -561,9 +542,4 @@ check("поздних ошибок JavaScript нет", result.get("late_errors")
 
 config_mod.save, config_mod.get, config_mod.public = _real_save, _real_get, _real_public
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t91_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t91"))

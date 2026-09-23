@@ -208,12 +208,9 @@ class _LineHandle:
         now = time.monotonic()
         if self._parent_pid and now - self._checked >= self.PARENT_CHECK_S:
             self._checked = now
-            try:
-                import psutil
+            from . import platform
 
-                self._gone = not psutil.pid_exists(self._parent_pid)
-            except Exception:           # noqa: BLE001
-                self._gone = False
+            self._gone = not platform.system().process_alive(self._parent_pid)
         return self._gone
 
     def progress(self, value: float, note: str = "") -> None:

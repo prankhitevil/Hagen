@@ -57,6 +57,24 @@ def ffmpeg_exe() -> str:
     return tool_path("ffmpeg")
 
 
+def direct_env() -> dict[str, str]:
+    """Окружение для дочернего ffmpeg, ffprobe и браузера — БЕЗ системного прокси.
+
+    Локальный VPN-клиент выставляет http_proxy/https_proxy всем процессам
+    подряд, и дочерняя программа послушно уходит через него: рвётся TLS до
+    российских площадок, а преавторизованная ссылка (SharePoint, подписанный
+    поток) выписана на прямой адрес и с другого получает отказ. Свои запросы
+    программа шлёт напрямую (trust_env=False) — ребёнок должен вести себя так же.
+    Раньше эта функция лежала в четырёх модулях, и копии успели разойтись.
+    """
+    env = dict(os.environ)
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "ALL_PROXY", "all_proxy"):
+        env.pop(key, None)
+    env["NO_PROXY"] = env["no_proxy"] = "*"
+    return env
+
+
 def ffprobe_exe() -> str:
     return tool_path("ffprobe")
 

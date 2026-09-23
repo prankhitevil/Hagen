@@ -64,18 +64,18 @@ def sync_autostart() -> None:
     tray.sync_autostart()
 
 
-def app_shell(window: Any, server_mod: Any, **kw: Any) -> Any:
+def app_shell(window: Any, hooks: Any, **kw: Any) -> Any:
     """Связка окна программы, значка и уведомлений."""
     from . import tray
 
-    return tray.AppShell(window, server_mod, **kw)
+    return tray.AppShell(window, hooks, **kw)
 
 
-def make_notifier(server_mod: Any, on_open: Callable[[], Any]) -> Any | None:
+def make_notifier(hooks: Any, on_open: Callable[[], Any]) -> Any | None:
     """Уведомления с кнопками. Нет — программа работает молча."""
     from . import tray
 
-    return tray.make_notifier(server_mod, on_open)
+    return tray.make_notifier(hooks, on_open)
 
 
 def ask_yes_no(title: str, text: str) -> bool:

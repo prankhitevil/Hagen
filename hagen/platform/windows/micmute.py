@@ -53,7 +53,7 @@ def _in_audio_thread(fn, *args):
     """Всё общение с COM — в звуковом потоке программы, как и вся работа с WASAPI."""
     from . import loopback
 
-    return loopback._audio_thread.call(fn, *args)
+    return loopback.audio_thread.call(fn, *args)
 
 
 def _read() -> dict[str, Any]:

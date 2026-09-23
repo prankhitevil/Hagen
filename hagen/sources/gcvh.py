@@ -25,7 +25,7 @@
 3. Ходим НАПРЯМУЮ, мимо системного прокси. Бывает включён локальный
    VPN, и тогда российский трафик уходит за границу: TLS к .ru рвётся, а сама
    площадка режет заграничные адреса. Отсюда trust_env=False у httpx и
-   окружение без http_proxy для дочернего ffmpeg (см. _direct_env).
+   окружение без http_proxy для дочернего ffmpeg (см. audio_io.direct_env).
 
 Модуль отдаёт словарь общего договора источников (см. fetch()).
 """
@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import html
 import logging
-import os
 import re
 import subprocess
 import threading
@@ -42,8 +41,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .. import audio_io, config, platform
-from ..obsidian import _clean_url
+from .. import audio_io, config, jobs, platform
+from ..obsidian import clean_url, hms
 
 log = logging.getLogger("hagen.sources.gcvh")
 
@@ -123,52 +122,6 @@ def _slug(url: str) -> str:
     return tail or "Видео GetCourse"
 
 
-def _hms(seconds: float) -> str:
-    total = int(max(0.0, seconds))
-    return "%d:%02d:%02d" % (total // 3600, (total % 3600) // 60, total % 60)
-
-
-def _check(handle: Any) -> None:
-    """Прерваться, если человек нажал «отмена»."""
-    if handle is not None and getattr(handle, "cancelled", False):
-        raise RuntimeError("отменено")
-
-
-def _say(handle: Any, frac: float, note: str) -> None:
-    if handle is None:
-        return
-    try:
-        handle.progress(frac, note)
-    except Exception:
-        log.debug("не удалось показать прогресс", exc_info=True)
-
-
-def _tell(handle: Any, line: str) -> None:
-    if handle is None:
-        log.info("%s", line)
-        return
-    try:
-        handle.log(line)
-    except Exception:
-        log.info("%s", line)
-
-
-def _direct_env() -> dict[str, str]:
-    """Окружение для дочернего ffmpeg — без прокси.
-
-    Локальный VPN-клиент выставляет http_proxy/https_proxy на весь компьютер, и
-    ffmpeg их послушно подхватывает: запрос к российской раздаче уходит за
-    границу, TLS рвётся, скачивание встаёт. Свои запросы мы уже шлём напрямую
-    (trust_env=False), ребёнок должен вести себя так же.
-    """
-    env = dict(os.environ)
-    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-                "ALL_PROXY", "all_proxy"):
-        env.pop(key, None)
-    env["NO_PROXY"] = env["no_proxy"] = "*"
-    return env
-
-
 # --------------------------------------------------------------- сеть
 def _open_client():
     """Клиент httpx: напрямую, с раздельными таймаутами и переходами по редиректам."""
@@ -199,11 +152,12 @@ def _get(client, url: str, referer: str | None, what: str, handle: Any = None) -
     первый запрос (особенно плееру), а со второй-третьей попытки всё приходит.
     Признак пустышки — подозрительно короткое тело.
     """
+    handle = jobs.as_handle(handle)
     headers = {"Referer": referer} if referer else {}
     last_text = ""
     last_err: Exception | None = None
     for attempt in (1, 2, 3):
-        _check(handle)
+        handle.check()
         try:
             resp = client.get(url, headers=headers)
         except Exception as err:                     # httpx.*Error, имена не тянем
@@ -325,6 +279,7 @@ def _stream_duration(client, url: str, referer: str, handle: Any = None) -> floa
     положить длительность в запись. Если плейлист не прочитался — не беда,
     просто вернём 0.
     """
+    handle = jobs.as_handle(handle)
     try:
         body = _get(client, url, referer, "список кусков видео", handle)
     except GcvhError:
@@ -413,7 +368,7 @@ def _run_ffmpeg(cmd: list[str], dst: Path, total_s: float, handle: Any) -> str |
         text=True, encoding="utf-8", errors="replace", bufsize=1,
         # Без окна консоли: иначе на каждый вызов мигает чёрное окно.
         creationflags=platform.system().hidden_process_flags(),
-        env=_direct_env(),
+        env=audio_io.direct_env(),
     )
     complaints: list[str] = []
     last_note = [0.0]
@@ -443,7 +398,7 @@ def _run_ffmpeg(cmd: list[str], dst: Path, total_s: float, handle: Any) -> str |
     reader.start()
     try:
         while proc.poll() is None:
-            if handle is not None and getattr(handle, "cancelled", False):
+            if handle.cancelled:
                 _stop(proc)
                 _drop(dst)
                 raise RuntimeError("отменено")
@@ -463,13 +418,13 @@ def _run_ffmpeg(cmd: list[str], dst: Path, total_s: float, handle: Any) -> str |
 def _report(handle: Any, done_s: float, total_s: float) -> None:
     if total_s > 0:
         frac = min(1.0, done_s / total_s)
-        _say(handle, 0.2 + 0.78 * frac,
+        handle.progress(0.2 + 0.78 * frac,
              "скачиваю видео: %d%% (%s из %s)"
-             % (frac * 100, _hms(done_s), _hms(total_s)))
+             % (frac * 100, hms(done_s), hms(total_s)))
     else:
         # Длительность неизвестна — ползём к 0.9, не обещая скорого конца.
-        _say(handle, 0.2 + 0.7 * (done_s / (done_s + 900.0)),
-             "скачиваю видео: готово %s" % _hms(done_s))
+        handle.progress(0.2 + 0.7 * (done_s / (done_s + 900.0)),
+             "скачиваю видео: готово %s" % hms(done_s))
 
 
 def _stop(proc: subprocess.Popen) -> None:
@@ -503,6 +458,7 @@ def fetch(url: str, dst_dir: Path, handle: Any = None) -> dict[str, Any]:
     Возвращает словарь общего договора источников: media, transcript, title,
     url, source_name, duration_s, extra.
     """
+    handle = jobs.as_handle(handle)
     page_url = (url or "").strip()
     if not _HTTP_RE.match(page_url):
         raise GcvhError("Это не похоже на ссылку. Нужен адрес, начинающийся с http.")
@@ -513,55 +469,55 @@ def fetch(url: str, dst_dir: Path, handle: Any = None) -> dict[str, Any]:
     origin = _origin(page_url)
     referer = origin + "/"
 
-    _check(handle)
-    _say(handle, 0.02, "открываю страницу курса")
+    handle.check()
+    handle.progress(0.02, "открываю страницу курса")
     with _open_client() as client:
         page = _get(client, page_url, None, "страницу курса", handle)
         player_url = _find_player(page, page_url)
         title = _find_title(page, _slug(page_url))
-        _tell(handle, "Нашёл видео: %s" % title)
+        handle.log("Нашёл видео: %s" % title)
 
-        _check(handle)
-        _say(handle, 0.08, "открываю плеер")
+        handle.check()
+        handle.progress(0.08, "открываю плеер")
         player = _get(client, player_url, referer, "плеер", handle)
         master_url = _find_master(player)
 
-        _check(handle)
-        _say(handle, 0.12, "выбираю качество")
+        handle.check()
+        handle.progress(0.12, "выбираю качество")
         master = _get(client, master_url, referer, "список качеств", handle)
         max_height = _max_height()
         height, stream_url = _pick_stream(master, max_height)
         stream_url = _force_ru_origin(stream_url)
-        _tell(handle, "Качество: %s (потолок настройки — %dp)"
+        handle.log("Качество: %s (потолок настройки — %dp)"
               % ("%dp" % height if height else "неизвестно", max_height))
 
-        _check(handle)
+        handle.check()
         duration_s = _stream_duration(client, stream_url, referer, handle)
 
-    _check(handle)
+    handle.check()
     if video.exists() and video.stat().st_size > _REUSE_BYTES:
         # Повторный запуск по той же ссылке не качает заново: видео тяжёлое, а
         # ссылка на страницу курса обычно одна и та же.
-        _tell(handle, "Видео уже скачано (%.1f МБ), качать заново не буду"
+        handle.log("Видео уже скачано (%.1f МБ), качать заново не буду"
               % (video.stat().st_size / 1_048_576))
     else:
-        _say(handle, 0.2, "скачиваю видео")
+        handle.progress(0.2, "скачиваю видео")
         # Пишем во временное имя и переименовываем в конце: так недокачанный
         # файл никогда не притворится готовым видео.
         part = dst_dir / "video.download.mp4"
         _drop(part)
         _download(stream_url, referer, part, duration_s, handle)
         part.replace(video)                      # replace затирает старое одним движением
-        _tell(handle, "Видео скачано: %.1f МБ" % (video.stat().st_size / 1_048_576))
+        handle.log("Видео скачано: %.1f МБ" % (video.stat().st_size / 1_048_576))
 
-    _say(handle, 1.0, "видео готово")
+    handle.progress(1.0, "видео готово")
     log.info("GetCourse: скачано «%s», %s, %s", title,
-             "%dp" % height if height else "качество неизвестно", _hms(duration_s))
+             "%dp" % height if height else "качество неизвестно", hms(duration_s))
     return {
         "media": str(video),
         "transcript": "",                 # готовых субтитров площадка не даёт
         "title": title,
-        "url": _clean_url(page_url),
+        "url": clean_url(page_url),
         "source_name": SOURCE_NAME,
         "duration_s": float(duration_s),
         "extra": {

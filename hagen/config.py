@@ -404,6 +404,15 @@ DEFAULTS: dict[str, Any] = {
     "services_adopted": False,     # разовый перенос с прежнего списка сервисов сделан
     "claude_cli_model": "",
     "claude_timeout_s": 600,
+    # Сеть для Claude CLI (решение 23.09). Серверы Anthropic отказывают части
+    # стран, а запрос с «не того» адреса всё равно уносит токен аккаунта и
+    # стенограмму. port — пускать CLI только через локальный порт VPN-клиента
+    # (нет порта — не запускать); probe — как есть, но перед запуском спросить
+    # Anthropic без токена, пускает ли; off — без защиты, как было.
+    "claude_cli_guard": "port",
+    # Порт для guard=port: «auto» — первый слушающий из известных (vpn.PORTS)
+    # либо адрес вида 127.0.0.1:12334.
+    "claude_cli_proxy": "auto",
     "minutes_chunk_chars": 0,      # размер куска стенограммы; 0 = считать по модели
     # --- распознавание файлов (живой микрофон это НЕ затрагивает) ---
     "asr_files": "local",          # local = на этом компьютере, cloud = по API
@@ -779,10 +788,10 @@ def public() -> dict[str, Any]:
     out = {k: v for k, v in data.items() if k not in _SECRET_KEYS}
     tok = data.get("hf_token") or ""
     out["hf_token_set"] = bool(tok)
-    out["hf_token_hint"] = _mask(tok)
+    out["hf_token_hint"] = mask(tok)
     keys = data.get("api_keys") or {}
     out["api_keys_set"] = {p: bool(v) for p, v in keys.items() if v}
-    out["api_keys_hint"] = {p: _mask(v) for p, v in keys.items() if v}
+    out["api_keys_hint"] = {p: mask(v) for p, v in keys.items() if v}
     # Движок разметки назначает релиз, а не настройки; странице он нужен, чтобы
     # не показывать поле токена там, где токен не нужен. Импорт здесь: дверь
     # разметки сама зависит от config.
@@ -796,7 +805,7 @@ def public() -> dict[str, Any]:
     return out
 
 
-def _mask(secret: str | None) -> str:
+def mask(secret: str | None) -> str:
     if not secret:
         return ""
     s = str(secret)

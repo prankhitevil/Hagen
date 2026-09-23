@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from . import audio_io, config
+from . import audio_io, config, vpn
 
 log = logging.getLogger("hagen.fetch")
 
@@ -33,9 +33,9 @@ log = logging.getLogger("hagen.fetch")
 SUB_LANGS_MANUAL = ["ru", "en"]
 SUB_LANGS_AUTO = ["ru-orig", "ru", "en-orig", "en"]
 
-#: Типовые локальные порты VPN-клиентов. Перебираем их, когда в настройках
-#: стоит «auto»: YouTube открывается не всегда напрямую.
-_VPN_PORTS = [10809, 10808, 12334, 2080]
+# Типовые локальные порты VPN-клиентов перебираются, когда в настройках стоит
+# «auto»: YouTube открывается не всегда напрямую. Список портов — в vpn.py,
+# один на скачивание и на Claude CLI.
 
 # Ссылка должна быть http(s). Всё остальное — в том числе file:// — отвергаем:
 # служба слушает только себя, и давать ей читать произвольные пути по «ссылке»
@@ -156,7 +156,7 @@ def proxy_candidates(raw: str | None = None) -> list[str | None]:
     if not text:
         return [None]
     if text.lower() == "auto":
-        return [None] + ["socks5://127.0.0.1:%d" % p for p in _VPN_PORTS]
+        return [None] + vpn.yt_proxies()
     out: list[str | None] = []
     for part in text.split(","):
         part = part.strip()

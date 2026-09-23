@@ -23,66 +23,16 @@ from __future__ import annotations
 
 import logging
 import shutil
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from . import audio_io, config, jobs, store
+from . import audio_io, config, diarize_jobs, jobs, store
+from .events import hub
 
 log = logging.getLogger("hagen.media")
 
 #: Порядок этапов обработки. Каждый отмечается в meta["stages"] после успеха.
 STAGES = ("media", "text", "diarize", "summary", "note")
-
-#: Связи со службой. Заполняет server.py при импорте: media.py не может
-#: импортировать server (получилось бы кольцо), а рассылка событий и постановка
-#: разметки в очередь живут там.
-hooks: dict[str, Callable[..., Any] | None] = {
-    "publish": None,        # publish(payload: dict) -> None
-    "queue_diarize": None,  # queue_diarize(rec_id: str) -> str | None
-}
-
-
-def _pub(payload: dict[str, Any]) -> None:
-    fn = hooks.get("publish")
-    if fn is None:
-        return
-    try:
-        fn(payload)
-    except Exception:
-        log.debug("событие не разослано", exc_info=True)
-
-
-def _say(handle: Any, msg: str) -> None:
-    log.info("%s", msg)
-    if handle is None:
-        return
-    try:
-        handle.log(msg)
-    except Exception:
-        pass
-
-
-def _progress(handle: Any, frac: float, note: str = "") -> None:
-    if handle is None:
-        return
-    try:
-        handle.progress(max(0.0, min(1.0, float(frac))), note)
-    except Exception:
-        pass
-
-
-def _check(handle: Any) -> None:
-    """Прерваться, если человек нажал «Отмена»."""
-    if handle is None:
-        return
-    try:
-        stop = bool(handle.cancelled)
-    except Exception:
-        stop = False
-    if stop:
-        raise RuntimeError("Обработка отменена.")
-
 
 # ---------------------------------------------------------------- этапы
 
@@ -217,7 +167,7 @@ def _assets_dir(rec_id: str, meta: dict[str, Any]) -> Path:
     if not folder:
         created = str(meta.get("created_at") or "")[:10]
         title = str(meta.get("title") or rec_id)
-        folder = obsidian._safe_name("%s %s" % (created, title), limit=80)
+        folder = obsidian.safe_name("%s %s" % (created, title), limit=80)
         store.update(rec_id, {"assets_folder": folder})
     path = store.assets_dir(rec_id, folder)
     path.mkdir(parents=True, exist_ok=True)
@@ -229,7 +179,7 @@ def rename_assets_folder(rec_id: str, new_name: str) -> Path | None:
     from . import obsidian
 
     meta = store.get(rec_id) or {}
-    safe = obsidian._safe_name(new_name, limit=80)
+    safe = obsidian.safe_name(new_name, limit=80)
     old = str(meta.get("assets_folder") or "")
     if not safe or safe == old:
         return None
@@ -284,25 +234,9 @@ def _segments_from_subs(rec_id: str, path: Path, handle: Any) -> int:
         except Exception as err:
             log.warning("имена из расшифровки не попали в базу голосов: %s", err)
     store.refresh_participants(rec_id)
-    _say(handle, "взят готовый текст: реплик %d, голосов %d"
+    handle.log("взят готовый текст: реплик %d, голосов %d"
          % (len(segs), len(speakers)))
     return len(segs)
-
-
-@contextmanager
-def _heavy(handle: Any, note: str = ""):
-    """Пропуск на тяжёлый счёт, если задача его умеет брать (20.09).
-
-    Скачиваний может идти несколько сразу, а вот распознавание на этом
-    компьютере — по одному: модель занимает все ядра. В проверках handle
-    бывает подставным и пропусков не раздаёт — тогда просто работаем.
-    """
-    take = getattr(handle, "heavy", None)
-    if take is None:
-        yield
-        return
-    with take(note) if note else take():
-        yield
 
 
 def _segments_from_asr(rec_id: str, wav: Path, duration: float,
@@ -313,7 +247,7 @@ def _segments_from_asr(rec_id: str, wav: Path, duration: float,
     if where == "cloud":
         # Считает чужой сервер — нашему процессору ждать незачем.
         return _segments_from_cloud(rec_id, wav, opts, handle)
-    with _heavy(handle, "жду очереди на распознавание"):
+    with handle.heavy("жду очереди на распознавание"):
         return _segments_from_local(rec_id, wav, duration, lang, handle)
 
 
@@ -327,7 +261,7 @@ def _segments_from_local(rec_id: str, wav: Path, duration: float, lang: str,
             raise RuntimeError(why)
     pcm, _sr = audio_io.read_wav(wav)
     spans = vad.split_for_asr(pcm)
-    _say(handle, "фрагментов речи: %d" % len(spans))
+    handle.log("фрагментов речи: %d" % len(spans))
     # Точная модель работает примерно за 0,18 от длительности записи
     try:
         handle.eta(max(5.0, duration * 0.18))
@@ -335,7 +269,7 @@ def _segments_from_local(rec_id: str, wav: Path, duration: float, lang: str,
         pass
 
     def prog(frac: float) -> None:
-        _progress(handle, 0.45 + 0.40 * float(frac), "распознано %.0f%%" % (frac * 100))
+        handle.progress(0.45 + 0.40 * float(frac), "распознано %.0f%%" % (frac * 100))
 
     pieces = _run_local_asr(asr, pcm, spans, lang, prog)
     segs: list[dict[str, Any]] = []
@@ -351,7 +285,7 @@ def _segments_from_local(rec_id: str, wav: Path, duration: float, lang: str,
         "asr_model": _local_model_name(lang),
         "asr_lang": lang,
     })
-    _say(handle, "распознано реплик: %d" % len(segs))
+    handle.log("распознано реплик: %d" % len(segs))
     return len(segs)
 
 
@@ -407,7 +341,7 @@ def _segments_from_cloud(rec_id: str, wav: Path, opts: dict[str, Any],
         raise RuntimeError(why)
 
     def prog(frac: float, note: str = "") -> None:
-        _progress(handle, 0.45 + 0.40 * float(frac), note or "распознаю в облаке")
+        handle.progress(0.45 + 0.40 * float(frac), note or "распознаю в облаке")
 
     res = asr_cloud.transcribe_file(wav, handle=handle, progress=prog, lang=_lang(opts))
     segs = res.get("segments") or []
@@ -424,7 +358,7 @@ def _segments_from_cloud(rec_id: str, wav: Path, opts: dict[str, Any],
         "asr_lang": _lang(opts),
     })
     tail = "" if res.get("words") else ", отметки только по репликам"
-    _say(handle, "распознано в облаке: реплик %d%s" % (len(segs), tail))
+    handle.log("распознано в облаке: реплик %d%s" % (len(segs), tail))
     return len(segs)
 
 
@@ -433,13 +367,13 @@ def _segments_from_cloud(rec_id: str, wav: Path, opts: dict[str, Any],
 
 def _extract_audio(rec_id: str, src: Path, handle: Any) -> float:
     """Вынуть звук в 16 кГц моно — в том же виде, в котором его пишет микрофон."""
-    _say(handle, "извлекаю звук")
+    handle.log("извлекаю звук")
     dst = store.track_path(rec_id, store.TRACK_FILE)
     duration = audio_io.ffmpeg_to_wav16k(src, dst)
     store.update(rec_id, {"duration_s": round(duration, 2),
                           "status": "processing",
                           "tracks": [store.TRACK_FILE]})
-    _progress(handle, 0.42, "звук извлечён, %.0f c" % duration)
+    handle.progress(0.42, "звук извлечён, %.0f c" % duration)
     return duration
 
 
@@ -465,7 +399,7 @@ def _keep_video(rec_id: str, meta: dict[str, Any], src: Path, handle: Any) -> Pa
         return None
     store.update(rec_id, {"video_path": str(dst),
                           "video_bytes": dst.stat().st_size})
-    _say(handle, "видео сохранено: %s" % dst)
+    handle.log("видео сохранено: %s" % dst)
     return dst
 
 
@@ -496,13 +430,14 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
     title, url, source_name, duration_s. Всё, что дальше, для всех источников
     одинаково, поэтому источники ничего про конвейер не знают.
     """
+    handle = jobs.as_handle(handle)
     meta = store.get(rec_id) or {}
     video_only = _flag(opts, "video_only")
 
     # --- этап 1: добыть файл и, если есть, готовый текст
     if not _done(rec_id, "media"):
-        _check(handle)
-        _progress(handle, 0.02, "получаю файл")
+        handle.check()
+        handle.progress(0.02, "получаю файл")
         got = get_source(handle) or {}
         media = str(got.get("media") or "")
         subs_path = str(got.get("transcript") or "")
@@ -539,7 +474,7 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
             src = Path(media)
             if not src.exists():
                 raise RuntimeError("Файл не найден: %s" % src.name)
-            _progress(handle, 0.35, "файл получен")
+            handle.progress(0.35, "файл получен")
             if _keeps_video(opts):
                 saved = _keep_video(rec_id, store.get(rec_id) or meta, src, handle)
                 src = saved or src
@@ -557,16 +492,16 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
     if video_only:
         store.update(rec_id, {"status": "recorded"})
         _mark(rec_id, "text", "skip")
-        _progress(handle, 1.0, "готово")
-        _pub({"type": "recording", "meta": store.get(rec_id)})
-        _pub({"type": "notice", "level": "ok",
+        handle.progress(1.0, "готово")
+        hub.publish({"type": "recording", "meta": store.get(rec_id)})
+        hub.publish({"type": "notice", "level": "ok",
               "text": "Видео скачано: %s" % (store.get(rec_id) or {}).get("title")})
         return {"video_only": True}
 
     # --- этап 2: текст. Готовые субтитры дешевле распознавания в любом случае
     count = 0
     if not _done(rec_id, "text"):
-        _check(handle)
+        handle.check()
         meta = store.get(rec_id) or meta
         kept = store.paths(rec_id)["subs"]
         have_subs = kept.exists() and kept.stat().st_size > 32
@@ -582,10 +517,10 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
         from . import echo
 
         echo.mark(rec_id)
-        _pub({"type": "segments", "rec_id": rec_id,
+        hub.publish({"type": "segments", "rec_id": rec_id,
               "segments": store.sorted_segments(rec_id)})
-        _pub({"type": "recording", "meta": store.get(rec_id)})
-    _progress(handle, 0.86, "текст готов")
+        hub.publish({"type": "recording", "meta": store.get(rec_id)})
+    handle.progress(0.86, "текст готов")
 
     # --- этап 3: говорящие. Если имена пришли из субтитров, разметка не нужна
     meta = store.get(rec_id) or meta
@@ -593,32 +528,29 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
         if str(meta.get("diarize_status")) == "subs":
             # Имена настоящие, переподписывать не нужно. Но если звук есть — по
             # нему можно выучить голоса этих людей для будущих записей.
-            fn = hooks.get("queue_diarize")
             has_audio = store.track_path(rec_id, store.TRACK_FILE).exists()
-            if (fn is not None and has_audio and KIND_DEFAULTS[_kind(opts)]["diarize"]
+            if (has_audio and KIND_DEFAULTS[_kind(opts)]["diarize"]
                     and _flag(opts, "diarize_auto")):
                 try:
-                    fn(rec_id)
+                    diarize_jobs.queue_diarize(rec_id)
                     _mark(rec_id, "diarize", "queued")
-                    _say(handle, "имена взяты из расшифровки; голоса этих людей выучу по звуку")
+                    handle.log("имена взяты из расшифровки; голоса этих людей выучу по звуку")
                 except Exception as err:
                     log.info("обучение голосам не поставил в очередь: %s", err)
                     _mark(rec_id, "diarize", "subs")
             else:
                 _mark(rec_id, "diarize", "subs")
-                _say(handle, "имена взяты из субтитров, разметка голосов не нужна")
+                handle.log("имена взяты из субтитров, разметка голосов не нужна")
         elif not KIND_DEFAULTS[_kind(opts)]["diarize"]:
             _mark(rec_id, "diarize", "skip")
-            _say(handle, "тип записи «%s» — без разметки голосов" % _kind(opts))
+            handle.log("тип записи «%s» — без разметки голосов" % _kind(opts))
         elif _flag(opts, "diarize_auto"):
-            fn = hooks.get("queue_diarize")
-            if fn is not None:
-                try:
-                    fn(rec_id)
-                    _mark(rec_id, "diarize", "queued")
-                    _say(handle, "разметка голосов поставлена в очередь")
-                except Exception as err:
-                    log.info("разметку не поставил в очередь: %s", err)
+            try:
+                diarize_jobs.queue_diarize(rec_id)
+                _mark(rec_id, "diarize", "queued")
+                handle.log("разметка голосов поставлена в очередь")
+            except Exception as err:
+                log.info("разметку не поставил в очередь: %s", err)
 
     _save_transcript_copy(rec_id, meta, opts)
 
@@ -626,7 +558,7 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
     # У типа «только расшифровка» документа нет вовсе — за него и не платим.
     document = str(KIND_DEFAULTS[_kind(opts)]["document"])
     if document and _flag(opts, "make_summary") and not _done(rec_id, "summary"):
-        _say(handle, "документ поставлен в очередь")
+        handle.log("документ поставлен в очередь")
         try:
             submit_summary(rec_id, document=document)
         except Exception as err:
@@ -638,13 +570,13 @@ def process(rec_id: str, get_source: Callable[[Any], dict[str, Any]],
     # в очередь, — ей дорожка ещё понадобится; уберёт её служба, когда закончит.
     if _store_mode(opts) == "none":
         if _stages(rec_id).get("diarize") == "queued":
-            _say(handle, "звук будет убран после разметки голосов")
+            handle.log("звук будет убран после разметки голосов")
         else:
             freed = store.drop_media(rec_id).get("freed_bytes", 0)
-            _say(handle, "звук убран, освободилось %.1f МБ" % (freed / 1048576.0))
+            handle.log("звук убран, освободилось %.1f МБ" % (freed / 1048576.0))
 
-    _progress(handle, 1.0, "готово")
-    _pub({"type": "notice", "level": "ok",
+    handle.progress(1.0, "готово")
+    hub.publish({"type": "notice", "level": "ok",
           "text": "Готово: %s (%d реплик)" % (meta.get("title"), count)})
     return {"segments": count, "rec_id": rec_id}
 
@@ -705,7 +637,7 @@ def submit_file(tmp: Path, name: str, opts: dict[str, Any]) -> dict[str, Any]:
                 pass
 
     job_id = jobs.submit("media", work, "Обработка файла: %s" % name, rec_id=rec_id)
-    _pub({"type": "recordings"})
+    hub.publish({"type": "recordings"})
     return {"job_id": job_id, "rec_id": rec_id, "meta": store.get(rec_id)}
 
 
@@ -728,7 +660,7 @@ def submit_link(url: str, info: dict[str, Any], opts: dict[str, Any]) -> dict[st
         folder = _assets_dir(rec_id, store.get(rec_id) or meta)
         subs_path = ""
         if want_subs:
-            _say(handle, "смотрю, есть ли готовые субтитры")
+            handle.log("смотрю, есть ли готовые субтитры")
             try:
                 got = fetch.download_subs(url, folder, auto_ok=auto_subs, proxy=proxy)
             except Exception as err:
@@ -740,14 +672,14 @@ def submit_link(url: str, info: dict[str, Any], opts: dict[str, Any]) -> dict[st
                                       "subs_lang": got.get("lang") or ""})
         # Если текст уже есть и видео хранить не просили — качать нечего вовсе.
         if subs_path and not want_video:
-            _say(handle, "текст взят субтитрами, видео не качаю")
+            handle.log("текст взят субтитрами, видео не качаю")
             return {"transcript": subs_path, "title": info.get("title"),
                     "url": info.get("webpage_url") or url,
                     "source_name": info.get("webpage_url") or url,
                     "duration_s": info.get("duration_s") or 0.0}
 
         def dl(frac: float, note: str) -> None:
-            _progress(handle, 0.02 + 0.30 * float(frac), note)
+            handle.progress(0.02 + 0.30 * float(frac), note)
 
         def stop() -> bool:
             try:
@@ -772,7 +704,7 @@ def submit_link(url: str, info: dict[str, Any], opts: dict[str, Any]) -> dict[st
     job_id = jobs.submit("media", work,
                          "Видео по ссылке: %s" % (info.get("title") or url),
                          rec_id=rec_id)
-    _pub({"type": "recordings"})
+    hub.publish({"type": "recordings"})
     return {"job_id": job_id, "rec_id": rec_id, "meta": store.get(rec_id), "info": info}
 
 
@@ -831,7 +763,7 @@ def submit_source(kind: str, payload: dict[str, Any],
     names = {"sharepoint": "SharePoint", "gcvh": "GetCourse", "webauth": "Сайт"}
     job_id = jobs.submit("media", work, "%s: %s" % (names.get(kind, kind), title),
                          rec_id=rec_id, extra=job_extra)
-    _pub({"type": "recordings"})
+    hub.publish({"type": "recordings"})
     return {"job_id": job_id, "rec_id": rec_id, "meta": store.get(rec_id)}
 
 
@@ -875,18 +807,18 @@ def submit_summary(rec_id: str, document: str | None = None,
                 _mark(rec_id, "note")
         except Exception as err:
             log.warning("запись %s: заметка не сохранилась: %s", rec_id, err)
-            _pub({"type": "notice", "level": "err",
+            hub.publish({"type": "notice", "level": "err",
                   "text": "Документ готов, но в Obsidian не записался: %s" % err})
             saved = {}
         # Готовый текст показываем прямо в программе, как это делает протокол:
         # иначе саммари молча уезжало бы в заметку, и человек не видел, что
         # получилось, пока не откроет хранилище.
-        _pub({"type": "minutes", "rec_id": rec_id,
+        hub.publish({"type": "minutes", "rec_id": rec_id,
               "markdown": res["markdown"], "template": document})
-        _pub({"type": "recording", "meta": store.get(rec_id)})
+        hub.publish({"type": "recording", "meta": store.get(rec_id)})
         done = {"meeting": "Краткое содержание готово", "lecture": "Конспект готов",
                 "interview": "Выжимка готова"}
-        _pub({"type": "notice", "level": "ok", "text": done.get(document, "Документ готов")})
+        hub.publish({"type": "notice", "level": "ok", "text": done.get(document, "Документ готов")})
         return {"markdown_bytes": len(res.get("markdown") or ""),
                 "saved_to": saved.get("path") or ""}
 

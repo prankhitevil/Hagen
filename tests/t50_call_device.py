@@ -24,30 +24,11 @@ import numpy as np
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 
-LINES = []
-FAIL = []
 SR = 16000
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 from hagen import live, store  # noqa: E402
@@ -95,7 +76,7 @@ for want in pick[:2]:
         opened = "не открылось: %s" % err
     finally:
         rec.stop()
-    check("просили «%s» — открыто оно" % want, loopback._similar(opened, want), "%s | %s" % (opened, rec.choice))
+    check("просили «%s» — открыто оно" % want, loopback.similar(opened, want), "%s | %s" % (opened, rec.choice))
     check("в журнале объяснено, почему это устройство", "звонок выводит звук" in rec.choice, rec.choice)
 rec = capture.LoopbackProcess(want_name="Несуществующие колонки 9000")
 try:
@@ -195,9 +176,4 @@ check("дорожки после перехода в ногу (±0,4 с)", abs(s
       "%.2f / %.2f" % (secs("mic"), secs("far")))
 store.delete(rid)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t50_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t50"))

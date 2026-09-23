@@ -21,28 +21,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 from hagen.platform.windows import splash  # noqa: E402
@@ -111,9 +92,4 @@ check("закрывается перед созданием окна",
 check("при старте в трей и подготовке моделей заставки нет",
       "if args.app and not args.tray and not args.prepare:" in run)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for name in FAIL:
-    say("   - " + name)
-io.open(PROJECT / "tests" / "t86_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t86"))

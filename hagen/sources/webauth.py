@@ -46,8 +46,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .. import audio_io, platform
-from ..obsidian import _clean_url
+from .. import audio_io, jobs, platform
+from ..obsidian import clean_url, hms, safe_name
 
 log = logging.getLogger("hagen.webauth")
 
@@ -100,58 +100,19 @@ FFMPEG_MISSING = (
 _PROGRESS_LINE = re.compile(r"^([a-z0-9_]+)=(.*)$")
 
 _URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]+", re.I)
-_BAD_NAME = re.compile(r'[\\/:*?"<>|]+')
 
 
 # --------------------------------------------------------------------- мелочи
 
 
-def _direct_env() -> dict[str, str]:
-    """Окружение для дочерних процессов — без прокси.
-
-    Локальный VPN-клиент (например, Hiddify на порту 12334) выставляет
-    http_proxy/https_proxy всем процессам подряд. Браузер и ffmpeg это
-    подхватывают и уходят через VPN: TLS до российских площадок рвётся, а
-    подписанная ссылка на поток перестаёт совпадать по адресу и получает 403.
-    Поэтому прокси вычищаем и на всякий случай глушим их через NO_PROXY.
-    """
-    env = dict(os.environ)
-    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-                "ALL_PROXY", "all_proxy"):
-        env.pop(key, None)
-    env["NO_PROXY"] = env["no_proxy"] = "*"
-    return env
-
-
-def _say(handle: Any, text: str) -> None:
-    """Строка для человека: в карточку задачи, а оттуда и в общий журнал."""
-    if handle is not None and hasattr(handle, "log"):
-        handle.log(text)
-    else:
-        log.info("%s", text)
-
-
-def _progress(handle: Any, value: float, note: str = "") -> None:
-    if handle is not None and hasattr(handle, "progress"):
-        try:
-            handle.progress(value, note)
-        except Exception:
-            log.debug("не удалось показать прогресс", exc_info=True)
-
-
-def _stop_if_cancelled(handle: Any) -> None:
-    if handle is not None and getattr(handle, "cancelled", False):
-        raise RuntimeError("отменено")
-
-
 def _is_cancel(err: Exception) -> bool:
-    return isinstance(err, RuntimeError) and "отменено" in str(err)
+    return isinstance(err, jobs.Cancelled)
 
 
 def _bare_url(raw: str) -> str:
     """Адрес без параметров запроса — только сайт и путь.
 
-    Для журнала этого достаточно, а `_clean_url` здесь недостаточно строг: он
+    Для журнала этого достаточно, а `clean_url` здесь недостаточно строг: он
     режет известные секретные параметры, но подпись доступа к потоку у каждой
     площадки называется по-своему. В сообщениях об ошибках выкидываем запрос
     целиком и не гадаем.
@@ -179,13 +140,6 @@ def _safe_text(text: Any, *secrets: str) -> str:
     return _URL_IN_TEXT.sub(lambda m: _bare_url(m.group(0)), out)
 
 
-def _safe_name(text: str, maxlen: int = 60) -> str:
-    """Заголовок страницы -> имя файла, пригодное для Windows."""
-    name = _BAD_NAME.sub("_", str(text or ""))
-    name = re.sub(r"[\s_]+", " ", name).strip(" ._")
-    return name[:maxlen].strip(" ._") or "Видео с сайта"
-
-
 def _free_path(folder: Path, base: str) -> Path:
     """Свободное имя файла в папке.
 
@@ -198,11 +152,6 @@ def _free_path(folder: Path, base: str) -> Path:
         path = folder / ("%s (%d).mp4" % (base, number))
         number += 1
     return path
-
-
-def _hms(seconds: float) -> str:
-    total = max(0, int(seconds))
-    return "%d:%02d:%02d" % (total // 3600, (total % 3600) // 60, total % 60)
 
 
 # ------------------------------------------------------------- готовность
@@ -268,7 +217,7 @@ def _new_browser_page(pw):
     """
     try:
         browser = pw.chromium.launch(headless=False, args=["--no-proxy-server"],
-                                     env=_direct_env())
+                                     env=audio_io.direct_env())
     except Exception as err:
         if "executable doesn" in str(err).lower():
             raise RuntimeError(CHROMIUM_MISSING) from err
@@ -348,34 +297,34 @@ def _capture_on_page(page, url: str, login: str, password: str,
 
     page.on("request", on_request)
     try:
-        _say(handle, "Открываю страницу…")
+        handle.log("Открываю страницу…")
         opened = False
         for attempt in range(GOTO_TRIES):
-            _stop_if_cancelled(handle)
+            handle.check()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
                 opened = True
                 break
             except Exception as err:
-                _say(handle, "  попытка %d не удалась: %s"
+                handle.log("  попытка %d не удалась: %s"
                      % (attempt + 1, _safe_text(err)[:90]))
                 page.wait_for_timeout(2500)
         if not opened:
             raise RuntimeError("страница не открылась — проверьте ссылку и то, "
                                "открывается ли она в обычном браузере")
 
-        _say(handle, "Ввожу логин и пароль…")
+        handle.log("Ввожу логин и пароль…")
         for _ in range(LOGIN_WAIT_S):
-            _stop_if_cancelled(handle)
+            handle.check()
             if _fill_login_form(page, login, password):
                 break
             page.wait_for_timeout(1000)   # форма и плеер догружаются не сразу
 
-        _say(handle, "Жду, пока запустится плеер…")
+        handle.log("Жду, пока запустится плеер…")
         for _ in range(STREAM_WAIT_S):
             if captured:
                 break
-            _stop_if_cancelled(handle)
+            handle.check()
             page.wait_for_timeout(1000)
 
         title = ""
@@ -457,7 +406,7 @@ def _download_stream(stream: str, cookie_str: str, referer: str, dst: Path,
     proc = subprocess.Popen(
         args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-        env=_direct_env(), creationflags=platform.system().hidden_process_flags(),
+        env=audio_io.direct_env(), creationflags=platform.system().hidden_process_flags(),
     )
 
     tail: deque[str] = deque(maxlen=12)
@@ -489,20 +438,20 @@ def _download_stream(stream: str, cookie_str: str, referer: str, dst: Path,
     # поэтому процент не выдумываем: показываем, сколько уже скачано по времени.
     last_note = 0.0
     while proc.poll() is None:
-        if handle is not None and getattr(handle, "cancelled", False):
+        if handle.cancelled:
             _kill(proc)
             try:
                 # недокачанный кусок никому не нужен, а весить может гигабайты
                 dst.unlink(missing_ok=True)
             except OSError:
                 pass
-            raise RuntimeError("отменено")
+            raise jobs.Cancelled("отменено")
         now = time.time()
         if now - last_note > 10:
             last_note = now
             got = done_seconds[0]
-            _progress(handle, base,
-                      "скачиваю запись, готово %s" % _hms(got) if got else "скачиваю запись…")
+            handle.progress(base,
+                      "скачиваю запись, готово %s" % hms(got) if got else "скачиваю запись…")
         time.sleep(0.4)
     reader.join(timeout=3)
 
@@ -547,6 +496,7 @@ def capture(urls: list[str], login: str, password: str, dst_dir: Path,
     handle (если передан) получает ход работы и умеет отменять: между кусками
     работы проверяется handle.cancelled, скачивание при отмене прерывается.
     """
+    handle = jobs.as_handle(handle)
     ready, why = available()
     if not ready:
         raise RuntimeError(why)
@@ -573,28 +523,28 @@ def capture(urls: list[str], login: str, password: str, dst_dir: Path,
     grabbed: list[tuple[str, str, str, str]] = []   # ссылка, поток, cookies, заголовок
     failed: list[tuple[str, str]] = []
 
-    _say(handle, "Открываю браузер, ссылок в работе — %d" % len(links))
-    _say(handle, "Окно Chromium откроется на экране — это нормально, закрывать "
+    handle.log("Открываю браузер, ссылок в работе — %d" % len(links))
+    handle.log("Окно Chromium откроется на экране — это нормально, закрывать "
                  "его не нужно.")
     with sync_playwright() as pw:
         browser, page = _new_browser_page(pw)
         try:
             for number, link in enumerate(links, start=1):
-                _stop_if_cancelled(handle)
-                _progress(handle, CAPTURE_SHARE * (number - 1) / len(links),
+                handle.check()
+                handle.progress(CAPTURE_SHARE * (number - 1) / len(links),
                           "вход на сайт: %d из %d" % (number, len(links)))
-                _say(handle, "Ссылка %d из %d: %s"
-                     % (number, len(links), _clean_url(link) or "<ссылка>"))
+                handle.log("Ссылка %d из %d: %s"
+                     % (number, len(links), clean_url(link) or "<ссылка>"))
                 try:
                     grabbed.append((link, *_capture_on_page(page, link, login,
                                                             password, handle)))
-                    _say(handle, "  поток найден: %s" % (grabbed[-1][3] or "без названия"))
+                    handle.log("  поток найден: %s" % (grabbed[-1][3] or "без названия"))
                 except Exception as err:
                     if _is_cancel(err):
                         raise
                     reason = _safe_text(err)[:200]
                     failed.append((link, reason))
-                    _say(handle, "  не получилось: %s" % reason[:120])
+                    handle.log("  не получилось: %s" % reason[:120])
         finally:
             # Окно закрываем сразу, как только всё перехвачено: дальше работает
             # ffmpeg, и браузер только мешается на экране и ест память.
@@ -605,12 +555,12 @@ def capture(urls: list[str], login: str, password: str, dst_dir: Path,
 
     results: list[dict[str, Any]] = []
     for number, (link, stream, cookie_str, title) in enumerate(grabbed, start=1):
-        _stop_if_cancelled(handle)
+        handle.check()
         share = CAPTURE_SHARE + (1.0 - CAPTURE_SHARE) * (number - 1) / len(grabbed)
-        name = _safe_name(title)
+        name = safe_name(title, limit=60)
         video = _free_path(dst_dir, name)
-        _progress(handle, share, "скачиваю запись %d из %d" % (number, len(grabbed)))
-        _say(handle, "Скачиваю запись %d из %d: %s" % (number, len(grabbed), name))
+        handle.progress(share, "скачиваю запись %d из %d" % (number, len(grabbed)))
+        handle.log("Скачиваю запись %d из %d: %s" % (number, len(grabbed), name))
         try:
             _download_stream(stream, cookie_str, link, video, handle, share)
         except Exception as err:
@@ -618,14 +568,14 @@ def capture(urls: list[str], login: str, password: str, dst_dir: Path,
                 raise
             reason = _safe_text(err)[:300]
             failed.append((link, reason))
-            _say(handle, "  не скачалось: %s" % reason[:150])
+            handle.log("  не скачалось: %s" % reason[:150])
             continue
 
         results.append({
             "media": str(video),
             "transcript": "",          # такие площадки субтитров не отдают
             "title": title or name,
-            "url": _clean_url(link),
+            "url": clean_url(link),
             "source_name": SOURCE_NAME,
             # Длительность берём у скачанного файла: у потока её заранее не
             # спросить, а тут она достоверна и ничего не стоит.
@@ -635,14 +585,14 @@ def capture(urls: list[str], login: str, password: str, dst_dir: Path,
             "extra": {"stream_host": urlsplit(stream).netloc,
                       "size_mb": round(video.stat().st_size / 1_000_000.0, 1)},
         })
-        _say(handle, "  готово: %s" % video.name)
+        handle.log("  готово: %s" % video.name)
 
     if failed:
-        _say(handle, "Не получилось скачать: %s"
-             % "; ".join(_clean_url(one) or "<ссылка>" for one, _ in failed))
+        handle.log("Не получилось скачать: %s"
+             % "; ".join(clean_url(one) or "<ссылка>" for one, _ in failed))
     if not results:
         raise RuntimeError("Ни одну запись скачать не удалось. %s"
                            % (failed[0][1] if failed else ""))
 
-    _progress(handle, 1.0, "готово, записей — %d" % len(results))
+    handle.progress(1.0, "готово, записей — %d" % len(results))
     return results

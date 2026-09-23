@@ -639,6 +639,13 @@ select.w-m{width:auto;min-width:220px;field-sizing:content}
 .prompt-text{width:100%;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.45;margin:8px 0}
 /* Окно поверх окна настроек: закрывается само, настройки остаются. */
 .dialog.nested{z-index:65}
+/* Окно «Сеть для CLI»: вводная и мини-руководство — абзацами, порты — списком. */
+.net-lead,.net-manual{line-height:1.4;margin-bottom:14px}
+.net-manual{border-top:1px solid var(--line-soft);padding-top:10px;margin-top:4px}
+.net-modes{margin-bottom:14px}
+.net-ports{display:flex;flex-direction:column;gap:3px;margin-bottom:6px;color:var(--muted)}
+.net-port.on{color:var(--text)}
+.net-probe-row{margin-top:10px}
 /* Отметка «сохранено» у поля: без неё непонятно, приняли ли правку. */
 .saved-mark{color:var(--ok-ink);opacity:0;transition:opacity .2s;margin-left:8px}
 .saved-mark.on{opacity:1}

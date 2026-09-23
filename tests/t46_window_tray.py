@@ -22,44 +22,24 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 
-LINES = []
-FAIL = []
 TITLE = "Hagen — проверка 46"
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 import webview  # noqa: E402
 import win32con  # noqa: E402
 import win32gui  # noqa: E402
 
+from hagen.platform.base import ShellHooks  # noqa: E402
 from hagen.platform.windows import tray  # noqa: E402
 
 
-class FakeServer:
-    _calls = None
-
-    def _call_active_recording(self):
-        return None
+HOOKS = ShellHooks(active_recording=lambda: None, start_recording=lambda: "",
+                   stop_recording=lambda rec_id: None,
+                   add_prompt_listener=lambda fn: None, answer_prompt=lambda pid, btn: None)
 
 
 def find_hwnd():
@@ -82,7 +62,7 @@ def wait_for(pred, limit=10.0):
     return False
 
 
-shell = tray.AppShell(None, FakeServer(), notifier=None)
+shell = tray.AppShell(None, HOOKS, notifier=None)
 check("значок поднялся", shell.start())
 window = webview.create_window(TITLE, html="<h1>Проверка 46</h1>", width=500, height=300,
                                hidden=True)
@@ -124,9 +104,4 @@ webview.start(scenario, gui="edgechromium", private_mode=True)
 shell.stop()
 check("значок убран после выхода", not shell.tray.running)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t46_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t46"))

@@ -40,6 +40,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ... import config
+from .win32window import MessageWindow, bgr, kill_timer, set_timer, work_area
 
 log = logging.getLogger("hagen.input")
 
@@ -165,7 +166,7 @@ def format_hotkey(mods: int, vk: int) -> str:
     return " + ".join(names)
 
 
-class HotkeyListener:
+class HotkeyListener(MessageWindow):
     """Слушает одно сочетание клавиш. Своё окно, свой цикл сообщений.
 
     on_press зовётся при нажатии, on_release — когда обычную клавишу отпустили
@@ -175,90 +176,39 @@ class HotkeyListener:
     """
 
     POLL_S = 0.04
+    CLASS_NAME = "HagenHotkey"
+    TITLE = "Hagen — диктовка"
+    THREAD_NAME = "dictate-hotkey"
 
     def __init__(self, hotkey: Hotkey, on_press: Callable[[], Any],
                  on_release: Callable[[float], Any] | None = None) -> None:
+        super().__init__()
         self.hotkey = hotkey
         self.on_press = on_press
         self.on_release = on_release
-        self.hwnd: int | None = None
-        self.error: str | None = None
-        self._thread: threading.Thread | None = None
-        self._ready = threading.Event()
+        self.FAIL_TEXT = "не удалось занять сочетание %s" % hotkey.text
         self._stopping = False
 
-    # -------- жизненный цикл
-    def start(self, timeout: float = 5.0) -> bool:
-        self._thread = threading.Thread(target=self._run, name="dictate-hotkey",
-                                        daemon=True)
-        self._thread.start()
-        self._ready.wait(timeout)
-        return bool(self.hwnd)
-
-    def stop(self) -> None:
-        import win32con
-        import win32gui
-
+    def stop(self, timeout: float = 5.0) -> None:
         self._stopping = True
-        if self.hwnd:
-            try:
-                win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
-            except Exception:
-                pass
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        super().stop(timeout)
 
-    @property
-    def running(self) -> bool:
-        return bool(self.hwnd) and self._thread is not None and self._thread.is_alive()
+    def _handlers(self) -> dict[int, Callable[..., int]]:
+        return {WM_HOTKEY: self._on_hotkey}
 
-    def _run(self) -> None:
-        import win32api
-        import win32con
+    def _created(self, hwnd: int) -> None:
         import win32gui
 
-        try:
-            hinst = win32api.GetModuleHandle(None)
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = hinst
-            wc.lpszClassName = "HagenHotkey"
-            wc.lpfnWndProc = {
-                win32con.WM_DESTROY: self._on_destroy,
-                WM_HOTKEY: self._on_hotkey,
-            }
-            try:
-                win32gui.RegisterClass(wc)
-            except win32gui.error:
-                pass                      # класс уже зарегистрирован этим процессом
-            hwnd = win32gui.CreateWindow(wc.lpszClassName, "Hagen — диктовка",
-                                         win32con.WS_OVERLAPPED, 0, 0, 0, 0,
-                                         0, 0, hinst, None)
-            # RegisterHotKey в pywin32 ничего не возвращает: успех — это
-            # отсутствие исключения. Проверять её ответ бесполезно, любая
-            # проверка считала бы удачу неудачей.
-            win32gui.RegisterHotKey(hwnd, 1, self.hotkey.mods | MOD_NOREPEAT,
-                                    self.hotkey.vk)
-            self.hwnd = hwnd
-            log.info("диктовка слушает %s", self.hotkey.text)
-        except Exception as err:
-            self.error = str(err)
-            log.warning("не удалось занять сочетание %s: %s", self.hotkey.text, err)
-            self.hwnd = None
-            self._ready.set()
-            return
-        self._ready.set()
-        win32gui.PumpMessages()
+        # RegisterHotKey в pywin32 ничего не возвращает: успех — это
+        # отсутствие исключения. Проверять её ответ бесполезно, любая
+        # проверка считала бы удачу неудачей.
+        win32gui.RegisterHotKey(hwnd, 1, self.hotkey.mods | MOD_NOREPEAT, self.hotkey.vk)
+        log.info("диктовка слушает %s", self.hotkey.text)
 
-    def _on_destroy(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+    def _destroying(self, hwnd: int) -> None:
         import win32gui
 
-        try:
-            win32gui.UnregisterHotKey(hwnd, 1)
-        except Exception:
-            pass
-        self.hwnd = None
-        win32gui.PostQuitMessage(0)
-        return 0
+        win32gui.UnregisterHotKey(hwnd, 1)
 
     def _on_hotkey(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
         started = time.time()
@@ -687,32 +637,7 @@ CAP_BOTTOM_GAP = 64          # на сколько поднять над низ�
 CAP_ALPHA = 238
 
 
-def _bgr(rgb: tuple[int, int, int]) -> int:
-    """Windows хранит цвет задом наперёд: 0x00BBGGRR."""
-    r, g, b = rgb
-    return (int(b) << 16) | (int(g) << 8) | int(r)
-
-
-#: SetTimer/KillTimer в pywin32 не завёрнуты (win32gui их не знает), поэтому
-#: зовём Windows напрямую. Без таймера точка не мигала бы, а при первом показе
-#: окно вовсе осталось бы ненарисованным: исключение обрывало обработчик до
-#: InvalidateRect, и на экране висел мусор из видеопамяти.
-def _set_timer(hwnd: int, ms: int, timer_id: int = 1) -> None:
-    import ctypes
-
-    ctypes.windll.user32.SetTimer(ctypes.c_void_p(hwnd), timer_id, int(ms), None)
-
-
-def _kill_timer(hwnd: int, timer_id: int = 1) -> None:
-    import ctypes
-
-    try:
-        ctypes.windll.user32.KillTimer(ctypes.c_void_p(hwnd), timer_id)
-    except Exception:
-        log.debug("таймер капсулы не снялся", exc_info=True)
-
-
-class Capsule:
+class Capsule(MessageWindow):
     """Капсула поверх всех окон: видно, что программа слушает.
 
     Почему отдельное окно Windows, а не плашка в окне программы. Диктуют в
@@ -726,28 +651,30 @@ class Capsule:
       WS_EX_TOOLWINDOW — нет кнопки на панели задач и в Alt+Tab;
       WS_EX_TOPMOST — поверх чужих окон, ради чего всё и затевалось.
 
-    Своё окно живёт в своём потоке со своим циклом сообщений — тот же приём,
-    что у значка в трее (tray.py) и у горячей клавиши выше.
+    Своё окно живёт в своём потоке со своим циклом сообщений — общее
+    основание `MessageWindow`, то же, что у значка в трее и у кружка.
     """
 
     WM_SHOW = 0x0400 + 31        # WM_USER + 31
     WM_HIDE = 0x0400 + 32
     BLINK_MS = 600
+    CLASS_NAME = "HagenCapsule"
+    THREAD_NAME = "dictate-capsule"
+    FAIL_TEXT = "капсула диктовки не создалась"
+    STYLE = 0x80000000            # WS_POPUP
+    EX_STYLE = 0x00000008 | 0x00000080 | 0x08000000 | 0x00080000   # TOPMOST|TOOLWINDOW|NOACTIVATE|LAYERED
+    SIZE = (10, CAP_HEIGHT)
+    BACKGROUND = 0
 
     def __init__(self) -> None:
-        self.hwnd: int | None = None
-        self.error: str | None = None
+        super().__init__()
         self._text = ""
         self._kind = "listening"
         self._bright = True
         self._font: int = 0
         self._font_obj: Any = None
         self._lock = threading.Lock()
-        self._ready = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="dictate-capsule",
-                                        daemon=True)
-        self._thread.start()
-        self._ready.wait(5.0)
+        self.start(5.0)
 
     # -------- наружу (можно звать из любого потока)
     def show(self, text: str, kind: str = "listening") -> None:
@@ -755,66 +682,31 @@ class Capsule:
             return
         with self._lock:
             self._text, self._kind = str(text or ""), str(kind or "listening")
-        self._post(self.WM_SHOW)
+        self.post(self.WM_SHOW)
 
     def hide(self) -> None:
-        if not self.hwnd:
-            return
-        self._post(self.WM_HIDE)
+        self.post(self.WM_HIDE)
 
-    def stop(self) -> None:
-        import win32con
-
-        self._post(win32con.WM_CLOSE)
-        self._thread.join(timeout=3)
-
-    def _post(self, msg: int) -> None:
-        import win32gui
-
-        try:
-            win32gui.PostMessage(self.hwnd, msg, 0, 0)
-        except Exception:
-            log.debug("капсула не откликнулась на сообщение %s", msg, exc_info=True)
+    def stop(self, timeout: float = 3.0) -> None:
+        super().stop(timeout)
 
     # -------- своё окно
-    def _run(self) -> None:
-        import win32api
+    def _handlers(self) -> dict[int, Callable[..., int]]:
+        import win32con
+
+        return {
+            win32con.WM_PAINT: self._on_paint,
+            win32con.WM_TIMER: self._on_timer,
+            self.WM_SHOW: self._on_show,
+            self.WM_HIDE: self._on_hide,
+        }
+
+    def _created(self, hwnd: int) -> None:
         import win32con
         import win32gui
 
-        try:
-            hinst = win32api.GetModuleHandle(None)
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = hinst
-            wc.lpszClassName = "HagenCapsule"
-            wc.hbrBackground = 0
-            wc.lpfnWndProc = {
-                win32con.WM_PAINT: self._on_paint,
-                win32con.WM_TIMER: self._on_timer,
-                win32con.WM_DESTROY: self._on_destroy,
-                self.WM_SHOW: self._on_show,
-                self.WM_HIDE: self._on_hide,
-            }
-            try:
-                win32gui.RegisterClass(wc)
-            except win32gui.error:
-                pass                      # класс уже зарегистрирован этим процессом
-            ex = (win32con.WS_EX_TOPMOST | win32con.WS_EX_TOOLWINDOW
-                  | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_LAYERED)
-            self.hwnd = win32gui.CreateWindowEx(
-                ex, wc.lpszClassName, "Hagen", win32con.WS_POPUP,
-                0, 0, 10, CAP_HEIGHT, 0, 0, hinst, None)
-            win32gui.SetLayeredWindowAttributes(self.hwnd, 0, CAP_ALPHA,
-                                                win32con.LWA_ALPHA)
-            self._font = self._make_font()
-        except Exception as err:
-            self.error = str(err)
-            log.warning("капсула диктовки не создалась: %s", err)
-            self.hwnd = None
-            self._ready.set()
-            return
-        self._ready.set()
-        win32gui.PumpMessages()
+        win32gui.SetLayeredWindowAttributes(hwnd, 0, CAP_ALPHA, win32con.LWA_ALPHA)
+        self._font = self._make_font()
 
     def _make_font(self) -> int:
         """Шрифт надписи. Держим и сам объект, и его номер.
@@ -843,7 +735,7 @@ class Capsule:
         rgn = win32gui.CreateRoundRectRgn(0, 0, w + 1, h + 1, h, h)
         win32gui.SetWindowRgn(hwnd, rgn, True)
         self._bright = True
-        _set_timer(hwnd, self.BLINK_MS)
+        set_timer(hwnd, self.BLINK_MS)
         win32gui.InvalidateRect(hwnd, None, True)
         return 0
 
@@ -851,7 +743,7 @@ class Capsule:
         import win32con
         import win32gui
 
-        _kill_timer(hwnd)
+        kill_timer(hwnd)
         win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
         return 0
 
@@ -860,13 +752,6 @@ class Capsule:
 
         self._bright = not self._bright
         win32gui.InvalidateRect(hwnd, None, False)
-        return 0
-
-    def _on_destroy(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        import win32gui
-
-        self.hwnd = None
-        win32gui.PostQuitMessage(0)
         return 0
 
     # -------- размер, место, рисование
@@ -890,17 +775,7 @@ class Capsule:
     @staticmethod
     def _place(w: int, h: int) -> tuple[int, int]:
         """Внизу по центру рабочей области — над панелью задач, а не под ней."""
-        import win32api
-        import win32con
-
-        try:
-            info = win32api.GetMonitorInfo(
-                win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY))
-            left, top, right, bottom = info["Work"]
-        except Exception:
-            left, top = 0, 0
-            right = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-            bottom = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        left, _top, right, bottom = work_area()
         return left + (right - left - w) // 2, bottom - h - CAP_BOTTOM_GAP
 
     def _on_paint(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
@@ -912,7 +787,7 @@ class Capsule:
             left, top, right, bottom = win32gui.GetClientRect(hwnd)
             with self._lock:
                 text, kind = self._text, self._kind
-            fill = win32gui.CreateSolidBrush(_bgr(_CAP_BG))
+            fill = win32gui.CreateSolidBrush(bgr(_CAP_BG))
             win32gui.FillRect(hdc, (left, top, right, bottom), fill)
             win32gui.DeleteObject(fill)
             # Точка слева: в «слушаю» мигает, чтобы капсулу заметили боковым зрением.
@@ -920,8 +795,8 @@ class Capsule:
             if kind == "listening" and not self._bright:
                 dot = tuple(int(c * 0.35 + _CAP_BG[i] * 0.65) for i, c in enumerate(dot))
             cy = (bottom - top) // 2
-            brush = win32gui.CreateSolidBrush(_bgr(dot))
-            pen = win32gui.CreatePen(win32con.PS_SOLID, 1, _bgr(dot))
+            brush = win32gui.CreateSolidBrush(bgr(dot))
+            pen = win32gui.CreatePen(win32con.PS_SOLID, 1, bgr(dot))
             old_b = win32gui.SelectObject(hdc, brush)
             old_p = win32gui.SelectObject(hdc, pen)
             win32gui.Ellipse(hdc, 22, cy - 5, 32, cy + 5)
@@ -931,7 +806,7 @@ class Capsule:
             win32gui.DeleteObject(pen)
             old_f = win32gui.SelectObject(hdc, self._font)
             win32gui.SetBkMode(hdc, win32con.TRANSPARENT)
-            win32gui.SetTextColor(hdc, _bgr(_CAP_TEXT))
+            win32gui.SetTextColor(hdc, bgr(_CAP_TEXT))
             win32gui.DrawText(hdc, text, -1, (43, top, right - 18, bottom),
                               win32con.DT_SINGLELINE | win32con.DT_VCENTER
                               | win32con.DT_LEFT | win32con.DT_END_ELLIPSIS)

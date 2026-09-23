@@ -25,32 +25,11 @@ import numpy as np
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, expect as check  # noqa: E402
 
 isolate.voices()
 
-LINES = []
-FAIL = []
 SECONDS = 30
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, got, want):
-    ok = got == want
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + ": " + repr(got)
-        + ("" if ok else "  (ждали " + repr(want) + ")"))
 
 
 from fastapi.testclient import TestClient  # noqa: E402

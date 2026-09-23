@@ -42,7 +42,7 @@ isolate.voices()
 isolate.settings()
 
 from hagen import config, minutes, obsidian, store  # noqa: E402
-from hagen.api import deps  # noqa: E402
+from hagen import dictation  # noqa: E402
 
 FAIL = []
 
@@ -87,9 +87,9 @@ from hagen import dictate  # noqa: E402
 
 pasted = []
 d = dictate.Dictation(paste=lambda text: (pasted.append(text) or True),
-                      on_note=deps.take_voice_note)
+                      on_note=dictation.take_voice_note)
 
-deps.set_open_recording(rec_id)
+dictation.set_open_recording(rec_id)
 ok("заметка ушла в открытую запись",
    d._deliver("Проверить сроки поставки", "note") is True and not pasted)
 after = store.rec_notes(store.get(rec_id))
@@ -102,7 +102,7 @@ ok("поручение помечено родом", after[-1]["kind"] == "task"
 ok("поручение в Todoist само не ушло", after[-1].get("sent") is False, str(after[-1]))
 
 print("\n=== 3. Записи на экране нет ===")
-deps.set_open_recording("")
+dictation.set_open_recording("")
 pasted.clear()
 ok("текст вставился, как обычная диктовка",
    d._deliver("просто текст", "note") is True and pasted == ["просто текст"], str(pasted))
@@ -112,12 +112,12 @@ ok("обычная диктовка работает по-прежнему",
 
 print("\n=== 4. Запись удалили, пока говорили ===")
 gone = store.create(title="Исчезнет", source="live")["id"]
-deps.set_open_recording(gone)
+dictation.set_open_recording(gone)
 store.delete(gone)
 pasted.clear()
 ok("текст не пропал, а вставился",
    d._deliver("не пропади", "note") is True and pasted == ["не пропади"], str(pasted))
-ok("сломанная связь забыта", deps.open_recording() == "", deps.open_recording())
+ok("сломанная связь забыта", dictation.open_recording() == "", dictation.open_recording())
 
 print("\n=== 5. Назначение диктовки ===")
 ok("по умолчанию — чужое окно", d.target == "window", d.target)
@@ -219,10 +219,10 @@ ORIGIN = {"Origin": "http://127.0.0.1:8787"}
 with TestClient(app, base_url="http://127.0.0.1:8787") as client:
     r = client.post("/api/dictate/open-recording", json={"rec_id": rec_id}, headers=ORIGIN)
     ok("открытая запись принята",
-       r.status_code == 200 and deps.open_recording() == rec_id, r.text[:120])
+       r.status_code == 200 and dictation.open_recording() == rec_id, r.text[:120])
     r2 = client.post("/api/dictate/open-recording", json={"rec_id": ""}, headers=ORIGIN)
     ok("пустое значение снимает связь",
-       r2.status_code == 200 and deps.open_recording() == "", r2.text[:120])
+       r2.status_code == 200 and dictation.open_recording() == "", r2.text[:120])
 
     r3 = client.patch("/api/recordings/%s" % rec_id,
                       json={"notes": [{"text": "  правка руками  ", "kind": "task"},

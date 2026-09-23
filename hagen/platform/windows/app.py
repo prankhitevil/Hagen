@@ -30,6 +30,16 @@ def hidden_process_flags() -> int:
     return NO_WINDOW
 
 
+def process_alive(pid: int, unknown: bool = True) -> bool:
+    """Жив ли процесс. Спросить не вышло — отвечаем `unknown`."""
+    try:
+        import psutil
+
+        return bool(psutil.pid_exists(int(pid)))
+    except Exception:
+        return bool(unknown)
+
+
 #: Классы приоритета Windows для уровней розетки.
 _PRIORITY_CLASSES = {"normal": 0x0020, "low": 0x4000, "lowest": 0x0040}
 _PROCESS_SET_INFORMATION = 0x0200

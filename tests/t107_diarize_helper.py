@@ -34,36 +34,16 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 TMP = Path(tempfile.mkdtemp(prefix="t107_"))
 isolate.settings(vault_path=str(TMP / "vault"))
 
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
-
 
 import psutil  # noqa: E402
 
-from hagen import audio_io, config, diarize, diarize_worker, jobs, platform, store  # noqa: E402
+from hagen import audio_io, config, diarize, diarize_worker, jobs, platform, recordings, store  # noqa: E402
 from hagen.platform import fake  # noqa: E402
 
 WAV = PROJECT / "tests" / "meeting.wav"
@@ -254,7 +234,7 @@ try:
 
     say("")
     say("=== 6. Сквозь очередь ===")
-    from hagen.api import speakers as speakers_api  # noqa: E402
+    from hagen import diarize_jobs  # noqa: E402
 
     meta = store.create(title="Проверка 107", mode="online", source="live", category="Встречи")
     rid = meta["id"]
@@ -265,7 +245,7 @@ try:
                            "tracks": [store.TRACK_FAR]})
         check("по умолчанию — помощник", config.get("processing_during_recording") == "background"
               and diarize.runs_in_helper(), config.get("processing_during_recording"))
-        jid = speakers_api.queue_diarize(rid)
+        jid = diarize_jobs.queue_diarize(rid)
         check("задача разметки ставится в помощника", state(jid).get("where") == "helper", state(jid).get("where"))
         end = time.time() + 240
         while time.time() < end and state(jid).get("status") in ("queued", "running"):
@@ -282,11 +262,11 @@ try:
     check("по умолчанию — помощник", config.DEFAULTS.get("processing_during_recording") == "background")
     from hagen import server  # noqa: E402
 
-    real_active, real_get = server.sessions.active_session, config.get
+    real_active, real_get = recordings.sessions.active_session, config.get
     choice = {"v": "background"}
     config.get = lambda k, d=None: choice["v"] if k == "processing_during_recording" else real_get(k, d)
     try:
-        server.sessions.active_session = lambda: object()
+        recordings.sessions.active_session = lambda: object()
         check("помощник: остальное во время записи уступает, помощник — в режим эффективности",
               server._live_yield_reason() == "идёт запись", server._live_yield_reason())
         choice["v"] = "run"
@@ -294,7 +274,7 @@ try:
         choice["v"] = "pause"
         check("«пауза» — помощника нет", not diarize.runs_in_helper())
     finally:
-        server.sessions.active_session = real_active
+        recordings.sessions.active_session = real_active
         config.get = real_get
     html = io.open(PROJECT / "hagen" / "static" / "index.html", encoding="utf-8").read()
     js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
@@ -305,9 +285,4 @@ try:
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t107_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t107"))

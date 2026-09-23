@@ -832,7 +832,11 @@
                 <option value="haiku">Haiku — быстро и дёшево</option>
                 <option value="sonnet">Sonnet — середина</option>
                 <option value="opus">Opus — точнее всего</option>
-              </select></div>
+              </select>
+              <!-- Сеть для CLI (23.09): куда уходит запрос и защита от запуска
+                   с адреса, с которого Anthropic отказывает. Подробности — в окне. -->
+              <button id="btn-cli-network" class="ghost small" type="button" title="Каким путём Claude CLI выходит в сеть и что делать, если VPN выключен">Сеть для CLI…</button>
+              <span id="cli-network-state" class="sstate"></span></div>
           </div>
           <div class="srow">
             <div class="slabel">Сколько ждать ответа</div>
@@ -1490,6 +1494,63 @@
     <span class="fb-spacer"></span>
     <button id="btn-prompt-save" class="primary" type="button">Сохранить</button>
     <button class="ghost js-prompt-cancel" type="button">Отмена</button>
+  </div>
+</div>
+
+<!-- Сеть для Claude CLI (23.09). Серверы Anthropic отказывают части стран, а
+     запрос с «не того» адреса всё равно уносит токен аккаунта и стенограмму.
+     Окно показывает, каким путём пойдёт CLI, и даёт проверить это без токена. -->
+<div id="dlg-cli-network" class="dialog nested hidden">
+  <div class="dlg-head"><b>Сеть для Claude CLI</b><button class="icon-btn dlg-close" aria-label="Закрыть" title="Закрыть"><svg aria-hidden="true"><use href="/static/icons.svg#ic-x"></use></svg></button></div>
+  <div class="dlg-body">
+    <div class="tiny muted net-lead">Claude CLI ходит к серверам Anthropic, а те отказывают запросам из
+      части стран. Запрос с «не того» адреса всё равно уносит токен вашего аккаунта и текст
+      стенограммы. Поэтому перед каждым запуском программа решает, каким путём пойдёт CLI, и без
+      уверенности не запускает его.</div>
+
+    <div class="field field-lead">Как выпускать CLI в сеть</div>
+    <div id="net-modes" class="tpl-list net-modes">
+      <div class="tpl" data-mode="port" title="Надёжнее всего: без порта — ни одного пакета наружу">
+        <b>Только через локальный порт VPN-клиента</b>
+        <span class="tiny muted">CLI идёт через порт Hiddify, Happ, v2rayN или Nekoray на этом компьютере.
+          Порт не слушает — VPN выключен — CLI не запускается, наружу ничего не уходит.</span></div>
+      <div class="tpl" data-mode="probe" title="Для туннеля без локального порта">
+        <b>Как есть, но сначала спросить Anthropic</b>
+        <span class="tiny muted">Перед каждым запуском — короткий запрос без токена: пускают ли с нынешнего
+          адреса. Отказ — CLI не запускается. Годится для VPN-туннеля без локального порта.</span></div>
+      <div class="tpl" data-mode="off" title="Так было до 23.09">
+        <b>Без защиты</b>
+        <span class="tiny muted">CLI запускается всегда. Если VPN выключен, запрос уйдёт с вашего настоящего
+          адреса вместе с токеном и стенограммой.</span></div>
+    </div>
+
+    <label class="field" id="net-proxy-field">Порт VPN-клиента
+      <input id="set-cli-proxy" type="text" autocomplete="off" placeholder="auto">
+      <span class="tiny">«auto» — первый слушающий из известных портов, они перечислены ниже. Или свой
+        адрес вида 127.0.0.1:12334 (у Hiddify это «Смешанный порт», у Happ — «Порт HTTP прокси»).
+        Порт должен принимать HTTP: CLI не умеет SOCKS.</span>
+    </label>
+
+    <div class="field field-lead">Известные порты сейчас</div>
+    <div id="net-ports" class="net-ports tiny"></div>
+    <div id="net-route" class="tiny"></div>
+
+    <div class="btn-row net-probe-row">
+      <button id="btn-net-probe" class="ghost small" type="button" title="Два коротких запроса без токена тем путём, каким пойдёт CLI: к Cloudflare — за адресом и страной, к Anthropic — пускает ли">Проверить выход в сеть</button>
+      <span id="net-probe-state" class="tiny muted"></span>
+    </div>
+
+    <div class="tiny muted net-manual">
+      <b>Как это работает.</b> «Проверить выход в сеть» показывает, с какого адреса и из какой страны
+      уходят запросы, и пускает ли с него Anthropic. Токен в проверке не участвует: на той стороне виден
+      только адрес. Кнопка «Проверить» в настройках делает настоящий запрос к модели и подчиняется тем же
+      правилам. Если VPN включён, а порт «не слушает», проверьте в клиенте номер порта и что он не «только
+      для выбранных приложений». Автообновление и телеметрию CLI программа отключает всегда: единственный
+      его выход в сеть — сам запрос к модели.
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="ghost dlg-close" type="button">Закрыть</button>
   </div>
 </div>
 

@@ -186,13 +186,12 @@ def _webview_storage() -> str:
             continue
         if int(old.name) == os.getpid():
             continue
-        try:
-            import psutil
+        from hagen import platform
 
-            if psutil.pid_exists(int(old.name)):
-                continue
-        except Exception:
-            pass
+        # Спросить не вышло — считаем процесс ушедшим и папку убираем: иначе
+        # остатки прежних запусков копились бы по одному на запуск.
+        if platform.system().process_alive(int(old.name), unknown=False):
+            continue
         try:
             import shutil as _sh
 
@@ -261,7 +260,8 @@ def run_as_app(port: int, log, own_service: bool = True, start_hidden: bool = Fa
 
     from hagen import config as cfg
     from hagen import server as srv
-    from hagen.server import app, sessions
+    from hagen import recordings
+    from hagen.server import app
 
     server = None
     thread = None
@@ -294,8 +294,9 @@ def run_as_app(port: int, log, own_service: bool = True, start_hidden: bool = Fa
     if own_service and cfg.get("tray_enabled", True):
         try:
             gui = platform.shell()
-            shell = gui.app_shell(None, srv)
-            shell.notifier = gui.make_notifier(srv, on_open=shell.open_window)
+            hooks = srv.shell_hooks()
+            shell = gui.app_shell(None, hooks)
+            shell.notifier = gui.make_notifier(hooks, on_open=shell.open_window)
             tray_ok = shell.start()
             if not tray_ok:
                 log.warning("значок в трее не поднялся, крестик будет закрывать программу")
@@ -329,7 +330,7 @@ def run_as_app(port: int, log, own_service: bool = True, start_hidden: bool = Fa
         if shell is not None and shell.quitting:
             return True          # запись уже остановлена из меню значка
         try:
-            active = sessions.active_session()
+            active = recordings.sessions.active_session()
         except Exception:
             active = None
         if active is not None:
@@ -339,7 +340,7 @@ def run_as_app(port: int, log, own_service: bool = True, start_hidden: bool = Fa
             if not ok:
                 return False
             try:
-                sessions.stop_all()
+                recordings.sessions.stop_all()
             except Exception:
                 log.error("не удалось остановить запись при закрытии", exc_info=True)
         return True

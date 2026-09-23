@@ -166,7 +166,7 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _norm_name(name: Any) -> str:
+def norm_name(name: Any) -> str:
     """Имя для показа: схлопнутые пробелы, без краёв."""
     return re.sub(r"\s+", " ", str(name or "")).strip()
 
@@ -205,7 +205,7 @@ def _loose_key(tokens: list[str]) -> str:
 
 def _slug(name: str) -> str:
     """ASCII-слаг имени. Пустой результат заменяем на «person»."""
-    low = unicodedata.normalize("NFKC", _norm_name(name)).lower()
+    low = unicodedata.normalize("NFKC", norm_name(name)).lower()
     out: list[str] = []
     for ch in low:
         if ch in _TRANSLIT:
@@ -305,7 +305,7 @@ def _sanitize(raw: Any) -> dict[str, Any]:
     for pid, rec in people_raw.items():
         if not isinstance(rec, dict):
             continue
-        name = _norm_name(rec.get("name"))
+        name = norm_name(rec.get("name"))
         if not str(pid) or not name:
             continue
         dim: int | None = None
@@ -321,7 +321,7 @@ def _sanitize(raw: Any) -> dict[str, Any]:
         aliases: list[str] = []
         seen = {key}
         for a in rec.get("aliases") or []:
-            a = _norm_name(a)
+            a = norm_name(a)
             if a and name_key(a) not in seen:
                 seen.add(name_key(a))
                 aliases.append(a)
@@ -492,14 +492,14 @@ def _public(pid: str, rec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _people() -> dict[str, Any]:
+def raw_people() -> dict[str, Any]:
     return _read_db().get("people") or {}
 
 
 def list_people() -> list[dict[str, Any]]:
     """Список людей для интерфейса. Без векторов."""
     with _lock:
-        out = [_public(pid, rec) for pid, rec in _people().items()]
+        out = [_public(pid, rec) for pid, rec in raw_people().items()]
     out.sort(key=lambda p: (not p["owner"], name_key(p.get("name"))))
     return out
 
@@ -507,7 +507,7 @@ def list_people() -> list[dict[str, Any]]:
 def get_person(person_id: str) -> dict[str, Any] | None:
     """Человек по id: те же поля плюс размерность голоса. Векторы не отдаются."""
     with _lock:
-        rec = _people().get(str(person_id))
+        rec = raw_people().get(str(person_id))
         if not isinstance(rec, dict):
             return None
         out = _public(str(person_id), rec)
@@ -519,7 +519,7 @@ def _resolve_id(name: Any, people: dict[str, Any] | None = None) -> str | None:
     key = name_key(name)
     if not key:
         return None
-    people = _people() if people is None else people
+    people = raw_people() if people is None else people
     for pid, rec in people.items():
         if name_key(rec.get("name")) == key:
             return str(pid)
@@ -533,7 +533,7 @@ def resolve(name: str) -> dict[str, Any] | None:
     """Человек, у которого это имя — основное или вариант (порядок слов не важен)."""
     with _lock:
         pid = _resolve_id(name)
-        return _public(pid, _people()[pid]) if pid else None
+        return _public(pid, raw_people()[pid]) if pid else None
 
 
 def find_by_name(name: str) -> dict[str, Any] | None:
@@ -544,7 +544,7 @@ def find_by_name(name: str) -> dict[str, Any] | None:
 def stats() -> dict[str, Any]:
     """Сводка для интерфейса: сколько людей, сколько образцов, где лежит база."""
     with _lock:
-        people = _people()
+        people = raw_people()
         samples = sum(len(rec.get("samples") or []) for rec in people.values())
         return {"people": len(people), "samples": samples, "path": str(VOICES_PATH)}
 
@@ -591,7 +591,7 @@ def similar_people(name: str, exclude: Iterable[str] = ()) -> list[dict[str, Any
     exclude = {str(x) for x in exclude}
     out: list[dict[str, Any]] = []
     with _lock:
-        for pid, rec in _people().items():
+        for pid, rec in raw_people().items():
             if str(pid) in exclude:
                 continue
             best = None
@@ -612,7 +612,7 @@ def possible_duplicates() -> list[dict[str, Any]]:
     """Пары людей с похожими именами, которых ещё не отметили «разные люди»."""
     pairs: list[dict[str, Any]] = []
     with _lock:
-        items = list(_people().items())
+        items = list(raw_people().items())
         for i, (pa, ra) in enumerate(items):
             for pb, rb in items[i + 1:]:
                 if pb in (ra.get("not_same") or []) or pa in (rb.get("not_same") or []):
@@ -649,7 +649,7 @@ def search(query: str, embedding: Any = None, limit: int = 12,
     vec = _vec(embedding, expect_dim=None) if embedding is not None else None
     out: list[dict[str, Any]] = []
     with _lock:
-        for pid, rec in _people().items():
+        for pid, rec in raw_people().items():
             if rec.get("owner") and not include_owner:
                 continue
             best_rank: int | None = None
@@ -702,7 +702,7 @@ def _new_entry(name: str, kind: str = KIND_PERSON, owner: bool = False) -> dict[
             "created_at": now, "updated_at": now, "count": 0}
 
 
-def _unique_name(name: str, people: dict[str, Any]) -> str:
+def unique_name(name: str, people: dict[str, Any]) -> str:
     if _resolve_id(name, people) is None:
         return name
     for i in range(2, 100):
@@ -714,7 +714,7 @@ def _unique_name(name: str, people: dict[str, Any]) -> str:
 
 def create_person(name: str, kind: str | None = None, namesake: bool = False) -> dict[str, Any]:
     """Завести человека. namesake=True — тёзка: к имени добавится номер («Иван Петров 2»)."""
-    nm = _norm_name(name)
+    nm = norm_name(name)
     if not nm or not name_tokens(nm):
         raise ValueError("имя не может быть пустым")
     with _lock:
@@ -724,7 +724,7 @@ def create_person(name: str, kind: str | None = None, namesake: bool = False) ->
         if existing and not namesake:
             raise NameTaken("«%s» уже есть в базе" % nm, _public(existing, people[existing]))
         if namesake:
-            nm = _unique_name(nm, people)
+            nm = unique_name(nm, people)
         kind = kind or (KIND_SHARED if looks_like_room(nm) else KIND_PERSON)
         pid = _make_person_id(nm, taken=people.keys())
         people[pid] = _new_entry(nm, kind)
@@ -736,7 +736,7 @@ def create_person(name: str, kind: str | None = None, namesake: bool = False) ->
 
 def ensure_person(name: str, kind: str | None = None) -> tuple[dict[str, Any], bool]:
     """Человек с этим именем (основным или вариантом); нет — завести. (человек, заведён ли)."""
-    nm = _norm_name(name)
+    nm = norm_name(name)
     with _lock:
         found = resolve(nm)
         if found:
@@ -752,7 +752,7 @@ def owner_person(create: bool = True) -> dict[str, Any] | None:
         want = store.owner_name()
         for pid, rec in people.items():
             if rec.get("owner"):
-                if _norm_name(rec.get("name")) != want and _resolve_id(want, {
+                if norm_name(rec.get("name")) != want and _resolve_id(want, {
                         k: v for k, v in people.items() if k != pid}) is None:
                     rec = dict(rec)
                     rec["name"] = want
@@ -762,7 +762,7 @@ def owner_person(create: bool = True) -> dict[str, Any] | None:
                 return _public(str(pid), rec)
         if not create:
             return None
-        nm = want if _resolve_id(want, people) is None else _unique_name(want, people)
+        nm = want if _resolve_id(want, people) is None else unique_name(want, people)
         pid = _make_person_id("owner " + nm, taken=people.keys())
         people[pid] = _new_entry(nm, owner=True)
         db["people"] = people
@@ -793,7 +793,7 @@ def add_sample(name: str | None, embedding: Any, *, person_id: str | None = None
         if pid and pid not in people:
             raise ValueError("человек не найден")
         if pid is None:
-            nm = _norm_name(name)
+            nm = norm_name(name)
             if not nm or not name_tokens(nm):
                 raise ValueError("имя не может быть пустым")
             pid = _resolve_id(nm, people)
@@ -832,7 +832,7 @@ def samples_from(rec_id: str, speaker_key: str) -> list[dict[str, Any]]:
     """У кого в базе лежат образцы этого говорящего этой записи."""
     out = []
     with _lock:
-        for pid, rec in _people().items():
+        for pid, rec in raw_people().items():
             n = sum(1 for s in rec.get("samples") or []
                     if s.get("rec_id") == rec_id and s.get("speaker_key") == speaker_key)
             if n:
@@ -873,7 +873,7 @@ def rename_person(person_id: str, new_name: str) -> dict[str, Any] | None:
     Имя занято другим — NameTaken: молча объединять людей нельзя, объединение
     делается отдельно (merge_people), с копией базы.
     """
-    nm = _norm_name(new_name)
+    nm = norm_name(new_name)
     if not nm or not name_tokens(nm):
         raise ValueError("имя не может быть пустым")
     with _lock:
@@ -901,7 +901,7 @@ def rename_person(person_id: str, new_name: str) -> dict[str, Any] | None:
 
 def add_alias(person_id: str, alias: str) -> dict[str, Any]:
     """Запомнить другой вариант имени человека («Petrov Ivan», «Петров И.»)."""
-    nm = _norm_name(alias)
+    nm = norm_name(alias)
     if not nm or not name_tokens(nm):
         raise ValueError("пустой вариант имени")
     with _lock:
@@ -1159,7 +1159,7 @@ def forget_sample(person_id: str, index: int) -> bool:
 def person_details(person_id: str) -> dict[str, Any] | None:
     """Карточка для «Настройки → Голоса»: варианты имени и откуда каждый образец."""
     with _lock:
-        rec = _people().get(str(person_id))
+        rec = raw_people().get(str(person_id))
         if not isinstance(rec, dict):
             return None
         out = _public(str(person_id), rec)
@@ -1198,7 +1198,7 @@ def _thr(key: str, fallback: float) -> float:
         return fallback
 
 
-def _thresholds() -> tuple[float, float]:
+def match_thresholds() -> tuple[float, float]:
     """(порог уверенного совпадения, порог подсказки) из настроек."""
     match_thr = _thr("voice_match_threshold", 0.70)
     suggest_thr = _thr("voice_suggest_threshold", 0.45)
@@ -1208,7 +1208,7 @@ def _thresholds() -> tuple[float, float]:
 
 
 def thresholds() -> dict[str, float]:
-    match_thr, suggest_thr = _thresholds()
+    match_thr, suggest_thr = match_thresholds()
     return {"match": match_thr, "suggest": suggest_thr, "margin": margin()}
 
 
@@ -1223,11 +1223,11 @@ def outliers(person_id: str) -> list[int]:
     Так видно чужой голос, попавший по ошибке, или общую учётку, под которой
     говорили разные люди. Нужно хотя бы три образца.
     """
-    rec = _people().get(str(person_id)) or {}
+    rec = raw_people().get(str(person_id)) or {}
     samples = rec.get("samples") or []
     if len(samples) < 3:
         return []
-    _match, suggest_thr = _thresholds()
+    _match, suggest_thr = match_thresholds()
     odd = []
     for i, s in enumerate(samples):
         others = _centroid([x for j, x in enumerate(samples) if j != i])
@@ -1243,7 +1243,7 @@ def voice_scores(embedding: Any, include_owner: bool = False) -> list[dict[str, 
         return []
     out = []
     with _lock:
-        for pid, rec in _people().items():
+        for pid, rec in raw_people().items():
             if rec.get("kind") == KIND_SHARED or (rec.get("owner") and not include_owner):
                 continue
             cent = rec.get("centroid") or []
@@ -1261,7 +1261,7 @@ def _candidates(embedding: Any) -> list[dict[str, Any]]:
     confident — не только выше порога уверенности, но и заметно лучше второго
     кандидата (margin): два похожих голоса не должны подписываться наугад.
     """
-    match_thr, suggest_thr = _thresholds()
+    match_thr, suggest_thr = match_thresholds()
     scores = voice_scores(embedding)
     out: list[dict[str, Any]] = []
     gap = margin()

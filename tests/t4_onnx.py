@@ -10,24 +10,11 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+from harness import LINES, FAIL, say  # noqa: E402
 
 CKPT = PROJECT / "models" / "gigaam"
 ONNX = PROJECT / "models" / "onnx"
 ONNX.mkdir(parents=True, exist_ok=True)
-
-LINES = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
 
 
 def dump():

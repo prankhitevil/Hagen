@@ -34,7 +34,6 @@ from ... import config, store
 log = logging.getLogger("hagen.shots")
 
 IMG_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-SUBFOLDER = "Скриншоты"
 #: известная папка Windows «Снимки экрана»
 _SCREENSHOTS_KNOWN_FOLDER = "{B7BEDE81-DF94-4682-A7D8-57A52620B86F}"
 _SHELL_FOLDERS = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
@@ -87,13 +86,6 @@ def screenshot_folders(auto: bool = False) -> list[Path]:
     return out
 
 
-def shots_dir(meta: dict[str, Any]) -> Path:
-    """Папка снимков рядом с заметкой: <категория>/Скриншоты."""
-    from ... import obsidian
-
-    return obsidian._category_dir(meta) / SUBFOLDER
-
-
 def _fingerprint(img: Any) -> str:
     small = img.convert("L").resize((48, 48))
     return hashlib.sha1(small.tobytes()).hexdigest()
@@ -124,10 +116,14 @@ class ScreenshotWatcher:
     FOLDER_EVERY = 1          # папки — каждую секунду: другого источника по умолчанию нет
 
     def __init__(self, rec_id: str, position_s: Callable[[], float],
-                 on_shot: Callable[[dict[str, Any]], None] | None = None) -> None:
+                 on_shot: Callable[[dict[str, Any]], None] | None = None,
+                 folder: Callable[[], Path] | None = None) -> None:
         self.rec_id = rec_id
         self.position_s = position_s
         self.on_shot = on_shot
+        # Куда класть снимок, решает логика заметок: папка спрашивается на
+        # каждый снимок, категорию записи могут поменять по ходу.
+        self.folder = folder
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._prints: set[str] = set()
@@ -250,7 +246,10 @@ class ScreenshotWatcher:
         except Exception:
             at_s = 0.0
         now = datetime.now()
-        folder = shots_dir(meta)
+        if self.folder is None:
+            log.warning("запись %s: некуда класть снимок — папка не задана", self.rec_id)
+            return None
+        folder = Path(self.folder())
         folder.mkdir(parents=True, exist_ok=True)
         stem = "%s %s" % (now.strftime("%Y-%m-%d %H-%M-%S"), self.rec_id[-4:])
         path = folder / (stem + ".png")
@@ -287,18 +286,27 @@ class ScreenshotWatcher:
 # ---------------------------------------------------------------- удаление и склейка
 
 
-def delete_shots(rec_id: str) -> int:
-    """Убрать файлы снимков записи. Только свои: внутри сейфа и в папке «Скриншоты»."""
+def delete_shots(rec_id: str, folder: Path) -> int:
+    """Убрать файлы снимков записи. Только свои: из названной папки, внутри сейфа, картинки.
+
+    Папку называет логика заметок — та же, куда снимки складывались. Без этой
+    проверки удаление записи могло бы стереть чужую картинку, лежащую в сейфе
+    рядом с заметками: путь снимка берётся из карточки записи.
+    """
     meta = store.get(rec_id) or {}
     root = config.vault_root().resolve()
+    try:
+        own = Path(folder).resolve()
+    except OSError:
+        own = Path(folder)
     removed = 0
     for s in meta.get("screenshots") or []:
         p = Path(str(s.get("path") or ""))
         try:
             rp = p.resolve()
-            if not rp.is_relative_to(root) or p.parent.name != SUBFOLDER \
+            if not rp.is_relative_to(root) or rp.parent != own \
                     or p.suffix.lower() not in IMG_EXT:
-                log.warning("отказ удалять снимок не из сейфа: %s", p)
+                log.warning("отказ удалять снимок не из папки снимков записи: %s", p)
                 continue
             if p.exists():
                 p.unlink()

@@ -11,11 +11,11 @@
 * `micmute.py` — выключатель микрофона Windows;
 * `miccapsule.py` — кружок микрофона поверх окон.
 
-Здесь только дверь наружу. Три имени в этой двери появились потому, что до
-переезда логика лезла в приватную часть звука: `same_device` — это бывший
-`loopback._similar`, которым сторож устройств сверял имена. Две другие
-приватные зацепки (`_audio_thread` и `_default_render_devices`) остались
-внутри: ими пользуются соседи по этой же папке, а не логика.
+Здесь только дверь наружу. `same_device` появилась потому, что до переезда
+логика лезла в приватную часть звука: это бывший `loopback._similar`, которым
+сторож устройств сверял имена. Соседи по папке (`micmute`, `desktop`) тоже
+берут у `loopback` только открытые имена: `audio_thread`,
+`default_render_devices`.
 """
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def recommended_input_index() -> int | None:
 
 def same_device(a: str, b: str) -> bool:
     """Одно ли это устройство, хотя имена написаны по-разному."""
-    return loopback._similar(a, b)
+    return loopback.similar(a, b)
 
 
 def echo_risk(name: str, form: int | None = None) -> dict[str, Any]:

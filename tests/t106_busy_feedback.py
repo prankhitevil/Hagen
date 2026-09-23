@@ -30,32 +30,12 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 
 import numpy as np  # noqa: E402
 
-from hagen import diarize, vad  # noqa: E402
+from hagen import diarize, recordings, vad  # noqa: E402
 
 
 class Handle:
@@ -305,22 +285,22 @@ try:
     check("по умолчанию тяжёлая работа уступает записи",
           config.DEFAULTS.get("processing_during_recording") in ("pause", "background"),
           config.DEFAULTS.get("processing_during_recording"))
-    real_active = server.sessions.active_session
+    real_active = recordings.sessions.active_session
     real_get = config.get
     choice = {"v": "pause"}
     config.get = lambda k, d=None: choice["v"] if k == "processing_during_recording" else real_get(k, d)
     try:
-        server.sessions.active_session = lambda: object()
+        recordings.sessions.active_session = lambda: object()
         check("идёт запись — служба велит уступать", server._live_yield_reason() == "идёт запись",
               server._live_yield_reason())
         choice["v"] = "run"
         check("выбрано «не останавливать» — не уступает и при записи", server._live_yield_reason() == "",
               server._live_yield_reason())
         choice["v"] = "pause"
-        server.sessions.active_session = lambda: None
+        recordings.sessions.active_session = lambda: None
         check("записи нет — уступать некому", server._live_yield_reason() == "", server._live_yield_reason())
     finally:
-        server.sessions.active_session = real_active
+        recordings.sessions.active_session = real_active
         config.get = real_get
 finally:
     rule["reason"] = ""
@@ -334,9 +314,4 @@ check("выбор в «Основном»: пауза или не останав
       'id="set-busy-rec"' in html and 'value="pause"' in html and 'value="run"' in html
       and "patch.processing_during_recording = $('set-busy-rec').value" in js)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t106_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t106"))

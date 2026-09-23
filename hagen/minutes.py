@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, platform, providers, store
+from . import config, jobs, platform, providers, store, vpn
 
 log = logging.getLogger("hagen.minutes")
 
@@ -491,33 +491,6 @@ def _human_date(created_at: str | None) -> str:
         return raw or "дата неизвестна"
 
 
-def _progress(handle: Any, value: float, note: str = "") -> None:
-    if handle is None:
-        return
-    try:
-        handle.progress(max(0.0, min(1.0, float(value))), note)
-    except Exception:
-        pass
-
-
-def _note(handle: Any, msg: str) -> None:
-    if handle is None:
-        return
-    try:
-        handle.log(msg)
-    except Exception:
-        pass
-
-
-def _cancelled(handle: Any) -> bool:
-    if handle is None:
-        return False
-    try:
-        return bool(handle.cancelled)
-    except Exception:
-        return False
-
-
 # Болтовня, которую модели дописывают в конце документа: «Готов внести правки»,
 # «Могу оформить письмом», «Если нужно — скажите». Правилами промпта это давится
 # не всегда, поэтому убираем хвост ещё и механически.
@@ -921,11 +894,111 @@ _CLI_DROP_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT")
 
 
 def _cli_env() -> dict[str, str]:
-    """Окружение для дочернего процесса CLI."""
+    """Окружение для дочернего процесса CLI (без учёта сети — см. _cli_network)."""
     env = dict(os.environ)
     for name in _CLI_DROP_ENV:
         env.pop(name, None)
+    # Ни автообновления, ни телеметрии, ни отчётов об ошибках: единственный
+    # выход CLI в сеть — сам запрос к модели. Меньше следов и быстрее старт.
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     return env
+
+
+#: Как сказать человеку, что CLI не выпущен в сеть. Дальше — что делать.
+_NO_VPN = ("Claude CLI не запущен: не найден локальный порт VPN-клиента%s. "
+           "Включите VPN (Hiddify, Happ) или измените «Сеть для CLI» в настройках "
+           "документов.")
+_BLOCKED = ("Claude CLI не запущен: с нынешнего адреса%s серверы Anthropic "
+            "отказывают%s. Включите VPN или измените «Сеть для CLI» в настройках "
+            "документов.")
+
+
+def _cli_network() -> tuple[dict[str, str], str]:
+    """Окружение CLI с учётом защиты выхода в сеть и строка «каким путём».
+
+    Поднимает RuntimeError, если выпускать CLI нельзя. Режимы — в
+    config.DEFAULTS (claude_cli_guard): port — только через локальный порт
+    VPN-клиента, пакетов наружу до запуска ноль; probe — как есть, но сначала
+    проба без токена; off — как было.
+    """
+    env = _cli_env()
+    mode = str(config.get("claude_cli_guard") or "port").strip().lower()
+    if mode == "off":
+        return env, "как есть, без проверки выхода"
+    if mode == "probe":
+        res = vpn.probe_egress(None, as_is=True)
+        if res["anthropic"] != "open":
+            where = (" (%s, %s)" % (res["ip"], res["country"])) if res["ip"] else ""
+            why = (": " + res["error"]) if res["error"] else (
+                " (код %s)" % res["status"] if res["status"] else " (ответа нет)")
+            raise RuntimeError(_BLOCKED % (where, why))
+        return env, "как есть, проба прошла (%s, %s)" % (res["ip"], res["country"])
+    found = vpn.find_cli_proxy(str(config.get("claude_cli_proxy") or "auto"))
+    if found.get("error"):
+        raise RuntimeError("Claude CLI не запущен: %s" % found["error"])
+    if not found["listening"]:
+        tail = (" по адресу %s" % found["url"]) if found["url"] else ""
+        raise RuntimeError(_NO_VPN % tail)
+    return vpn.env_through(env, found["url"]), "через %s (%s)" % (found["client"], found["url"])
+
+
+def network_report(probe: bool = False) -> dict[str, Any]:
+    """Что программа знает о выходе CLI в сеть — для окна «Сеть для CLI».
+
+    Без probe наружу ничего не уходит: только режим, порты и выбранный путь.
+    С probe — ещё адрес, страна и ответ Anthropic тем путём, каким пойдёт CLI.
+    """
+    mode = str(config.get("claude_cli_guard") or "port").strip().lower()
+    setting = str(config.get("claude_cli_proxy") or "auto")
+    found = vpn.find_cli_proxy(setting)
+    out: dict[str, Any] = {"mode": mode, "proxy_setting": setting,
+                           "ports": vpn.scan_ports(), "chosen": found}
+    if mode == "port":
+        if found.get("error"):
+            out["route"] = found["error"]
+            out["ok"] = False
+        elif found["listening"]:
+            out["route"] = "через %s (%s)" % (found["client"], found["url"])
+            out["ok"] = True
+        else:
+            out["route"] = ("порт %s не слушает" % found["url"]) if found["url"] else \
+                "ни один известный порт не слушает — CLI не запустится"
+            out["ok"] = False
+    elif mode == "probe":
+        out["route"] = "как есть; перед каждым запуском — проба без токена"
+        out["ok"] = True
+    else:
+        out["route"] = "как есть, без защиты"
+        out["ok"] = True
+    if probe:
+        if mode == "port" and found["listening"]:
+            out["probe"] = vpn.probe_egress(found["url"])
+        elif mode == "port":
+            out["probe"] = {"ip": "", "country": "", "anthropic": "unknown", "status": None,
+                            "error": "Порт не слушает — пробовать нечем, наружу ничего не ушло."}
+        else:
+            out["probe"] = vpn.probe_egress(None, as_is=True)
+    return out
+
+
+def cli_network_state() -> str:
+    """Сеть CLI одной фразой для сводки «Готов к записи». Наружу ничего не уходит.
+
+    Сводка обновляется сама, поэтому здесь только состояние порта: пробу
+    выхода и запрос к модели делают кнопки в настройках.
+    """
+    mode = str(config.get("claude_cli_guard") or "port").strip().lower()
+    if mode == "off":
+        return "сеть без защиты"
+    if mode == "probe":
+        return "проба выхода перед каждым запуском"
+    found = vpn.find_cli_proxy(str(config.get("claude_cli_proxy") or "auto"))
+    if found.get("error"):
+        return "адрес порта VPN не разобран"
+    if found["listening"]:
+        parsed = vpn.parse_proxy(found["url"])
+        return "порт VPN %s слушает" % (parsed[1] if parsed else found["url"])
+    return "VPN выключен"
 
 
 def _cli_model(model: str | None = "") -> str:
@@ -1128,12 +1201,12 @@ def _run_cli_stream(args: list[str], payload: str, timeout: int, cwd: str | None
                     "Claude CLI не ответил за %d с. Лимит подписки не сообщался — "
                     "похоже, модель просто долго думает. Попробуйте ещё раз или "
                     "увеличьте время ожидания в настройках." % timeout)
-            if _cancelled(handle):
+            if handle.cancelled:
                 kill()
                 raise RuntimeError("Сборка документа отменена.")
-            if handle is not None and now - last_note >= 15.0:
+            if now - last_note >= 15.0:
                 last_note = now
-                _note(handle, "Claude %s: %d с" % ("думает" if thinking else "пишет документ",
+                handle.log("Claude %s: %d с" % ("думает" if thinking else "пишет документ",
                                                    now - t0))
             try:
                 ln = lines.get(timeout=0.5)
@@ -1168,7 +1241,7 @@ def _run_cli_stream(args: list[str], payload: str, timeout: int, cwd: str | None
                     kill()
                     raise ClaudeLimitError(limit_info.get("resetsAt"),
                                            limit_info.get("rateLimitType"))
-                _note(handle, "Серверы Anthropic не ответили (код %s) — повторяю: попытка %s "
+                handle.log("Серверы Anthropic не ответили (код %s) — повторяю: попытка %s "
                               "из %s" % (status or "?", ev.get("attempt"), ev.get("max_retries")))
             elif kind == "system" and sub == "thinking_tokens":
                 thinking = True
@@ -1210,6 +1283,7 @@ def run_claude_cli(prompt: str, transcript: str, timeout: int | None = None,
     Через stdin текст идёт принципиально: предел командной строки Windows
     ~32767 символов, стенограмма часа разговора заметно длиннее.
     """
+    handle = jobs.as_handle(handle)
     exe = resolve_claude_cli()
     if not exe:
         raise RuntimeError(_CLI_MISSING)
@@ -1227,7 +1301,11 @@ def run_claude_cli(prompt: str, transcript: str, timeout: int | None = None,
     # рабочий каталог — корень проекта; чужие настройки (CLAUDE.md, хуки, MCP)
     # отключены ключами запуска, см. _claude_args
     cwd =str(config.PROJECT_DIR) if config.PROJECT_DIR.exists() else None
-    env = _cli_env()
+    # Сначала — можно ли вообще выпускать CLI в сеть: без порта VPN или при
+    # отказе по региону запуска не будет, и токен с текстом никуда не уйдут.
+    env, route = _cli_network()
+    log.info("Claude CLI идёт в сеть %s", route)
+    handle.log("Claude CLI: %s" % route)
     last_err = ""
     # Три попытки подряд: полный набор ключей → запасной набор → запасной без
     # выбора модели. Последняя нужна на случай, если подписке недоступна именно
@@ -1620,7 +1698,8 @@ def available_engines() -> list[dict[str, Any]]:
         "ready": bool(exe),
         # «Готов» сказать нельзя: найден только файл. Выполнен ли вход и пускает
         # ли антивирус CLI в сеть, показывает check_claude_cli по кнопке.
-        "state": "найден; вход и связь проверяет кнопка «Проверить»" if exe else "",
+        "state": ("найден; вход и связь проверяет кнопка «Проверить»; "
+                  "сеть — кнопка «Сеть для CLI»") if exe else "",
         "reason": ("Найден: используется ваша подписка Claude, ключ не нужен."
                    if exe else _CLI_MISSING),
     }
@@ -1891,6 +1970,7 @@ def generate(
     Длинная стенограмма обрабатывается в два прохода: выжимка по каждому куску,
     затем сборка итогового документа из выжимок.
     """
+    handle = jobs.as_handle(handle)
     if template not in TEMPLATES:
         raise ValueError("Неизвестный шаблон протокола: %s" % template)
     meta = store.get(rec_id)
@@ -1922,40 +2002,40 @@ def generate(
     map_role = model_role(template, "map")
     target = _target_provider(engine)
     final_model = _model_for(target, final_role)
-    _note(handle, "Движок: %s, модель: %s, кусков стенограммы: %d"
+    handle.log("Движок: %s, модель: %s, кусков стенограммы: %d"
           % (engine, final_model or "по умолчанию", len(chunks)))
 
     if len(chunks) == 1:
-        if _cancelled(handle):
+        if handle.cancelled:
             raise RuntimeError("Сборка протокола отменена.")
-        _progress(handle, 0.1, "отправляю стенограмму")
+        handle.progress(0.1, "отправляю стенограмму")
         markdown = _run_engine(engine, final_prompt,
                                _with_reminder(chunks[0], template),
                                role=final_role, handle=handle)
-        _progress(handle, 0.95, "сохраняю")
+        handle.progress(0.95, "сохраняю")
     else:
         digests: list[str] = []
         total = len(chunks)
         # на выжимки отводим 80% шкалы, на сборку — остаток
         for i, piece in enumerate(chunks, start=1):
-            if _cancelled(handle):
+            if handle.cancelled:
                 raise RuntimeError("Сборка протокола отменена.")
-            _progress(handle, 0.8 * (i - 1) / total, "выжимка %d из %d" % (i, total))
+            handle.progress(0.8 * (i - 1) / total, "выжимка %d из %d" % (i, total))
             part = _strip_tail_chatter(
                 _run_engine(engine, _map_prompt(i, total), as_data(piece), role=map_role,
                             handle=handle))
             digests.append("## Фрагмент %d из %d\n%s" % (i, total, part.strip()))
             done = 0.8 * i / total
             spent = time.time() - t0
-            if handle is not None and done > 0:
+            if done > 0:
                 try:
                     handle.eta(max(0.0, spent / done - spent))
                 except Exception:
                     pass
-            _progress(handle, done, "выжимка %d из %d готова" % (i, total))
-        if _cancelled(handle):
+            handle.progress(done, "выжимка %d из %d готова" % (i, total))
+        if handle.cancelled:
             raise RuntimeError("Сборка протокола отменена.")
-        _progress(handle, 0.85, "собираю итоговый документ")
+        handle.progress(0.85, "собираю итоговый документ")
         combined = _reduce_digests(engine, digests, max_chars, handle=handle,
                                    role=map_role)
         markdown = _run_engine(
@@ -1964,14 +2044,14 @@ def generate(
                                   has_shots=shots),
             _with_reminder(combined, template), role=final_role, handle=handle,
         )
-        _progress(handle, 0.95, "сохраняю")
+        handle.progress(0.95, "сохраняю")
 
     markdown = _strip_tail_chatter(markdown or "")
     if not markdown:
         raise RuntimeError("Движок вернул пустой документ.")
 
     saved = _save_result(rec_id, template, markdown, engine)
-    _progress(handle, 1.0, "готово")
+    handle.progress(1.0, "готово")
     elapsed = round(time.time() - t0, 1)
     log.info("протокол %s: шаблон %s, движок %s, модель %s, символов %d, кусков %d, %.1f c",
              rec_id, template, engine, final_model or "по умолчанию",
@@ -2000,7 +2080,7 @@ def _reduce_digests(engine: str, digests: list[str], max_chars: int,
             break
         squeezed: list[str] = []
         for i, piece in enumerate(parts, start=1):
-            if _cancelled(handle):
+            if handle.cancelled:
                 raise RuntimeError("Сборка протокола отменена.")
             squeezed.append(
                 _run_engine(engine, _map_prompt(i, len(parts)), as_data(piece), role=role,
@@ -2239,6 +2319,7 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
     Чистка «болтовни в конце» к ответу не применяется: она рассчитана на
     markdown и срезала бы служебные строки с названием и папкой.
     """
+    handle = jobs.as_handle(handle)
     meta = store.get(rec_id)
     if meta is None:
         raise ValueError("Запись %s не найдена." % rec_id)
@@ -2266,16 +2347,16 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
 
     target = _target_provider(engine)
     final_model = _model_for(target, "strong")
-    _note(handle, "%s: движок %s, модель %s, кусков %d"
+    handle.log("%s: движок %s, модель %s, кусков %d"
           % (what.capitalize(), engine, final_model or "по умолчанию", len(chunks)))
 
     body = chunks[0]
     if len(chunks) > 1:
         digests: list[str] = []
         for i, piece in enumerate(chunks, start=1):
-            if _cancelled(handle):
+            if handle.cancelled:
                 raise RuntimeError("Сборка документа отменена.")
-            _progress(handle, 0.8 * (i - 1) / len(chunks),
+            handle.progress(0.8 * (i - 1) / len(chunks),
                       "выжимка %d из %d" % (i, len(chunks)))
             part = _strip_tail_chatter(
                 _run_engine(engine, _map_prompt(i, len(chunks)), as_data(piece), role="fast",
@@ -2286,7 +2367,7 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
     else:
         body = as_data(body)
 
-    _progress(handle, 0.85, "собираю " + what)
+    handle.progress(0.85, "собираю " + what)
     video_tail = _VIDEO_TAIL_EN if task_lang(kind) == "en" else _VIDEO_TAIL
     raw = _run_engine(engine, prompt + video_tail, body, role="strong", handle=handle)
     try:
@@ -2301,7 +2382,7 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
         kept = _keep_raw_answer(rec_id, raw)
         log.warning("саммари %s: ответ пришёл не в заданном виде, разобрали (%s); "
                     "сырой ответ: %s", rec_id, recovered, kept or "не сохранён")
-        _note(handle, "Ответ модели пришёл не в заданном виде — разобрали (%s)" % recovered)
+        handle.log("Ответ модели пришёл не в заданном виде — разобрали (%s)" % recovered)
     else:
         # ответ разобран как задумано: старый «сырой» файл от прошлой попытки
         # больше не нужен и только путал бы при разборе следующего сбоя
@@ -2322,7 +2403,7 @@ def generate_video_summary(rec_id: str, engine: str | None = None,
     if title:
         patch["summary_title"] = title[:200]
     store.update(rec_id, patch)
-    _progress(handle, 1.0, "готово")
+    handle.progress(1.0, "готово")
     elapsed = round(time.time() - t0, 1)
     log.info("%s %s: движок %s, модель %s, кусков %d, %.1f c",
              what, rec_id, engine, final_model or "по умолчанию", len(chunks), elapsed)

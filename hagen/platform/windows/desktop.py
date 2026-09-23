@@ -489,7 +489,7 @@ def call_output_device(sessions: list[dict[str, Any]] | None = None,
             # Сосед по этой же папке — звук; через розетку сюда не ходим.
             from . import loopback
 
-            comm = loopback._default_render_devices().get("communications") or ""
+            comm = loopback.default_render_devices().get("communications") or ""
         except Exception:
             comm = ""
 

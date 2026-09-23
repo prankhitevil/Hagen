@@ -78,7 +78,7 @@ _LEAD_MD_RE = re.compile(r"^(\s*)([#>\-*+])")
 # --------------------------------------------------------------------------- #
 # вспомогательные утилиты
 # --------------------------------------------------------------------------- #
-def _safe_name(name: str, limit: int = MAX_STEM) -> str:
+def safe_name(name: str, limit: int = MAX_STEM) -> str:
     """Имя, пригодное для файловой системы Windows и для ссылок Obsidian."""
     text = unicodedata.normalize("NFC", str(name or "")).strip()
     text = _BAD_RE.sub("-", text)
@@ -100,7 +100,7 @@ _SECRET_QUERY = {
 }
 
 
-def _clean_url(value: Any) -> str:
+def clean_url(value: Any) -> str:
     """Ссылка, пригодная для показа: секретные параметры вырезаны.
 
     Обычные параметры сохраняются: без `?v=...` ссылка на YouTube перестаёт
@@ -122,7 +122,7 @@ def _clean_url(value: Any) -> str:
     return urlunsplit(parts._replace(fragment=""))
 
 
-def _hms(seconds: Any) -> str:
+def hms(seconds: Any) -> str:
     """Секунды -> "ЧЧ:ММ:СС" (отрицательные и мусор -> 00:00:00)."""
     try:
         total = int(round(float(seconds)))
@@ -313,7 +313,7 @@ def remove_category(name: str) -> list[str]:
 
 def add_category(name: str) -> list[str]:
     """Создать папку-категорию и запомнить её в настройках. Возвращает список категорий."""
-    safe = _safe_name(name, limit=60)
+    safe = safe_name(name, limit=60)
     if not safe or safe == "Без названия":
         raise ValueError("Пустое или недопустимое имя категории")
     _require_vault_base()
@@ -400,7 +400,7 @@ def ensure_vault() -> dict[str, Any]:
         root.mkdir(parents=True, exist_ok=True)
         created.append(_rel_to_vault(root) + "/")
     for name in config.get("categories") or []:
-        safe = _safe_name(str(name), limit=60)
+        safe = safe_name(str(name), limit=60)
         folder = root / safe
         if not folder.exists():
             folder.mkdir(parents=True, exist_ok=True)
@@ -417,11 +417,24 @@ def ensure_vault() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # путь заметки
 # --------------------------------------------------------------------------- #
-def _category_dir(meta: dict[str, Any]) -> Path:
+def category_dir(meta: dict[str, Any]) -> Path:
     cat = str(meta.get("category") or config.get("default_category") or "").strip()
-    safe = _safe_name(cat, limit=60) if cat else ""
+    safe = safe_name(cat, limit=60) if cat else ""
     root = config.vault_root()
     return root / safe if safe and safe != "Без названия" else root
+
+
+#: Подпапка категории, куда ложатся снимки экрана со встречи.
+SHOTS_SUBFOLDER = "Скриншоты"
+
+
+def shots_dir(meta: dict[str, Any]) -> Path:
+    """Папка снимков рядом с заметкой: <категория>/Скриншоты.
+
+    Где в сейфе лежат снимки — решает заметка, а не сторож снимков в слое
+    платформы: ему эта папка отдаётся готовой.
+    """
+    return category_dir(meta) / SHOTS_SUBFOLDER
 
 
 def project_dir(meta: dict[str, Any]) -> Path | None:
@@ -451,7 +464,7 @@ def _note_dir(meta: dict[str, Any]) -> Path:
     Решение 20.09: у проекта главное слово. Папку проекта выбирает человек в
     сейфе целиком — она может быть где угодно, не только внутри корня записей.
     """
-    return project_dir(meta) or _category_dir(meta)
+    return project_dir(meta) or category_dir(meta)
 
 
 def _note_recording_id(path: Path) -> str:
@@ -476,7 +489,7 @@ def _unique_path(folder: Path, stem: str, rec_id: str = "") -> Path:
         return candidate
     for n in range(2, 1000):
         suffix = f" ({n})"
-        tail = _safe_name(stem, limit=MAX_STEM - len(suffix)) + suffix
+        tail = safe_name(stem, limit=MAX_STEM - len(suffix)) + suffix
         candidate = folder / f"{tail}.md"
         if not candidate.exists():
             return candidate
@@ -493,7 +506,7 @@ def note_path(meta: dict[str, Any]) -> Path:
     meta = meta or {}
     date = _meta_dt(meta).strftime("%Y-%m-%d")
     title = str(meta.get("title") or "").strip() or f"Запись {date}"
-    stem = _safe_name(f"{date} {title}", limit=MAX_STEM)
+    stem = safe_name(f"{date} {title}", limit=MAX_STEM)
     return _unique_path(_note_dir(meta), stem, str(meta.get("id") or ""))
 
 
@@ -629,7 +642,7 @@ def _frontmatter(meta: dict[str, Any], segments: list[dict[str, Any]], has_minut
         f"created: {dt.strftime('%Y-%m-%d')}",
         f"type: {NOTE_TYPE}",
         f"category: {_yaml_scalar(cat)}",
-        f"duration: {_yaml_scalar(_hms(_duration_s(meta, segments)))}",
+        f"duration: {_yaml_scalar(hms(_duration_s(meta, segments)))}",
         f"participants: {_yaml_flow_list(names)}",
         f"speakers_marked: {'true' if _speakers_marked(meta, segments) else 'false'}",
         f"speakers_named: {'true' if _speakers_named(meta, segments) else 'false'}",
@@ -641,7 +654,7 @@ def _frontmatter(meta: dict[str, Any], segments: list[dict[str, Any]], has_minut
     project = store.rec_project(meta)
     if project:
         out.append(f"project: {_yaml_scalar(project)}")
-    url = _clean_url(meta.get("url"))
+    url = clean_url(meta.get("url"))
     if url:
         out.append(f"url: {_yaml_scalar(url)}")
     # Свои теги записи идут ПОСЛЕ служебных: «hagen» и «стенограмма» остаются
@@ -695,7 +708,7 @@ def _shot_lines(shot: dict[str, Any]) -> list[str]:
     name = str(shot.get("file") or "").strip()
     if not name:
         return []
-    return [f"> 🖼 **[{_hms(shot.get('at_s'))}] Снимок экрана**", f"> ![[{name}|700]]"]
+    return [f"> 🖼 **[{hms(shot.get('at_s'))}] Снимок экрана**", f"> ![[{name}|700]]"]
 
 
 def _transcript_block(segments: list[dict[str, Any]],
@@ -754,7 +767,7 @@ def _transcript_block(segments: list[dict[str, Any]],
         prev_key = key
         # реплика — ровно одна строка, внутренние переводы строк склеиваем
         text = _escape_text(re.sub(r"\s+", " ", str(seg.get("text") or "")).strip())
-        body.append(f"**[{_hms(seg.get('start'))}] {name}{mark}:**{ref_note} {text}".rstrip())
+        body.append(f"**[{hms(seg.get('start'))}] {name}{mark}:**{ref_note} {text}".rstrip())
     if not segments:
         body = ["_Реплик нет: запись пустая или ещё не распознана._"]
     flush(None)
@@ -953,7 +966,7 @@ def _resolve_target(meta: dict[str, Any]) -> tuple[Path, Path | None]:
             same_dir = str(old.parent) == str(target_dir)
         if same_dir:
             return old, None
-        moved = _unique_path(target_dir, _safe_name(old.stem), str(meta.get("id") or ""))
+        moved = _unique_path(target_dir, safe_name(old.stem), str(meta.get("id") or ""))
         try:
             if moved.exists():
                 moved.unlink()
@@ -962,7 +975,7 @@ def _resolve_target(meta: dict[str, Any]) -> tuple[Path, Path | None]:
             return moved, None
         except OSError as exc:
             log.warning("Не удалось перенести заметку (%s), пишу заново", exc)
-            return _unique_path(target_dir, _safe_name(old.stem), str(meta.get("id") or "")), old
+            return _unique_path(target_dir, safe_name(old.stem), str(meta.get("id") or "")), old
 
     return note_path(meta), None
 

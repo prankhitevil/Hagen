@@ -118,9 +118,9 @@ class Notifier:
 class AppShell:
     """Связка окна и значка, в которой нет ни окна, ни значка."""
 
-    def __init__(self, window: Any = None, server_mod: Any = None, **kw: Any) -> None:
+    def __init__(self, window: Any = None, hooks: Any = None, **kw: Any) -> None:
         self.window = window
-        self.server = server_mod
+        self.hooks = hooks
         self.notifier: Notifier | None = kw.get("notifier")
         self.running = False
         self.opened = 0
@@ -136,12 +136,12 @@ class AppShell:
         self.opened += 1
 
 
-def app_shell(window: Any, server_mod: Any, **kw: Any) -> AppShell:
-    return AppShell(window, server_mod, **kw)
+def app_shell(window: Any, hooks: Any, **kw: Any) -> AppShell:
+    return AppShell(window, hooks, **kw)
 
 
-def make_notifier(server_mod: Any, on_open: Callable[[], Any]) -> Notifier:
-    return Notifier()
+def make_notifier(hooks: Any, on_open: Callable[[], Any]) -> Notifier:
+    return Notifier(on_answer=getattr(hooks, "answer_prompt", None))
 
 
 class Splash:

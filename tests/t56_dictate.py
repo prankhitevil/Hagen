@@ -29,6 +29,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
@@ -45,27 +46,6 @@ from hagen.platform.windows import input as win_input  # noqa: E402
 import tempfile  # noqa: E402
 
 dictate.HISTORY_PATH = Path(tempfile.mkdtemp(prefix="dictate_hist_")) / "history.json"
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 say("=== 1. Разбор сочетания клавиш ===")
@@ -536,9 +516,4 @@ check("оба щелчка записаны",
       all(p.exists() and p.stat().st_size > 1000 for p in paths.values()),
       {k: (p.exists(), p.stat().st_size if p.exists() else 0) for k, p in paths.items()})
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t56_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t56"))

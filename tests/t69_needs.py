@@ -31,31 +31,11 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 # Две модели, точная на torch: здесь проверяются отказы без части «precise».
 isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_engine="torch")
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 from hagen import config, needs  # noqa: E402
@@ -268,11 +248,7 @@ check("облаку свои модели не нужны", 'where == "cloud"' i
 check("отказ в окне ничего не качает", "finish(false)" in js and "askDownload" in js)
 check("после задачи список обновляется",
       "j.kind === 'needs'" in js and "loadNeeds()" in js)
-check("событие о скачанном обновляет список", "case 'needs':" in js)
+# Обработчик события — в таблице EVENT_HANDLERS, а не в switch.
+check("событие о скачанном обновляет список", "needs(ev) {" in js)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t69_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t69"))

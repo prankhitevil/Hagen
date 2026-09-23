@@ -38,7 +38,7 @@ def _norm(name: str) -> str:
     return re.sub(r"\s+", " ", s)
 
 
-def _similar(a: str, b: str) -> bool:
+def similar(a: str, b: str) -> bool:
     """Имена из PortAudio обрезаются, поэтому сравниваем по вхождению."""
     na, nb = _norm(a), _norm(b)
     if not na or not nb:
@@ -110,7 +110,7 @@ class _AudioThread:
         return value
 
 
-_audio_thread = _AudioThread()
+audio_thread = _AudioThread()
 
 
 _com_threads: set[int] = set()
@@ -316,8 +316,8 @@ def _list_devices() -> list[dict[str, Any]]:
                 "echo_why": risk["why"],
                 "sample_rate": int(info["defaultSampleRate"]),
                 "channels": int(info["maxInputChannels"]),
-                "is_default_output": _similar(name, multi_name) or int(info["index"]) == default_loop_index,
-                "is_communications": _similar(name, comm_name),
+                "is_default_output": similar(name, multi_name) or int(info["index"]) == default_loop_index,
+                "is_communications": similar(name, comm_name),
             })
     except Exception as err:
         log.warning("не удалось перечислить петлевые устройства: %s", err)
@@ -338,17 +338,17 @@ def _list_devices() -> list[dict[str, Any]]:
 
 def default_render_devices() -> dict[str, str]:
     """Имена устройств вывода по умолчанию: мультимедиа и связь."""
-    return _audio_thread.call(_default_render_devices)
+    return audio_thread.call(_default_render_devices)
 
 
 def list_devices() -> list[dict[str, Any]]:
     """Петлевые устройства с пометками «по умолчанию» и «устройство связи»."""
-    return _audio_thread.call(_list_devices)
+    return audio_thread.call(_list_devices)
 
 
 def list_input_devices() -> list[dict[str, Any]]:
     """Микрофоны WASAPI с их родным числом каналов."""
-    return _audio_thread.call(_list_input_devices)
+    return audio_thread.call(_list_input_devices)
 
 
 def recommended_device_index() -> int | None:
@@ -369,7 +369,7 @@ def index_for_name(name: str | None, devices: list[dict[str, Any]]) -> int | Non
         if _norm(str(d.get("name") or "")) == _norm(name):
             return int(d["index"])
     for d in devices:
-        if _similar(str(d.get("name") or ""), name):
+        if similar(str(d.get("name") or ""), name):
             return int(d["index"])
     return None
 
@@ -412,8 +412,8 @@ def _list_input_devices() -> list[dict[str, Any]]:
                 "name": name,
                 "sample_rate": int(d.get("defaultSampleRate") or 48000),
                 "channels": int(d.get("maxInputChannels") or 1),
-                "is_default": _similar(name, multi_name),
-                "is_communications": _similar(name, comm_name),
+                "is_default": similar(name, multi_name),
+                "is_communications": similar(name, comm_name),
             })
     except Exception as err:
         log.warning("не удалось перечислить микрофоны: %s", err)
@@ -438,7 +438,7 @@ def recommended_input_index() -> int | None:
     want = (config.get("mic_device_name") or "").strip()
     if want:
         for d in devs:
-            if _similar(str(d.get("name") or ""), want):
+            if similar(str(d.get("name") or ""), want):
                 return int(d["index"])
         log.warning("микрофон «%s» из настроек не найден, беру по умолчанию", want)
     # Устройство СВЯЗИ вперёд обычного: именно его Windows отдаёт звонкам, и
@@ -468,7 +468,7 @@ def render_index_for(loopback_index: int) -> int | None:
             d = pa.get_device_info_by_index(i)
             if d.get("hostApi") != host or int(d.get("maxOutputChannels") or 0) <= 0:
                 continue
-            if _similar(str(d.get("name") or ""), want):
+            if similar(str(d.get("name") or ""), want):
                 return i
             if best is None:
                 best = i
@@ -591,11 +591,11 @@ class LoopbackRecorder:
     # ---------------------------------------- запуск и остановка
     def start(self) -> None:
         """Открыть поток. Выполняется в звуковом потоке, см. _AudioThread."""
-        _audio_thread.call(self._start_impl)
+        audio_thread.call(self._start_impl)
 
     def stop(self) -> None:
         """Закрыть поток. Тоже строго в звуковом потоке."""
-        _audio_thread.call(self._stop_impl)
+        audio_thread.call(self._stop_impl)
 
     def _start_impl(self) -> None:
         import pyaudiowpatch as pyaudio
@@ -918,4 +918,4 @@ def _diag_impl() -> dict[str, Any]:
 
 
 def diagnose() -> dict[str, Any]:
-    return _audio_thread.call(_diag_impl)
+    return audio_thread.call(_diag_impl)

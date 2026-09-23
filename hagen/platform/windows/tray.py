@@ -23,12 +23,12 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs
 
 from ... import config
+from .win32window import MessageWindow
 
 log = logging.getLogger("hagen.tray")
 
@@ -330,102 +330,78 @@ class Notifier:
 # ---------------------------------------------------------------- значок у часов
 
 
-class Tray:
-    """Значок в области уведомлений: Win32, свой поток и цикл сообщений."""
+class Tray(MessageWindow):
+    """Значок в области уведомлений — на общем основании `MessageWindow`."""
 
     ID_OPEN, ID_RECORD, ID_QUIT = 1001, 1002, 1003
+    CLASS_NAME = "HagenTray"
+    TITLE = APP_NAME
+    THREAD_NAME = "tray"
+    FAIL_TEXT = "значок в трее не появился"
 
     def __init__(self, on_open: Callable[[], Any], on_record: Callable[[], Any],
                  on_quit: Callable[[], Any], is_recording: Callable[[], bool]) -> None:
         import win32con
 
+        super().__init__()
         self.WM_TRAY = win32con.WM_USER + 20
         self.on_open = on_open
         self.on_record = on_record
         self.on_quit = on_quit
         self.is_recording = is_recording
-        self.hwnd: int | None = None
         self._icons: dict[str, Any] = {}
         self._state = {"recording": False, "paused": False,
                        "mic_muted": False, "tip": APP_NAME}
-        self._ready = threading.Event()
-        self._thread: threading.Thread | None = None
         self._poll_stop = threading.Event()
-        self.error: str | None = None
 
     # -------- жизненный цикл
     def start(self, timeout: float = 5.0) -> bool:
-        self._thread = threading.Thread(target=self._run, name="tray", daemon=True)
-        self._thread.start()
-        self._ready.wait(timeout)
-        if self.hwnd:
+        ok = super().start(timeout)
+        if ok:
             threading.Thread(target=self._poll, name="tray-poll", daemon=True).start()
-        return bool(self.hwnd)
+        return ok
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5.0) -> None:
+        self._poll_stop.set()
+        super().stop(timeout)
+
+    def _handlers(self) -> dict[int, Callable[..., int]]:
         import win32con
         import win32gui
 
-        self._poll_stop.set()
-        if self.hwnd:
-            try:
-                win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
-            except Exception:
-                pass
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        self._taskbar_msg = win32gui.RegisterWindowMessage("TaskbarCreated")
+        return {
+            win32con.WM_COMMAND: self._on_command,
+            self.WM_TRAY: self._on_tray,
+            self._taskbar_msg: self._on_taskbar_created,
+        }
 
-    @property
-    def running(self) -> bool:
-        return bool(self.hwnd) and self._thread is not None and self._thread.is_alive()
-
-    def _run(self) -> None:
+    def _created(self, hwnd: int) -> None:
         import win32api
         import win32con
         import win32gui
 
-        try:
-            hinst = win32api.GetModuleHandle(None)
-            self._taskbar_msg = win32gui.RegisterWindowMessage("TaskbarCreated")
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = hinst
-            wc.lpszClassName = "HagenTray"
-            wc.lpfnWndProc = {
-                win32con.WM_DESTROY: self._on_destroy,
-                win32con.WM_COMMAND: self._on_command,
-                self.WM_TRAY: self._on_tray,
-                self._taskbar_msg: self._on_taskbar_created,
-            }
-            try:
-                win32gui.RegisterClass(wc)
-            except win32gui.error:
-                pass                          # класс уже зарегистрирован этим процессом
-            self.hwnd = win32gui.CreateWindow(wc.lpszClassName, APP_NAME, win32con.WS_OVERLAPPED,
-                                              0, 0, 0, 0, 0, 0, hinst, None)
-            paths = icon_paths()
-            flags = win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
-            for key, path in paths.items():
-                self._icons[key] = win32gui.LoadImage(hinst, str(path), win32con.IMAGE_ICON,
-                                                      0, 0, flags)
-            self._notify(win32gui.NIM_ADD)
-            log.info("значок в трее показан")
-        except Exception as err:
-            self.error = str(err)
-            log.warning("значок в трее не появился: %s", err)
-            self.hwnd = None
-            self._ready.set()
-            return
-        self._ready.set()
-        win32gui.PumpMessages()
+        hinst = win32api.GetModuleHandle(None)
+        flags = win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+        for key, path in icon_paths().items():
+            self._icons[key] = win32gui.LoadImage(hinst, str(path), win32con.IMAGE_ICON,
+                                                  0, 0, flags)
+        self._notify(win32gui.NIM_ADD, hwnd)
+        log.info("значок в трее показан")
 
-    def _notify(self, action: int) -> None:
+    def _destroying(self, hwnd: int) -> None:
+        import win32gui
+
+        self._notify(win32gui.NIM_DELETE, hwnd)
+
+    def _notify(self, action: int, hwnd: int | None = None) -> None:
         import win32gui
 
         # Порядок важности состояний — в icon_for (решение 17.09).
         # Если нужного значка нет на диске, берём обычный, а не падаем.
         want = icon_for(self._state)
         icon = self._icons.get(want) or self._icons.get("idle")
-        nid = (self.hwnd, 0, win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
+        nid = (hwnd or self.hwnd, 0, win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
                self.WM_TRAY, icon, self._state["tip"][:120])
         win32gui.Shell_NotifyIcon(action, nid)
 
@@ -462,17 +438,6 @@ class Tray:
                 log.debug("опрос состояния для значка не удался", exc_info=True)
 
     # -------- сообщения окна
-    def _on_destroy(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        import win32gui
-
-        try:
-            self._notify(win32gui.NIM_DELETE)
-        except Exception:
-            pass
-        self.hwnd = None
-        win32gui.PostQuitMessage(0)
-        return 0
-
     def _on_taskbar_created(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
         import win32gui
 
@@ -553,10 +518,10 @@ class AppShell:
     окна.
     """
 
-    def __init__(self, window: Any, server_mod: Any, notifier: Notifier | None = None,
+    def __init__(self, window: Any, hooks: Any, notifier: Notifier | None = None,
                  ask: Callable[[str, str], bool] = ask_yes_no) -> None:
         self.window = window
-        self.server = server_mod
+        self.hooks = hooks
         self.notifier = notifier
         self.ask = ask
         self.tray: Tray | None = None
@@ -572,20 +537,19 @@ class AppShell:
             log.debug("окно не показалось", exc_info=True)
 
     def toggle_recording(self) -> None:
-        rec = self.server._call_active_recording()
+        rec = self.hooks.active_recording()
         if rec:
-            self.server._call_stop_recording(rec)
+            self.hooks.stop_recording(rec)
             return
-        body = {"category": config.get("default_category")}
-        self.server._loop_call(self.server._create_recording(body), timeout=60)
+        self.hooks.start_recording()
 
     def quit(self) -> None:
-        rec = self.server._call_active_recording()
+        rec = self.hooks.active_recording()
         if rec:
             if not self.ask("Hagen", "Сейчас идёт запись. Остановить её и выйти?"):
                 return
             try:
-                self.server._call_stop_recording(rec)
+                self.hooks.stop_recording(rec)
             except Exception:
                 log.error("запись при выходе не остановилась", exc_info=True)
         self.quitting = True
@@ -620,35 +584,24 @@ class AppShell:
         """Поднять значок и подписать уведомления на вопросы автоматики звонков."""
         self.tray = Tray(on_open=self.open_window, on_record=self.toggle_recording,
                          on_quit=self.quit,
-                         is_recording=lambda: bool(self.server._call_active_recording()))
+                         is_recording=lambda: bool(self.hooks.active_recording()))
         ok = self.tray.start()
         if self.notifier is not None:
-            threading.Thread(target=self._subscribe, name="tray-subscribe", daemon=True).start()
-        return ok
-
-    def _subscribe(self) -> None:
-        # автоматика звонков создаётся при старте службы — дождёмся её
-        for _ in range(100):
-            calls = getattr(self.server, "_calls", None)
-            if calls is not None:
-                calls.add_listener(self.notifier.show_prompt)
+            try:
+                self.hooks.add_prompt_listener(self.notifier.show_prompt)
                 log.info("уведомления Windows подписаны на вопросы о звонках")
-                return
-            time.sleep(0.2)
-        log.info("автоматики звонков нет — уведомления о звонках не подписаны")
+            except Exception as err:
+                log.info("уведомления о звонках не подписаны: %s", err)
+        return ok
 
     def stop(self) -> None:
         if self.tray is not None:
             self.tray.stop()
 
 
-def make_notifier(server_mod: Any, on_open: Callable[[], Any]) -> Notifier | None:
-    def answer(prompt_id: str, button: str) -> None:
-        calls = getattr(server_mod, "_calls", None)
-        if calls is not None:
-            calls.answer(prompt_id, button, source="toast")
+def make_notifier(hooks: Any, on_open: Callable[[], Any]) -> Notifier | None:
     try:
-        return Notifier(on_answer=answer, on_open=on_open)
+        return Notifier(on_answer=hooks.answer_prompt, on_open=on_open)
     except Exception as err:
         log.warning("уведомления Windows с кнопками недоступны: %s", err)
         return None

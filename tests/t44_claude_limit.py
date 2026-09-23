@@ -27,32 +27,14 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящие база голосов и настройки не трогаются
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 # Служба при запуске переносит старые настройки и пишет их в файл: на
 # настоящем settings.json проверка переписала бы настройки человека.
-isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
+# Защита выхода в сеть выключена: здесь подставной CLI, а не настоящий, и
+# порта VPN у проверки нет (сама защита — t111).
+isolate.settings(claude_cli_guard="off")
 
 
 from hagen import config, jobs, minutes, store  # noqa: E402
@@ -303,9 +285,4 @@ server.hub.publish = real_publish
 minutes._claude_args = _real_args
 FAKE.unlink(missing_ok=True)
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t44_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t44"))

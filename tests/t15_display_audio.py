@@ -28,28 +28,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
-
-LINES = []
-FAIL = []
-
-
-def say(msg=""):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name
-        + (": " + str(detail)[:300] if detail != "" else ""))
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 
 import winsound  # noqa: E402
@@ -76,9 +55,9 @@ isolate.settings(mode="online", record_far=True,
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from hagen import server  # noqa: E402
+from hagen import dictation, server  # noqa: E402
 
-server._start_dictation = lambda: None
+dictation.start = lambda: None       # клавишу диктовки в проверке не занимаем
 ORIGIN = {"Origin": "http://127.0.0.1:8787"}
 
 
@@ -194,9 +173,4 @@ finally:
         except Exception:
             pass
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t15_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t15"))

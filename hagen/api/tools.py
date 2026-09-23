@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 from .. import config, platform
 from ..events import hub
-from .deps import mic_pill
+from ..recordings import mic_pill
 
 log = logging.getLogger("hagen.server")
 

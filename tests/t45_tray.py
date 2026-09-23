@@ -27,35 +27,16 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import isolate  # noqa: E402  настоящая база голосов не трогается
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 import win32con  # noqa: E402
 import win32gui  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from hagen.platform.base import ShellHooks  # noqa: E402
 from hagen.platform.windows import tray  # noqa: E402
 
 say("=== 1. Значки ===")
@@ -194,15 +175,20 @@ class FakeWindow:
 
 
 class FakeServer:
+    """Ядро глазами оболочки: только то, что перечислено в ShellHooks."""
+
     def __init__(self):
         self.active = None
         self.stopped = []
-        self._calls = None
 
-    def _call_active_recording(self):
-        return self.active
+    def hooks(self):
+        return ShellHooks(active_recording=lambda: self.active,
+                          start_recording=lambda: "new",
+                          stop_recording=self._stop,
+                          add_prompt_listener=lambda fn: None,
+                          answer_prompt=lambda pid, btn: None)
 
-    def _call_stop_recording(self, rec_id):
+    def _stop(self, rec_id):
         self.stopped.append(rec_id)
         self.active = None
 
@@ -210,7 +196,7 @@ class FakeServer:
 asked = []
 win = FakeWindow()
 srv = FakeServer()
-shell = tray.AppShell(win, srv, notifier=None, ask=lambda t_, x: asked.append(x) or asked_answer[0])
+shell = tray.AppShell(win, srv.hooks(), notifier=None, ask=lambda t_, x: asked.append(x) or asked_answer[0])
 asked_answer = [False]
 shell.start()
 time.sleep(0.3)
@@ -230,7 +216,7 @@ check("ответ «Да» — запись остановлена и окно �
       srv.stopped == ["rec1"] and win.log[-1] == "destroy" and shell.quitting, (srv.stopped, win.log))
 check("после «Выхода» крестик закрывает по-настоящему", shell.on_closing() is True)
 shell.stop()
-shell2 = tray.AppShell(FakeWindow(), FakeServer())
+shell2 = tray.AppShell(FakeWindow(), FakeServer().hooks())
 check("без значка крестик закрывает, как раньше", shell2.on_closing() is True)
 
 say("")
@@ -271,9 +257,4 @@ with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
     check("с окном — показывает", r.json().get("shown") is True and shown == [1], (r.text, shown))
     server._app_hooks.clear()
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t45_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t45"))

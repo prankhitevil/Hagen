@@ -27,37 +27,17 @@ sys.path.insert(0, str(PROJECT / "tests"))
 # в настоящие настройки, и проверка краснела, когда меняли сочетание
 # диктовки или свои замены (найдено 14.09 на рабочем ноутбуке).
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (у нас бывает cp1251) — пишем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail) if detail != "" else ""))
 
 
 import uvicorn  # noqa: E402
 import webview  # noqa: E402
 
 from hagen import config as config_mod  # noqa: E402
-from hagen import server  # noqa: E402
+from hagen import dictation, server  # noqa: E402
 
 # Настоящий settings.json проверка не трогает: выбор темы и плотности на
 # странице сохраняется сюда, а служба читает его отсюда же.
@@ -80,7 +60,7 @@ config_mod.public = lambda: dict(_real_public(), **VIEW)
 # настоящих настройках. Отбирать рабочее сочетание проверка не
 # должна — тем более что настоящий «Hagen» может быть запущен рядом.
 # Саму диктовку проверяет t56, здесь нужен только вид её настроек.
-server._start_dictation = lambda: None
+dictation.start = lambda: None       # клавишу диктовки в проверке не занимаем
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -1029,9 +1009,4 @@ check("после подтверждения входа поиск прошёл 
 check("код после входа убран", la.get("loginShown") is False, la)
 check("поздних ошибок JavaScript нет", result.get("late_errors") in ("[]", None), result.get("late_errors"))
 
-say("")
-say("ИТОГО провалов: %d" % len(FAIL))
-for f in FAIL:
-    say("   - " + f)
-io.open(PROJECT / "tests" / "t49_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t49"))

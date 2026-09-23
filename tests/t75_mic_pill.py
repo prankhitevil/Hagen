@@ -28,30 +28,10 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 import isolate  # noqa: E402
+from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
 isolate.settings()
-
-LINES = []
-FAIL = []
-
-
-def say(msg):
-    LINES.append(str(msg))
-    try:
-        print(str(msg), flush=True)
-    except Exception:
-        # Консоль не знает этих букв (бывает cp1251) — печатаем без них.
-        try:
-            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
-
-
-def check(name, ok, detail=""):
-    if not ok:
-        FAIL.append(name)
-    say(("   ok    " if ok else "   ПЛОХО ") + name + (": " + str(detail)[:300] if detail != "" else ""))
 
 
 import win32con  # noqa: E402
@@ -171,16 +151,17 @@ try:
 
     say("")
     say("=== 6. Связь с записью ===")
+    # Жизненный цикл записи и обвязка кружка живут в ядре (recordings.py):
+    # старт и продолжение идут одним путём, остановка — тремя (стоп, «не
+    # писать», «дописать в прошлую»).
     srv = io.open(PROJECT / "hagen" / "server.py", encoding="utf-8").read()
-    check("показывается при старте записи", srv.count("sync_mic_pill(True)") == 2,
-          srv.count("sync_mic_pill(True)"))
-    check("убирается на всех путях остановки", srv.count("sync_mic_pill(False)") == 3,
-          srv.count("sync_mic_pill(False)"))
-    # Обвязка кружка и маршруты микрофона переехали в роутеры: смотрим туда,
-    # где код живёт теперь.
-    deps = io.open(PROJECT / "hagen" / "api" / "deps.py", encoding="utf-8").read()
+    core = io.open(PROJECT / "hagen" / "recordings.py", encoding="utf-8").read()
+    check("показывается при старте записи", core.count("sync_mic_pill(True)") == 1,
+          core.count("sync_mic_pill(True)"))
+    check("убирается на всех путях остановки", core.count("sync_mic_pill(False)") == 3,
+          core.count("sync_mic_pill(False)"))
     tools = io.open(PROJECT / "hagen" / "api" / "tools.py", encoding="utf-8").read()
-    check("слушается настройка", 'config.get("mic_pill", True)' in deps)
+    check("слушается настройка", 'config.get("mic_pill", True)' in core)
     check("снятая галочка убирает кружок сразу", 'if "mic_pill" in patch:' in srv)
     check("кнопка в окне не расходится с кружком",
           "pill.set_muted(bool(out.get(\"muted\")))" in tools)
@@ -191,7 +172,8 @@ try:
     html = io.open(PROJECT / "hagen" / "static" / "index.html", encoding="utf-8").read()
     js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
     check("галочка есть", 'id="set-mic-pill"' in html)
-    check("в подсказке сказано про последствие", "ни собеседники, ни запись" in html)
+    # Подсказка рисуется скриптом (ревью 22.09), поэтому ищем и в html, и в js.
+    check("в подсказке сказано про последствие", "ни собеседники, ни запись" in html + js)
     check("галочка читается", "$('set-mic-pill').checked = s.mic_pill !== false;" in js)
     check("галочка сохраняется", "mic_pill: $('set-mic-pill').checked," in js)
 
@@ -206,9 +188,4 @@ finally:
     except Exception:
         pass
 
-say("")
-say("Всего замечаний: %d" % len(FAIL))
-for name in FAIL:
-    say("   — " + name)
-io.open(PROJECT / "tests" / "t75_result.txt", "w", encoding="utf-8").write("\n".join(LINES))
-sys.exit(1 if FAIL else 0)
+sys.exit(finish("t75"))

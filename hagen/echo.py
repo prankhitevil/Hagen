@@ -197,8 +197,7 @@ def mark_by_voice(rec_id: str, embed_fn: Any = None) -> int:
     from . import audio_io, diarize
 
     embed_fn = embed_fn or diarize.embed_spans
-    with store._lock_for(rec_id):
-        data = store.load_transcript(rec_id)
+    with store.edit_transcript(rec_id) as data:
         segments = data.get("segments") or []
         far_segs = [s for s in segments if s.get("track") == store.TRACK_FAR]
         mic_segs = [s for s in segments if s.get("track") == store.TRACK_MIC
@@ -244,8 +243,6 @@ def mark_by_voice(rec_id: str, embed_fn: Any = None) -> int:
             seg["echo"] = True
             seg["echo_by"] = "голос"
             marked += 1
-        if marked:
-            store._write_json(store.paths(rec_id)["transcript"], data)
     if marked:
         log.info("запись %s: отсеяно эхо по голосу, реплик — %d", rec_id, marked)
     return marked
@@ -260,8 +257,7 @@ def mark(rec_id: str) -> int:
     """
     if not enabled():
         return 0
-    with store._lock_for(rec_id):
-        data = store.load_transcript(rec_id)
+    with store.edit_transcript(rec_id) as data:
         segments = data.get("segments") or []
         far_segs = [s for s in segments if s.get("track") == store.TRACK_FAR]
         if not far_segs:
@@ -281,7 +277,6 @@ def mark(rec_id: str) -> int:
             elif was:
                 seg.pop("echo", None)
                 seg.pop("echo_of", None)
-        store._write_json(store.paths(rec_id)["transcript"], data)
     if marked:
         log.info("запись %s: отсеяно эхо колонок, реплик — %d", rec_id, marked)
     return marked

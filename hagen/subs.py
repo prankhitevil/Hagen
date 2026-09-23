@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import store
+from . import jobs, store
 
 log = logging.getLogger("hagen.subs")
 
@@ -78,28 +78,13 @@ _NOT_A_NAME = {
 # ---------------------------------------------------------------- мелкие помощники
 
 
-def _check_cancel(handle: Any) -> None:
-    if handle is not None and getattr(handle, "cancelled", False):
-        raise RuntimeError("отменено")
-
-
-def _note(handle: Any, value: float, text: str) -> None:
-    """Отчёт о прогрессе. Задача не должна падать из-за сломанного handle."""
-    if handle is None:
-        return
-    try:
-        handle.progress(value, text)
-    except Exception:
-        pass
-
-
 def _shown_name(path: Any) -> str:
     """Имя файла, пригодное для лога и текста ошибки: без хвоста ссылки.
 
     Путь может прийти собранным из преавторизованной ссылки SharePoint, и тогда
     в Path(...).name сидит «?tempauth=…» — то есть живой токен. В лог и в
     сообщение об ошибке он попасть не должен ни при каких условиях, поэтому
-    хвост запроса режем прямо здесь. obsidian._clean_url тут не подходит: он
+    хвост запроса режем прямо здесь. obsidian.clean_url тут не подходит: он
     умеет только http/https-ссылки и на локальном пути вернул бы пустую строку.
     """
     return Path(path).name.split("?", 1)[0].split("#", 1)[0].strip() or "без имени"
@@ -314,6 +299,7 @@ def load_cues(path: Any, handle: Any = None) -> list[dict[str, Any]]:
     store.load_transcript (она читает стенограмму записи), поэтому разбор
     файла назван иначе.
     """
+    handle = jobs.as_handle(handle)
     p = Path(path)
     try:
         exists = p.is_file()
@@ -322,21 +308,21 @@ def load_cues(path: Any, handle: Any = None) -> list[dict[str, Any]]:
     if not exists:
         raise RuntimeError("Файл субтитров не найден: %s" % _shown_name(p))
 
-    _note(handle, 0.05, "читаю файл субтитров")
+    handle.progress(0.05, "читаю файл субтитров")
     raw = _read_text_any(p)
-    _check_cancel(handle)
+    handle.check()
 
     cues = parse_cues(raw)
-    _note(handle, 0.5, "разбираю реплики")
+    handle.progress(0.5, "разбираю реплики")
     if looks_rolling(raw):           # автосубтитры: сперва убрать наезды
         was = len(cues)
         cues = dedup_rolling(cues)
         log.info("автосубтитры %s: было %d наезжающих реплик, осталось %d",
                  _shown_name(p), was, len(cues))
-    _check_cancel(handle)
+    handle.check()
 
     cues = merge_cues(cues)
-    _note(handle, 0.9, "склеиваю короткие реплики")
+    handle.progress(0.9, "склеиваю короткие реплики")
     return cues
 
 
@@ -350,6 +336,7 @@ def load_segments(path: Any, handle: Any = None) -> list[dict[str, Any]]:
     подпишет её обычным «Участником» дорожки файла, а уточнить можно
     разметкой по голосам или руками.
     """
+    handle = jobs.as_handle(handle)
     p = Path(path)
     cues = load_cues(p, handle)
     if not cues:
@@ -376,7 +363,7 @@ def load_segments(path: Any, handle: Any = None) -> list[dict[str, Any]]:
             speaker=name or None,
             speaker_key=key,
         ))
-    _note(handle, 1.0, "субтитры разобраны")
+    handle.progress(1.0, "субтитры разобраны")
     log.info("субтитры %s: реплик — %d, говорящих — %d",
              _shown_name(p), len(segments), len(keys))
     return segments
