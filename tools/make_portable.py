@@ -8,10 +8,11 @@
 Движок разметки говорящих выбирает ключ --diarize (по умолчанию — как в
 release.json этой папки), и он же пишется в release.json сборки:
   * onnx — модель лежит в models\\diar, токен не нужен; в сборку не кладутся
-    ни кэш моделей pyannote, ни библиотеки, которые нужны только ему (их
-    список считается по зависимостям пакетов, а не вручную);
-  * pyannote — как раньше: pyannote.audio и его модели в сборке, получателю
-    нужен свой токен Hugging Face.
+    ни кэш моделей pyannote, ни библиотеки, которых нет в requirements.txt
+    (их список считается по зависимостям пакетов, а не вручную: torch и его
+    спутники, gigaam, silero-vad — инструменты мастерской — не едут);
+  * pyannote — как раньше: pyannote.audio, torch и модели pyannote в сборке,
+    получателю нужен свой токен Hugging Face.
 
 Что попадает в архив:
   * код, проверки (без результатов прогонов), документы, пакет тем;
@@ -101,7 +102,8 @@ SECRET_KEYS = ("hf_token", "api_keys", "yt_proxy", "todoist_token", "lan_key")
 #: это качается по требованию (решение 16.09). Путь — относительно папки
 #: программы.
 #: * playwright (100 МБ) — ставится по кнопке, нужен только входу в SharePoint.
-#: torch остаётся: без него не работает поиск речи (silero-vad) при каждой записи.
+#: Всё, чего нет в requirements.txt (torch и его спутники, gigaam, silero-vad —
+#: инструменты мастерской), в сборку не идёт: см. venv_skips.
 SKIP_HEAVY = (
     (".venv", "Lib", "site-packages", "playwright"),
 )
@@ -153,9 +155,10 @@ def model_skips() -> set[tuple[str, ...]]:
 
     Кладётся одна рекомендованная точная модель (asr.recommended_part): на ней
     программа сразу, без интернета, распознаёт всё — звонки, голосовой ввод,
-    файлы. Остальное — быстрая модель, torch, вторые веса onnx-asr, английская,
-    неиспользуемые файлы — качается кнопкой «Скачать нужное». Списки файлов те
-    же, по которым программа сама считает и удаляет модели (needs.part_files).
+    файлы. Остальное — быстрая модель, вторые веса точной, английская — качается
+    кнопкой «Скачать нужное»; файлы прежних версий (веса torch, свой экспорт в
+    ONNX) не кладутся никогда. Списки файлов те же, по которым программа сама
+    считает и удаляет модели (needs.part_files).
     """
     from hagen import asr, config, needs
 
@@ -176,42 +179,69 @@ def _dist_name(requirement: str) -> str:
     return re.sub(r"[-_.]+", "-", head).lower()
 
 
+def _extras(requirement: str) -> set[str]:
+    """«uvicorn[standard]» → {"standard"}: какие необязательные части просят."""
+    import re
+
+    m = re.search(r"\[([^\]]*)\]", requirement.split(";", 1)[0])
+    return {e.strip().lower() for e in m.group(1).split(",") if e.strip()} if m else set()
+
+
 def _closure(roots: list[str]) -> set[str]:
-    """Пакеты вместе со всеми обязательными зависимостями (без необязательных extra)."""
+    """Пакеты вместе со всеми зависимостями. Необязательные части (extra)
+    берутся только те, что названы в корне: «uvicorn[standard]» тянет свои."""
+    import re
     from importlib import metadata
 
     seen: set[str] = set()
-    todo = [_dist_name(r) for r in roots]
+    todo = [(_dist_name(r), _extras(r)) for r in roots]
     while todo:
-        name = todo.pop()
-        if name in seen:
+        name, extras = todo.pop()
+        if (name, tuple(sorted(extras))) in seen:
             continue
         try:
             reqs = metadata.requires(name) or []
         except metadata.PackageNotFoundError:
             continue
-        seen.add(name)
-        todo.extend(_dist_name(r) for r in reqs if "extra ==" not in r and "extra==" not in r)
-    return seen
+        seen.add((name, tuple(sorted(extras))))
+        for r in reqs:
+            m = re.search(r"""extra\s*==\s*['"]([^'"]+)['"]""", r)
+            if m and m.group(1).lower() not in extras:
+                continue
+            todo.append((_dist_name(r), _extras(r)))
+    return {name for name, _ in seen}
 
 
-def pyannote_skips(root: Path = PROJECT) -> set[tuple[str, ...]]:
-    """Что не кладётся в сборку с разметкой ONNX: всё, что нужно только pyannote.
+def _requirement_roots(path: Path) -> list[str]:
+    """Строки requirements-файла, вложенные «-r» раскрыты."""
+    out: list[str] = []
+    for line in io.open(path, encoding="utf-8"):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("-r"):
+            out += _requirement_roots(path.parent / line[2:].strip())
+        elif not line.startswith("-"):
+            out.append(line)
+    return out
 
-    Библиотеки — те, что тянет pyannote.audio и не тянет ничто из
-    requirements.txt (то есть чего не было бы при чистой установке релиза
-    ONNX). Считается по метаданным пакетов этого окружения: список сам
-    следует за версиями. Плюс модели pyannote в кэше Hugging Face.
+
+def venv_skips(root: Path = PROJECT, engine: str = "onnx") -> set[tuple[str, ...]]:
+    """Что из .venv не кладётся в сборку: всё, чего нет в наборе зависимостей релиза.
+
+    Релизу ONNX нужен requirements.txt, релизу с pyannote — ещё
+    requirements-pyannote.txt. Всё прочее в окружении — инструменты мастерской:
+    torch с его спутниками, gigaam, silero-vad (нужны только для экспорта
+    моделей), pyannote у релиза ONNX. Считается по метаданным пакетов этого
+    окружения: список сам следует за версиями. Плюс у релиза ONNX — модели
+    pyannote в кэше Hugging Face.
     """
     from importlib import metadata
 
-    keep_roots = ["torch", "torchaudio", "pip", "setuptools", "wheel"]
-    for line in io.open(root / "requirements.txt", encoding="utf-8"):
-        line = line.split("#", 1)[0].strip()
-        if line and not line.startswith("-"):
-            keep_roots.append(line)
+    keep_roots = ["pip", "setuptools", "wheel"] + _requirement_roots(
+        root / ("requirements-pyannote.txt" if engine == "pyannote" else "requirements.txt"))
     keep = _closure(keep_roots)
-    drop = _closure(["pyannote.audio"]) - keep
+    drop = {_dist_name(d.metadata["Name"]) for d in metadata.distributions()} - keep
 
     def entries(dists: set[str]) -> tuple[set[str], set[str]]:
         """Верхние имена в site-packages и лаунчеры в Scripts у этих пакетов."""
@@ -237,20 +267,21 @@ def pyannote_skips(root: Path = PROJECT) -> set[tuple[str, ...]]:
     site = (".venv", "Lib", "site-packages")
     out = {site + (t,) for t in drop_tops - keep_tops}
     out |= {(".venv", "Scripts", s) for s in drop_scripts - keep_scripts}
-    for sub in ("hub", "hub/.locks"):
-        folder = root / "models" / "hf" / sub
-        if folder.is_dir():
-            out |= {("models", "hf") + tuple(sub.split("/")) + (p.name,)
-                    for p in folder.iterdir() if p.name.startswith("models--pyannote--")}
+    if engine == "onnx":
+        for sub in ("hub", "hub/.locks"):
+            folder = root / "models" / "hf" / sub
+            if folder.is_dir():
+                out |= {("models", "hf") + tuple(sub.split("/")) + (p.name,)
+                        for p in folder.iterdir() if p.name.startswith("models--pyannote--")}
     return out
 
 
 def ignore_for(root: Path, lean: bool = True, engine: str = "onnx"):
     """Что не копировать. ``lean`` — без тяжёлого, которое качается по требованию;
-    ``engine`` — движок разметки сборки: у onnx не нужно ничего от pyannote."""
+    ``engine`` — движок разметки сборки: библиотеки идут по его набору
+    зависимостей, у onnx — ничего от pyannote."""
     heavy = set(SKIP_HEAVY) | model_skips() if lean else set()
-    if engine == "onnx":
-        heavy |= pyannote_skips()
+    heavy |= venv_skips(root, engine)
 
     def ignore(src: str, names: list[str]) -> set[str]:
         skip = install.prune_ignore(src, names, root)
@@ -473,7 +504,7 @@ README = """Hagen — переносимая папка
 4. Для документов по подписке — Claude CLI: установить и войти отдельно.
 5. В архиве одна модель распознавания — точная, она распознаёт всё: звонки,
    голосовой ввод, файлы. Остальное качается по кнопке, когда понадобится:
-   быстрая модель (440 МБ), английская (630 МБ), браузер для входа в
+   быстрая модель (850 МБ), английская (630 МБ), браузер для входа в
    SharePoint (100 МБ). Программа спросит перед скачиванием; выбор моделей —
    «Настройки → Модели». Запись, стенограмма и разметка говорящих работают
    сразу, без докачки.

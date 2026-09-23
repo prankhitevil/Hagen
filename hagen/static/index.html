@@ -1017,8 +1017,8 @@
           <div class="sctl" title="Та же модель нужна видео, файлам и «Перечитать точнее» — срок действует для всех">
             <input id="set-precise-idle" class="w-s" type="number" min="0" max="1440" step="5"><span>мин</span></div>
         </div>
-        <div id="memory-more" class="smore hidden">Точная модель вместе с библиотекой занимает около 1,3 ГБ
-          памяти. На старте программы она не загружается: первый раз — когда нажали сочетание, и пока
+        <div id="memory-more" class="smore hidden">Точная модель со сжатыми весами занимает около 0,3 ГБ
+          памяти, с полными — около 0,9 ГБ. На старте программы она не загружается: первый раз — когда нажали сочетание, и пока
           вы говорите, она успевает подняться. После простоя модель выгружается, и следующая фраза
           снова подождёт пару секунд. Видео и «Перечитать точнее» загружают её сами, когда нужно.</div>
       </div>
@@ -1182,20 +1182,13 @@
             <span class="shint">только когда звонки идут быстрой; файлы и видео — всегда точной</span></span></label>
         </div>
         <label id="row-live-draft" class="scheck hidden" title="Пока человек говорит, фраза видна серым и уточняется каждые полторы секунды. Во время звонка занимает 4–5 ядер процессора."><input type="checkbox" id="set-live-draft"><span>Показывать текст фразы по ходу речи</span></label>
-        <div id="row-asr-engine" class="srow">
-          <div class="slabel">Движок точной модели</div>
-          <div class="sctl"><select id="set-asr-engine" class="w-m">
-              <option value="onnx_asr">onnx-asr</option>
-              <option value="torch">torch</option>
-            </select>
-            <span class="q" tabindex="0" title="Рекомендуем onnx-asr с полными весами: текст слово в слово как у torch, памяти занимает меньше.&#10;Сжатые веса — вчетверо меньше места и втрое меньше памяти, считают быстрее, но текст чуть хуже: совпадает около 98 % слов. Подойдут, если мало места или памяти.&#10;torch — исходный вариант модели: по скорости примерно как полные веса, памяти занимает больше всех. Оставлен для желающих сравнить.">?</span></div>
-        </div>
         <div id="row-asr-weights" class="srow">
-          <div class="slabel">Веса</div>
+          <div class="slabel">Веса точной модели</div>
           <div class="sctl"><select id="set-asr-weights" class="w-m">
-              <option value="fp32">полные</option>
               <option value="int8">сжатые</option>
-            </select></div>
+              <option value="fp32">полные</option>
+            </select>
+            <span class="q" tabindex="0" title="Программа ставится со сжатыми весами: вчетверо меньше места и втрое меньше памяти, считают быстрее, совпадает около 98 % слов.&#10;Если качество стенограмм не устраивает — попробуйте полные веса: текст слово в слово как у исходной модели, около 0,9 ГБ памяти.">?</span></div>
         </div>
         <div id="asr-models-notes" class="shint"></div>
         <div id="asr-models-download" class="srow hidden">

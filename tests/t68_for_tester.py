@@ -154,7 +154,8 @@ try:
     from hagen import asr  # noqa: E402
 
     # Решение 21.09: из моделей распознавания в архиве одна — рекомендованная
-    # точная на onnx-asr с полными весами; остальное качается по кнопке.
+    # точная с полными весами; остальное качается по кнопке. Файлы прежних
+    # версий (веса torch, свой экспорт в ONNX) не кладутся никогда.
     lean = mp.ignore_for(_P("."), lean=True)
     fat = mp.ignore_for(_P("."), lean=False)
     gig = str(_P("models") / "gigaam")
@@ -165,28 +166,36 @@ try:
     check("посторонний файл не трогаем", "прочее.txt" not in lean(gig, names))
     models = str(_P("models"))
     check("папки моделей целиком не пропускаются: решают файлы",
-          not ({"onnx", "onnx-asr", "hf"} & lean(models, ["onnx", "onnx-asr", "hf"])),
-          sorted(lean(models, ["onnx", "onnx-asr", "hf"])))
+          not ({"onnx", "onnx-asr", "hf", "vad"} & lean(models, ["onnx", "onnx-asr", "hf", "vad"])),
+          sorted(lean(models, ["onnx", "onnx-asr", "hf", "vad"])))
     onnx_names = ["v3_e2e_ctc.onnx", "v3_e2e_ctc.yaml", "v3_e2e_rnnt_encoder.onnx"]
-    check("быстрая модель и неиспользуемый ONNX точной пропускаются",
+    check("свой экспорт прежних версий пропускается",
           lean(str(_P("models") / "onnx"), onnx_names) == set(onnx_names),
           sorted(lean(str(_P("models") / "onnx"), onnx_names)))
+    check("модель поиска речи кладётся",
+          not lean(str(_P("models") / "vad"), ["silero_vad.onnx"]))
     en_names = asr.english_files() + ["gigaam-v3"]
-    check("английская модель пропускается, папка точной — нет",
+    check("английская модель пропускается, папка русских — нет",
           lean(str(_P("models") / "onnx-asr"), en_names) == set(asr.english_files()),
           sorted(lean(str(_P("models") / "onnx-asr"), en_names)))
     ox = str(_P("models") / "onnx-asr" / "gigaam-v3")
-    full, packed = asr.ox_files(None), asr.ox_files("int8")
+    full, packed, fast = asr.ox_files("ox_fp32"), asr.ox_files("ox_int8"), asr.ox_files("fast")
     check("рекомендованная точная модель кладётся целиком",
-          asr.recommended_part() == "precise_ox_fp32" and not (set(full) & lean(ox, full)),
-          (asr.recommended_part(), sorted(lean(ox, full))))
-    check("сжатые веса пропускаются, общие файлы остаются",
-          lean(ox, packed) == set(packed) - set(full), sorted(lean(ox, packed)))
+          asr.recommended_part() == "precise_ox_int8" and not (set(packed) & lean(ox, packed)),
+          (asr.recommended_part(), sorted(lean(ox, packed))))
+    check("полные веса и быстрая пропускаются, общие файлы остаются",
+          lean(ox, full + fast) == set(full + fast) - set(packed), sorted(lean(ox, full + fast)))
     site = str(_P(".venv") / "Lib" / "site-packages")
-    check("playwright пропускается", "playwright" in lean(site, ["playwright", "numpy", "torch"]),
-          sorted(lean(site, ["playwright", "numpy", "torch"])))
-    check("torch остаётся: без него не работает поиск речи при записи",
-          "torch" not in lean(site, ["playwright", "numpy", "torch"]))
+    libs = ["playwright", "numpy", "torch", "onnxruntime", "onnx_asr", "gigaam", "silero_vad"]
+    check("playwright пропускается", "playwright" in lean(site, libs), sorted(lean(site, libs)))
+    from importlib import metadata as _md
+
+    workshop = {n for n in ("torch", "gigaam", "silero_vad")
+                if any(_md.distributions(name=n.replace("_", "-")))}
+    check("torch, gigaam и silero_vad (если стоят в мастерской) в сборку не идут",
+          workshop <= lean(site, libs), (sorted(workshop), sorted(lean(site, libs))))
+    check("numpy, onnxruntime и onnx_asr остаются",
+          not ({"numpy", "onnxruntime", "onnx_asr"} & lean(site, libs)), sorted(lean(site, libs)))
     check("с --all-models тяжёлое кладётся", fat(gig, names) == set(), sorted(fat(gig, names)))
     check("ключ --all-models есть", '"--all-models"' in ap_src)
     check("в памятке сказано про докачку",
@@ -203,13 +212,14 @@ try:
 
     if diar_pyannote.installed():
         check("pyannote и его зависимости не кладутся",
-              {"pyannote", "lightning", "pandas"} <= dropped, sorted(dropped))
+              {"pyannote", "lightning", "pandas", "torch"} <= dropped, sorted(dropped))
     else:
         say("   (pyannote не установлен — выкидывать нечего)")
     check("нужное программе остаётся",
-          not ({"numpy", "torch", "onnxruntime", "huggingface_hub", "PIL", "scipy"} & dropped),
+          not ({"numpy", "onnxruntime", "huggingface_hub", "PIL", "scipy"} & dropped),
           sorted(dropped))
-    check("у сборки с pyannote он остаётся", "pyannote" not in by_pya(site, libs))
+    check("у сборки с pyannote остаются и он, и torch",
+          not ({"pyannote", "torch"} & by_pya(site, libs)), sorted(by_pya(site, libs)))
     hub = str(_P("models") / "hf" / "hub")
     hub_names = ["models--pyannote--speaker-diarization-community-1",
                  "models--istupakov--parakeet-tdt-0.6b-v2-onnx"]

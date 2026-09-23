@@ -10,13 +10,15 @@ r"""Собрать опись выпуска lock.json из окружения, 
     версиями, прибитыми к тому, что стоит в .venv, — так в опись попадает
     всё окружение со всеми зависимостями зависимостей, и ровно тех версий, на
     которых всё проверялось. Для каждого пакета — адрес готовой сборки в
-    открытом каталоге (PyPI, сайт pytorch) и её сумма SHA-256;
-  - pyannote: то же для requirements-pyannote.txt, добавкой к общим пакетам;
-  - gigaam: в открытых каталогах его сборки нет, только исходники на GitHub, а
-    для них у человека должен стоять git. Поэтому сборка того самого коммита,
-    что стоит в .venv, кладётся в vendor/ и едет в выпуске. Так же — пакеты,
-    у которых на PyPI только исходники (antlr4-python3-runtime, proxy_tools):
-    при обновлении программа ставит пакеты без сети и собрать их не сможет;
+    открытом каталоге (PyPI; у пакетов pytorch — их сайт) и её сумма SHA-256.
+    torch, gigaam и silero-vad в .venv мастерской стоят, но в requirements.txt
+    их нет — в основную опись они не попадают;
+  - pyannote: то же для requirements-pyannote.txt, добавкой к общим пакетам
+    (там и torch, сборкой без CUDA);
+  - пакеты, у которых в открытых каталогах только исходники (proxy_tools):
+    собираются здесь один раз, сборка кладётся в vendor/ и едет в выпуске —
+    при обновлении программа ставит пакеты без сети и собрать их не сможет.
+    Так же — пакеты из git, если такие появятся;
   - ffmpeg: номер выпуска — из ffmpeg.exe в папке программы, архив — с
     GitHub-зеркала сборок gyan.dev (там старые выпуски не удаляют), сумму
     сообщает GitHub;
@@ -277,7 +279,8 @@ def main() -> int:
     from hagen import asr
 
     models = {
-        asr.OX_REPO: model_revision(asr.OX_REPO, asr.OX_DIR, asr.ox_files(None) + asr.ox_files("int8")),
+        asr.OX_REPO: model_revision(asr.OX_REPO, asr.OX_DIR,
+                                    sorted({f for e in asr.OX_MODELS for f in asr.ox_files(e)})),
         asr.EN_REPO: model_revision(asr.EN_REPO, asr.EN_DIR,
                                     ["encoder-model.int8.onnx", "decoder_joint-model.int8.onnx",
                                      "nemo128.onnx", "vocab.txt", "config.json"]),

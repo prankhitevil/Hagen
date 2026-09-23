@@ -5042,8 +5042,7 @@ function fillAsrModels() {
   $('set-asr-voice').value = s.asr_voice || 'precise';
   $('set-asr-reread').checked = s.asr_reread !== false;
   $('set-live-draft').checked = !!s.live_draft;
-  $('set-asr-engine').value = s.asr_engine || 'onnx_asr';
-  $('set-asr-weights').value = s.asr_weights || 'fp32';
+  $('set-asr-weights').value = s.asr_weights || 'int8';
   paintAsrRows();
 }
 
@@ -5055,7 +5054,6 @@ function collectAsrModels() {
     asr_voice: $('set-asr-voice').value,
     asr_reread: $('set-asr-reread').checked,
     live_draft: $('set-live-draft').checked,
-    asr_engine: $('set-asr-engine').value,
     asr_weights: $('set-asr-weights').value,
   };
 }
@@ -5068,10 +5066,9 @@ function paintAsrRows() {
   $('row-asr-two').classList.toggle('hidden', !two);
   $('set-asr-reread').disabled = !(two && fastCalls);
   $('row-live-draft').classList.toggle('hidden', !fastCalls);
+  // Веса — у точной модели: одна быстрая на всё обходится без них.
   const noPrecise = !two && $('set-asr-single').value === 'fast';
-  $('row-asr-engine').classList.toggle('hidden', noPrecise);
-  // Веса — у движка onnx-asr, и только когда виден сам движок.
-  $('row-asr-weights').classList.toggle('hidden', noPrecise || $('set-asr-engine').value !== 'onnx_asr');
+  $('row-asr-weights').classList.toggle('hidden', noPrecise);
   // Срок выгрузки точной модели ничего не значит при одной точной модели на
   // всё: она служит записи и не выгружается никогда.
   const onePrecise = !two && $('set-asr-single').value === 'precise';
@@ -5569,7 +5566,7 @@ function bindSettings() {
   $('set-engine').onchange = () => { refreshModelsHint(); paintEngineState(); toggleApiFields(); };
   // Модели распознавания: какие поля видны — сразу, что скачать и что не
   // нужно — после сохранения выбора (applySettings зовёт loadAsrModels).
-  ['set-asr-count', 'set-asr-single', 'set-asr-calls', 'set-asr-engine'].forEach((id) => {
+  ['set-asr-count', 'set-asr-single', 'set-asr-calls'].forEach((id) => {
     $(id).addEventListener('change', paintAsrRows);
   });
   $('btn-asr-download').onclick = () => asrModelsAction('/api/asr/models/download', {}, (res) => {
@@ -5582,8 +5579,8 @@ function bindSettings() {
     });
   $('btn-asr-keep').onclick = () => asrModelsAction('/api/asr/models/cleanup', { action: 'keep' });
   $('btn-asr-reset').onclick = () => {
-    if (!confirm('Сбросить модели распознавания? Останется одна точная модель (onnx-asr, '
-      + 'полные веса) и рекомендованные настройки, остальные модели удалятся. Программа '
+    if (!confirm('Сбросить модели распознавания? Останется одна точная модель (полные '
+      + 'веса) и рекомендованные настройки, остальные модели удалятся. Программа '
       + 'доработает на прежних моделях до перезапуска.')) return;
     asrModelsAction('/api/asr/models/reset', {}, () => {
       notice('Модели сбрасываются. Ход виден слева, в блоке «В работе».', 'ok');
@@ -5831,8 +5828,8 @@ function bindDevices() {
     if (!S.currentId) return;
     // Точная модель может быть не скачана: спросим до того, как человек
     // выберет число голосов и будет ждать (решение 16.09). Какая именно часть
-    // нужна, говорит служба: у варианта распознавания на onnx-asr она своя.
-    if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise')) return;
+    // нужна, говорит служба: у сжатых и полных весов она своя.
+    if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise_ox_int8')) return;
     openVoices('repass');
   };
   document.querySelectorAll('#repass-ask .tpl').forEach((t) => {

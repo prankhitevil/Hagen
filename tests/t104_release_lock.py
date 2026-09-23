@@ -73,8 +73,13 @@ try:
     check("у каждого пакета готовая сборка (.whl), собирать ничего не надо", not no_whl, no_whl)
     no_sha = [p["name"] for p in full if not re.fullmatch(r"[0-9a-f]{64}", str(p.get("sha256") or ""))]
     check("у каждого пакета сумма SHA-256", not no_sha, no_sha)
-    torch_src = [p["url"] for p in base if lockfile.norm(p["name"]) in ("torch", "torchaudio")]
-    check("torch — сборка без CUDA с сайта pytorch",
+    # sympy в списке нет: его требует сам onnxruntime.
+    heavy = {"torch", "torchaudio", "torchcodec", "gigaam", "silero-vad", "pandas",
+             "scikit-learn", "matplotlib", "hydra-core", "omegaconf", "sentencepiece"}
+    check("в основной описи нет ни torch, ни его спутников, ни gigaam, ни silero-vad",
+          not (heavy & set(names)), sorted(heavy & set(names)))
+    torch_src = [p["url"] for p in full if lockfile.norm(p["name"]) in ("torch", "torchaudio")]
+    check("torch — только в добавке pyannote, сборкой без CUDA с сайта pytorch",
           len(torch_src) == 2 and all("pytorch.org" in u and "%2Bcpu" in u for u in torch_src), torch_src)
     odd = [p["name"] for p in full if p.get("url") and "pythonhosted.org" not in p["url"]
            and "pytorch.org" not in p["url"]]
@@ -82,8 +87,8 @@ try:
     vend = [p for p in full if p.get("file")]
     vend_bad = [p["file"] for p in vend if not (PROJECT / p["file"]).is_file()
                 or download.sha256_file(PROJECT / p["file"]) != p["sha256"]]
-    check("сборки из vendor/ на месте и совпадают с описью", vend and not vend_bad, vend_bad)
-    check("gigaam — готовой сборкой, без git", any(lockfile.norm(p["name"]) == "gigaam" for p in vend))
+    check("сборки из vendor/ на месте и совпадают с описью", not vend_bad, vend_bad)
+    check("в описи нет пакетов из git", not any(str(p.get("url") or "").startswith("git+") for p in full))
     have = lockfile.installed(PROJECT)
     if have:
         drift = lockfile.to_install(base, have, lockfile.floor(lock))

@@ -4,23 +4,26 @@
 чужое: модели, библиотеки и внешние программы, которые программа использует,
 скачивает по требованию или кладёт в переносимую сборку.
 
-Проверено 18 сентября 2026 года по метаданным установленных пакетов
-(149 пакетов в `.venv`) и по карточкам моделей.
+Проверено 18 сентября 2026 года по метаданным установленных пакетов и по
+карточкам моделей; 23 сентября сверено с описью выпуска после ухода torch
+(64 пакета в основной описи `lock.json`, ещё 72 — только у релиза с pyannote).
 
 ## Модели распознавания и разметки
 
 Веса моделей распознавания **в этот репозиторий не входят** — программа
-скачивает их с Hugging Face при первом запуске. Исключение — модель разметки
+скачивает их с Hugging Face при первом запуске. Исключения — модель разметки
 говорящих: её нейросети, переведённые в ONNX, и файлы PLDA лежат в
-`models/diar/` (около 31 МБ), чтобы разметке не нужны были ни токен, ни сеть.
+`models/diar/` (около 31 МБ), чтобы разметке не нужны были ни токен, ни сеть;
+и модель поиска речи `models/vad/silero_vad.onnx` (2,2 МБ, файл из пакета
+silero-vad 6.2.1 без изменений) — без неё программа не записала бы встречу.
 В переносимой сборке (`tools/make_portable.py`) модели лежат внутри архива,
 поэтому условия ниже касаются и того, кто раздаёт репозиторий или архив.
 
 | Модель | Назначение | Лицензия | Правообладатель |
 |---|---|---|---|
-| GigaAM v3 (`v3_e2e_ctc`, `v3_e2e_rnnt`) | распознавание русской речи | MIT | SaluteDevices (`ai-sage/GigaAM-v3`) |
+| GigaAM v3 (`v3_e2e_ctc`, `v3_e2e_rnnt`), в ONNX из `istupakov/gigaam-v3-onnx` | распознавание русской речи | MIT | SaluteDevices (`ai-sage/GigaAM-v3`) |
 | pyannote speaker-diarization-community-1 | разметка говорящих | CC-BY-4.0 | pyannoteAI, CNRS |
-| silero-vad | поиск речи в звуке | MIT | Silero Team |
+| Silero VAD (`silero_vad.onnx`, в `models/vad/`) | поиск речи в звуке | MIT, © 2020- Silero Team | Silero Team |
 | NVIDIA Parakeet TDT 0.6B v2 | распознавание английской речи (по кнопке) | CC-BY-4.0 | NVIDIA |
 
 **Обязательное указание авторства** (требование CC-BY-4.0):
@@ -43,6 +46,7 @@
 | `hagen/diar_onnx.py` | конвейер разметки pyannote.audio 4.0 (нарезка окнами, склейка, подсчёт голосов, отпечатки, распределение по людям, сборка разметки) | MIT, © 2020- CNRS, © 2025- pyannoteAI |
 | `hagen/vbx.py` | группировка VBx: BUT Speech@FIT (`BUTSpeechFIT/VBx`), в версии pyannote.audio 4.0 | Apache-2.0 |
 | `hagen/diar_onnx.py`, fbank | признаки по образцу `torchaudio.compliance.kaldi.fbank` (написано заново на numpy) | BSD-2-Clause (torchaudio) |
+| `hagen/vad_onnx.py` | правило нарезки записи на участки речи из silero-vad 6.2.1 (`utils_vad.get_speech_timestamps`), звук — numpy вместо torch | MIT, © 2020- Silero Team |
 
 Текст лицензии MIT для кода pyannote.audio:
 
@@ -88,23 +92,19 @@ GPL-3.0, несовместимости нет, но у того, кто раз�
 
 ## Готовые сборки пакетов в `vendor/`
 
-У трёх пакетов в открытых каталогах нет готовой сборки под Windows — только
-исходники. Чтобы установщику не нужны были git и компилятор, их сборки из
-исходников авторов лежат в `vendor/` и едут в выпуске без изменений:
+У пакета, у которого в открытых каталогах нет готовой сборки под Windows —
+только исходники, — сборка из исходников автора лежит в `vendor/` и едет в
+выпуске без изменений, чтобы установщику не нужен был компилятор:
 
 | Пакет | Версия | Откуда собран | Лицензия |
 |---|---|---|---|
-| gigaam | 0.2.0 | <https://github.com/salute-developers/GigaAM>, коммит `7447938` | MIT (© SaluteDevices) |
-| antlr4-python3-runtime | 4.9.3 | PyPI, исходный архив | BSD-3-Clause (© The ANTLR Project) |
 | proxy_tools | 0.1.0 | PyPI, исходный архив | MIT (© Jonathan Tushman) |
 
 ## Прямые зависимости Python
 
 | Пакет | Версия | Лицензия |
 |---|---|---|
-| gigaam | 0.2.0 | MIT |
 | onnxruntime | 1.23.2 | MIT |
-| silero-vad | 6.2.1 | MIT |
 | onnx-asr | 0.12.0 | MIT |
 | huggingface_hub | 1.31.0 | Apache-2.0 |
 | pyannote.audio (только релиз с pyannote) | 4.0.7 | MIT (© 2020 CNRS) |
@@ -129,15 +129,22 @@ GPL-3.0, несовместимости нет, но у того, кто раз�
 | numpy | 2.5.3 | BSD-3-Clause (и 0BSD, MIT, Zlib для частей) |
 | scipy | 1.18.1 | BSD-3-Clause |
 
-Крупные косвенные зависимости: `torch` 2.14.0 и `torchaudio` (BSD-3-Clause),
-`onnx` (Apache-2.0). Только в релизе с pyannote: `lightning` и `torchmetrics`
-(Apache-2.0), `matplotlib` (PSF-подобная), `pandas` и `scikit-learn`
-(BSD-3-Clause) и прочие зависимости `pyannote.audio`.
+Только в релизе с pyannote: `torch` 2.14.0 и `torchaudio` (BSD-3-Clause),
+`lightning` и `torchmetrics` (Apache-2.0), `matplotlib` (PSF-подобная),
+`pandas` и `scikit-learn` (BSD-3-Clause) и прочие зависимости
+`pyannote.audio`. В основном релизе torch нет: поиск речи, распознавание и
+разметка идут на onnxruntime.
+
+Инструменты мастерской, которые в выпуски не входят (ставятся разработчику
+руками для разового экспорта моделей, `tools/export_asr_onnx.py`): `gigaam`
+0.2.0 (MIT, © SaluteDevices), `silero-vad` 6.2.1 (MIT), `torch`, `onnx`
+(Apache-2.0), `sentencepiece` (Apache-2.0).
 
 ## Лицензии, требующие внимания
 
-Во всех 149 установленных пакетах копилефт и «особые» лицензии встречаются
-только трижды, и все три совместимы с GPL-3.0:
+Во всех установленных пакетах (основная опись и добавка pyannote вместе)
+копилефт и «особые» лицензии встречаются только трижды, и все три совместимы
+с GPL-3.0:
 
 - **soxr** — LGPL-2.1-or-later. Используется как библиотека, подключается
   динамически; исходный код доступен у автора пакета. LGPL допускает работу
@@ -172,12 +179,15 @@ GPL-3.0, несовместимости нет, но у того, кто раз�
 ---
 
 **Third-party notices.** Hagen itself is licensed under GNU GPL v3.0. Speech
-recognition uses GigaAM v3 (MIT, SaluteDevices) and, for English, NVIDIA
-Parakeet TDT 0.6B v2 (CC-BY-4.0). Speaker diarization uses pyannote
+recognition uses GigaAM v3 (MIT, SaluteDevices; ONNX export from
+`istupakov/gigaam-v3-onnx`) and, for English, NVIDIA Parakeet TDT 0.6B v2
+(CC-BY-4.0), both run with onnx-asr (MIT). Speaker diarization uses pyannote
 speaker-diarization-community-1 (CC-BY-4.0, pyannoteAI / CNRS); its networks,
 converted to ONNX, and PLDA files are included in `models/diar/`, and its
 pipeline is ported from pyannote.audio (MIT, CNRS / pyannoteAI) with VBx
-clustering (Apache-2.0, BUT Speech@FIT). Voice activity detection uses
-silero-vad (MIT). Speech recognition weights are not included in this
-repository; they are downloaded from Hugging Face by the user. FFmpeg is invoked
-as an external program and is not redistributed here.
+clustering (Apache-2.0, BUT Speech@FIT). Voice activity detection uses the
+Silero VAD model (MIT, Silero Team), included unchanged in `models/vad/`, with
+its segmentation routine ported to numpy in `hagen/vad_onnx.py`. Speech
+recognition weights are not included in this repository; they are downloaded
+from Hugging Face by the user. FFmpeg is invoked as an external program and is
+not redistributed here.

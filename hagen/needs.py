@@ -2,7 +2,7 @@
 """Тяжёлые части, которые качаются по требованию, а не лежат в сборке (16.09).
 
 Переносимая папка весит гигабайты, и большая часть веса — то, чем пользуются не
-все и не сразу: точная модель распознавания, английская модель, браузер для
+все и не сразу: вторая модель распознавания, английская модель, браузер для
 входа в SharePoint. Решение 16.09: их в сборку не класть, а качать
 тогда, когда человек впервые нажал кнопку, которой они нужны, — с вопросом
 «нужно скачать столько-то, качать?».
@@ -15,9 +15,10 @@
     (решение 21.09): чего не хватает выбору, что ему не нужно и может быть
     удалено, «Сбросить всё».
 
-Чего здесь нет: torch. Он нужен не только точной модели, но и поиску речи
-(silero-vad) при каждой записи, поэтому остаётся в сборке — иначе программа
-без интернета не смогла бы записать ни одной встречи.
+Чего здесь нет: torch. Он программе больше не нужен (решение 23.09): поиск
+речи, обе русские модели, английская и разметка голосов считаются на
+onnxruntime. Все модели распознавания — готовый ONNX с Hugging Face, ничего
+не переводится на этом компьютере.
 """
 from __future__ import annotations
 
@@ -31,6 +32,12 @@ from . import config
 log = logging.getLogger("hagen.needs")
 
 Note = Callable[[str], None]
+
+#: Где прежние версии программы держали свои модели: веса для torch и файлы,
+#: переведённые в ONNX на этом же компьютере. Программа их больше не читает,
+#: но умеет посчитать и удалить (часть «unused»).
+OLD_CKPT_DIR = config.MODELS_DIR / "gigaam"
+OLD_ONNX_DIR = config.MODELS_DIR / "onnx"
 
 
 class NeedError(RuntimeError):
@@ -46,124 +53,44 @@ def _say(note: Note | None, msg: str) -> None:
             pass
 
 
-# --------------------------------------------------------------- точная модель
+# ------------------------------------------------- модели GigaAM для onnx-asr
 
 
-def _precise_dir() -> Path:
-    """Папка весов GigaAM — та же, откуда их читает распознавание."""
-    from . import asr
-
-    return asr.CKPT_DIR
-
-
-def precise_ready() -> bool:
-    """Точная модель распознавания: веса и токенизатор рядом с ними."""
-    name = str(config.get("offline_model") or "v3_e2e_rnnt")
-    d = _precise_dir()
-    return (d / (name + ".ckpt")).exists() and (d / (name + "_tokenizer.model")).exists()
-
-
-def precise_install(note: Note | None = None) -> dict[str, Any]:
-    """Скачать веса точной модели. Модель при этом в память не поднимается."""
-    import gigaam
-
-    name = str(config.get("offline_model") or "v3_e2e_rnnt")
-    d = _precise_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    _say(note, "Скачиваю точную модель распознавания (около 430 МБ)…")
-    try:
-        real_name, path = gigaam._download_model(name.replace("v3_", ""), str(d))
-        gigaam._download_tokenizer(real_name, str(d))
-    except Exception as err:
-        raise NeedError(
-            "Точную модель скачать не вышло: %s\n"
-            "Проверьте интернет; в корпоративной сети скачивание могут закрывать." % err
-        ) from err
-    _say(note, "Точная модель на месте: %s" % path)
-    return {"ready": precise_ready(), "path": str(path)}
-
-
-# -------------------------------------------------------------- быстрая модель
-
-
-def fast_ready() -> bool:
-    """Быстрая модель: переведённый в ONNX файл, его описание и словарь."""
+def _ox_ready(engine: str) -> bool:
     from . import asr
 
     try:
-        return bool(asr.engine_ready("fast")[0])
+        return bool(asr.ox_available(engine)[0])
     except Exception:
         return False
 
 
-def fast_install(note: Note | None = None) -> dict[str, Any]:
-    """Скачать быструю модель и перевести её в ONNX на этом компьютере.
+def _ox_install(engine: str, size_mb: int) -> Callable[..., dict[str, Any]]:
+    """Скачать файлы движка: быстрая модель либо точная с полными или сжатыми весами.
 
-    В готовом ONNX её никто не выкладывает: авторы дают только веса для torch.
-    После перевода веса не нужны — они удаляются, остаются ONNX и словарь.
+    Сеть к Hugging Face включается на время скачивания: если на диске уже есть
+    другие модели, программа работает с ним без сети (config.hf_online).
     """
-    import gigaam
-
-    from . import asr
-
-    name = str(config.get("live_model") or "v3_e2e_ctc")
-    d = _precise_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    _say(note, "Скачиваю быструю модель распознавания (около 440 МБ)…")
-    try:
-        real_name, path = gigaam._download_model(name.replace("v3_", ""), str(d))
-        gigaam._download_tokenizer(real_name, str(d))
-    except Exception as err:
-        raise NeedError(
-            "Быструю модель скачать не вышло: %s\n"
-            "Проверьте интернет; в корпоративной сети скачивание могут закрывать." % err
-        ) from err
-    _say(note, "Перевожу быструю модель в формат ONNX — это несколько минут…")
-    try:
-        asr.export_onnx(name, force=True)
-    except Exception as err:
-        raise NeedError("Быструю модель перевести в ONNX не вышло: %s" % err) from err
-    try:
-        Path(path).unlink()
-    except OSError:
-        log.info("веса быстрой модели после перевода не удалились: %s", path)
-    _say(note, "Быстрая модель на месте.")
-    return {"ready": fast_ready()}
-
-
-# ------------------------------------------- точная модель для движка onnx-asr
-
-
-def _ox_ready(quant: str | None) -> bool:
-    from . import asr
-
-    try:
-        return bool(asr.ox_available(quant)[0])
-    except Exception:
-        return False
-
-
-def _ox_install(quant: str | None, size_mb: int) -> Callable[..., dict[str, Any]]:
-    """Скачать точную модель для onnx-asr: полные или сжатые веса."""
     def run(note: Note | None = None) -> dict[str, Any]:
         from huggingface_hub import snapshot_download
 
         from . import asr, lockfile
 
-        _say(note, "Скачиваю точную модель для onnx-asr, %s (около %d МБ)…"
-             % ("сжатые веса" if quant else "полные веса", size_mb))
+        title = asr.ENGINE_TITLES[engine]
+        _say(note, "Скачиваю модель распознавания — %s (около %d МБ)…" % (title, size_mb))
         try:
             with config.hf_online():
                 snapshot_download(repo_id=asr.OX_REPO, local_dir=str(asr.OX_DIR),
                                   revision=lockfile.model_revision(asr.OX_REPO),
-                                  allow_patterns=asr.ox_files(quant))
+                                  allow_patterns=asr.ox_files(engine))
         except Exception as err:
             raise NeedError(
-                "Точную модель для onnx-asr скачать не вышло: %s\n"
-                "Нужен интернет и доступ к huggingface.co." % err
+                "Модель распознавания скачать не вышло: %s\n"
+                "Нужен интернет и доступ к huggingface.co; в корпоративной сети "
+                "скачивание могут закрывать." % err
             ) from err
-        _say(note, "Точная модель для onnx-asr на месте.")
-        return {"ready": _ox_ready(quant)}
+        _say(note, "Модель распознавания (%s) на месте." % title)
+        return {"ready": _ox_ready(engine)}
     return run
 
 
@@ -180,11 +107,7 @@ def english_ready() -> bool:
 
 
 def english_install(note: Note | None = None) -> dict[str, Any]:
-    """Скачать Parakeet TDT: четыре файла из репозитория HuggingFace.
-
-    Сеть к Hugging Face включается на время скачивания: если на диске уже есть
-    другие модели, программа работает с ним без сети (config.hf_online).
-    """
+    """Скачать Parakeet TDT: четыре файла из репозитория HuggingFace."""
     from huggingface_hub import snapshot_download
 
     from . import asr, lockfile
@@ -235,35 +158,28 @@ def browser_install(note: Note | None = None) -> dict[str, Any]:
 PARTS: dict[str, dict[str, Any]] = {
     "fast": {
         "title": "Быстрая модель распознавания",
-        "size_mb": 440,
-        "why": "Нужна, если звонки или голосовой ввод идут быстрой моделью. Скачивается "
-               "и переводится в формат ONNX на этом компьютере; на диске — около 890 МБ.",
-        "ready": lambda: fast_ready(),
-        "install": lambda note=None: fast_install(note),
-    },
-    "precise": {
-        "title": "Точная модель распознавания",
-        "size_mb": 430,
-        "why": "Точная модель на движке torch — нужна, если в «Моделях распознавания» "
-               "выбран движок torch.",
-        "ready": lambda: precise_ready(),
-        "install": lambda note=None: precise_install(note),
+        "size_mb": 850,
+        "why": "Нужна, если звонки или голосовой ввод идут быстрой моделью: фраза "
+               "появляется почти сразу, но без времени слов и с ошибками чаще.",
+        "ready": lambda: _ox_ready("fast"),
+        "install": _ox_install("fast", 850),
     },
     "precise_ox_int8": {
-        "title": "Точная модель для onnx-asr, сжатые веса",
+        "title": "Точная модель, сжатые веса",
         "size_mb": 230,
-        "why": "Точная модель на движке onnx-asr со сжатыми весами: вчетверо меньше "
-               "места и втрое меньше памяти, чем полные, текст чуть хуже.",
-        "ready": lambda: _ox_ready("int8"),
-        "install": _ox_install("int8", 230),
+        "why": "Точная модель со сжатыми весами — с ней программа ставится: вчетверо "
+               "меньше места и втрое меньше памяти, чем полные, совпадает около 98 % слов.",
+        "ready": lambda: _ox_ready("ox_int8"),
+        "install": _ox_install("ox_int8", 230),
     },
     "precise_ox_fp32": {
-        "title": "Точная модель для onnx-asr, полные веса",
+        "title": "Точная модель, полные веса",
         "size_mb": 890,
-        "why": "Точная модель на движке onnx-asr с полными весами — рекомендованный "
-               "вариант: текст слово в слово как у torch.",
-        "ready": lambda: _ox_ready(None),
-        "install": _ox_install(None, 890),
+        "why": "Точная модель с полными весами: текст слово в слово как у исходной "
+               "модели. Стоит попробовать, если качество стенограмм со сжатыми не "
+               "устраивает; места нужно вчетверо, памяти втрое больше.",
+        "ready": lambda: _ox_ready("ox_fp32"),
+        "install": _ox_install("ox_fp32", 890),
     },
     "english": {
         "title": "Английская модель Parakeet",
@@ -341,13 +257,13 @@ def install(key: str, note: Note | None = None) -> dict[str, Any]:
 #: Части-модели, которыми управляет выбор в «Настройки → Модели». Английская
 #: живёт своей жизнью (нужна только английским записям), поэтому в «ненужное»
 #: не попадает, но «Сбросить всё» убирает и её.
-MODEL_PARTS = ("fast", "precise", "precise_ox_int8", "precise_ox_fp32", "english", "unused")
-UNUSED_TITLE = "Неиспользуемые файлы моделей"
-UNUSED_WHY = ("Точная модель, переведённая в ONNX, и запасные веса быстрой модели: "
-              "программа их не читает.")
-#: Общие для сжатых и полных весов onnx-asr файлы: удаляются только вместе с
-#: последним из двух вариантов.
-_OX_SHARED = ("config.json", "v3_e2e_rnnt_vocab.txt")
+MODEL_PARTS = ("fast", "precise_ox_int8", "precise_ox_fp32", "english", "unused")
+#: Части из одной папки models\onnx-asr\gigaam-v3: у них есть общие файлы.
+_OX_PARTS = ("fast", "precise_ox_int8", "precise_ox_fp32")
+_OX_ENGINES = {"fast": "fast", "precise_ox_int8": "ox_int8", "precise_ox_fp32": "ox_fp32"}
+UNUSED_TITLE = "Файлы моделей прежних версий программы"
+UNUSED_WHY = ("Веса для torch и модели, переведённые в ONNX на этом компьютере: "
+              "программа их больше не читает.")
 
 
 def part_title(key: str) -> str:
@@ -358,40 +274,41 @@ def part_files(key: str) -> list[Path]:
     """Файлы части на диске: по ним считается вес и они же удаляются."""
     from . import asr
 
-    fast = str(config.get("live_model") or "v3_e2e_ctc")
-    precise = str(config.get("offline_model") or "v3_e2e_rnnt")
-    if key == "fast":
-        return [asr.ONNX_DIR / (fast + ".onnx"), asr.ONNX_DIR / (fast + ".yaml"),
-                asr.CKPT_DIR / (fast + "_tokenizer.model")]
-    if key == "precise":
-        return [asr.CKPT_DIR / (precise + ".ckpt"),
-                asr.CKPT_DIR / (precise + "_tokenizer.model")]
-    if key in ("precise_ox_int8", "precise_ox_fp32"):
-        return [asr.OX_DIR / n for n in asr.ox_files("int8" if key.endswith("int8") else None)]
+    if key in _OX_PARTS:
+        return [asr.OX_DIR / n for n in asr.ox_files(_OX_ENGINES[key])]
     if key == "english":
         return [asr.EN_DIR / n for n in asr.english_files()]
     if key == "unused":
-        return ([asr.ONNX_DIR / (precise + s)
-                 for s in ("_encoder.onnx", "_decoder.onnx", "_joint.onnx", ".yaml")]
-                + [asr.CKPT_DIR / (fast + ".ckpt")])
+        fast = str(config.get("live_model") or "v3_e2e_ctc")
+        precise = str(config.get("offline_model") or "v3_e2e_rnnt")
+        return ([OLD_ONNX_DIR / (fast + s) for s in (".onnx", ".yaml")]
+                + [OLD_ONNX_DIR / (precise + s) for s in ("_encoder.onnx", "_decoder.onnx", "_joint.onnx", ".yaml")]
+                + [OLD_CKPT_DIR / (name + s) for name in (fast, precise) for s in (".ckpt", "_tokenizer.model")])
     raise NeedError("Неизвестная часть: %s" % key)
 
 
+def _shared_with_others(key: str) -> set[Path]:
+    """Файлы части, которые числятся и за другими частями той же папки
+    (config.json — за всеми, словарь точной — за обоими вариантами весов)."""
+    if key not in _OX_PARTS:
+        return set()
+    return {p for k in _OX_PARTS if k != key for p in part_files(k)} & set(part_files(key))
+
+
 def _own_files(key: str) -> list[Path]:
-    """Файлы, которые принадлежат только этой части (без общих для onnx-asr,
-    пока жив второй вариант весов)."""
+    """Файлы, которые принадлежат только этой части: общие остаются, пока жива
+    хоть одна другая часть, которой они нужны."""
     files = part_files(key)
-    if key in ("precise_ox_int8", "precise_ox_fp32"):
-        other = "precise_ox_fp32" if key.endswith("int8") else "precise_ox_int8"
-        if any(p.exists() for p in part_files(other) if p.name not in _OX_SHARED):
-            files = [p for p in files if p.name not in _OX_SHARED]
+    if key in _OX_PARTS:
+        alive = {p for k in _OX_PARTS if k != key and on_disk(k) for p in part_files(k)}
+        files = [p for p in files if p not in alive]
     return files
 
 
 def on_disk(key: str) -> bool:
-    """Лежит ли на диске хоть что-то от части (у onnx-asr — не считая общих файлов)."""
-    return any(p.exists() for p in part_files(key)
-               if key not in ("precise_ox_int8", "precise_ox_fp32") or p.name not in _OX_SHARED)
+    """Лежит ли на диске хоть что-то от части, не считая общих с другими файлов."""
+    shared = _shared_with_others(key)
+    return any(p.exists() for p in part_files(key) if p not in shared)
 
 
 def disk_mb(key: str) -> int:
@@ -407,7 +324,7 @@ def disk_mb(key: str) -> int:
 def _model_roots() -> list[Path]:
     from . import asr
 
-    return [asr.CKPT_DIR, asr.ONNX_DIR, asr.EN_DIR, asr.OX_DIR]
+    return [OLD_CKPT_DIR, OLD_ONNX_DIR, asr.EN_DIR, asr.OX_DIR]
 
 
 def _inside(path: Path, roots: list[Path]) -> bool:

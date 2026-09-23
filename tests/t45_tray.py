@@ -110,23 +110,27 @@ check("нажатие на само уведомление открывает о
 notifier.show_prompt(None)
 check("снятый вопрос убирает уведомление", notifier._current is None)
 
-# Главная ловушка: WinRT, загруженный раньше torch, ломает torch целиком
-# (WinError 1114, c10.dll) — а с ним распознавание и разметку.
+# Главная ловушка: WinRT, загруженный раньше onnxruntime, ломает onnxruntime
+# целиком («DLL load failed while importing onnxruntime_pybind11_state») — а с
+# ним поиск речи, распознавание и разметку. Раньше то же было с torch (WinError
+# 1114, c10.dll). После уведомлений должны грузиться и считать onnxruntime и
+# поиск речи, а в релизе с pyannote — ещё torch и pyannote.
 try:
-    import torch  # noqa: F401
-
-    from hagen import diar_pyannote
-    # pyannote есть только в релизе с разметкой через него; в релизе ONNX
-    # после уведомлений должен грузиться onnxruntime.
-    if diar_pyannote.installed():
-        from pyannote.audio import Pipeline  # noqa: F401
+    import numpy as np
     import onnxruntime  # noqa: F401
-    torch_ok = float((torch.ones(2) * 3).sum()) == 6.0
-    torch_err = ""
+
+    from hagen import diar_pyannote, vad
+
+    if diar_pyannote.installed():
+        import torch  # noqa: F401
+        from pyannote.audio import Pipeline  # noqa: F401
+    probs = vad.new_model().probs(np.zeros((3, vad.FRAME), dtype=np.float32))
+    libs_ok = probs.shape == (3,)
+    libs_err = ""
 except Exception as e:
-    torch_ok, torch_err = False, str(e)[:160]
-check("после уведомлений torch, onnxruntime и pyannote (если он есть) загружаются",
-      torch_ok, torch_err)
+    libs_ok, libs_err = False, str(e)[:160]
+check("после уведомлений onnxruntime, поиск речи и pyannote (если он есть) работают",
+      libs_ok, libs_err)
 
 say("")
 say("=== 4. Значок у часов ===")

@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Определение речи и паузы через Silero VAD.
+"""Определение речи и паузы моделью Silero VAD.
 
 Два режима:
   StreamingPhraseDetector — для живого эфира. Держит фразу, пока пауза короче
       порога (по умолчанию 2,2 с), адаптируется к фоновому шуму.
   speech_timestamps / split_for_asr — для готовых файлов: нарезка по паузам
       на куски не длиннее 24 с (у модели распознавания предел 25 с).
+
+Модель считает onnxruntime (vad_onnx.py), torch для этого не нужен: файл
+модели лежит в models\\vad, программа записывает встречу без сети.
 
 Разрез без паузы. Когда человек говорит дольше предела без паузы, речь приходится
 резать прямо посреди звука — часто посреди слова: первый кусок кончается на
@@ -22,8 +25,10 @@ from typing import Any
 
 import numpy as np
 
-SR = 16000
-FRAME = 512           # модель Silero v5 требует ровно 512 отсчётов на 16 кГц
+from . import vad_onnx
+
+SR = vad_onnx.SR
+FRAME = vad_onnx.FRAME   # модель Silero v5 требует ровно 512 отсчётов на 16 кГц
 FRAME_MS = FRAME * 1000.0 / SR   # 32 мс
 
 #: Нахлёст кусков в месте разреза без паузы, секунды. Слово дольше полутора
@@ -36,23 +41,20 @@ _model = None
 _model_lock = threading.Lock()
 
 
-def new_model(onnx: bool = True):
+def new_model(onnx: bool = True) -> vad_onnx.SileroVad:
     """Отдельный экземпляр модели.
 
-    КРИТИЧНО: модель Silero держит внутри состояние рекуррентной сети, поэтому
-    один экземпляр нельзя использовать из двух потоков одновременно — состояние
-    дорожек затирается, а onnxruntime при этом падает без трассировки. У каждой
-    дорожки должен быть свой экземпляр: он занимает около 2 МБ, это ничто.
+    КРИТИЧНО: модель Silero держит внутри состояние рекуррентной сети и хвост
+    прошлого окна, поэтому один экземпляр нельзя использовать из двух потоков
+    одновременно — состояние дорожек затирается. У каждой дорожки должен быть
+    свой экземпляр: он занимает около 2 МБ, это ничто.
+
+    onnx — оставлен ради прежней подписи: модель теперь одна, на onnxruntime.
     """
-    from silero_vad import load_silero_vad
-
-    try:
-        return load_silero_vad(onnx=onnx)
-    except Exception:
-        return load_silero_vad(onnx=False)
+    return vad_onnx.SileroVad()
 
 
-def get_model(onnx: bool = True):
+def get_model(onnx: bool = True) -> vad_onnx.SileroVad:
     """Общий экземпляр — только для однопоточных офлайн-задач."""
     global _model
     with _model_lock:
@@ -61,16 +63,9 @@ def get_model(onnx: bool = True):
         return _model
 
 
-def _probs(frames: np.ndarray, model) -> np.ndarray:
+def _probs(frames: np.ndarray, model: vad_onnx.SileroVad) -> np.ndarray:
     """Вероятности речи для матрицы кадров [n, 512]."""
-    import torch
-
-    with torch.no_grad():
-        out = []
-        for i in range(frames.shape[0]):
-            t = torch.from_numpy(frames[i])
-            out.append(float(model(t, SR).item()))
-    return np.asarray(out, dtype=np.float32)
+    return model.probs(frames)
 
 
 class StreamingPhraseDetector:
@@ -132,10 +127,7 @@ class StreamingPhraseDetector:
         self._in_speech = False
         self._silence_run = 0
         self._speech_run = 0
-        try:
-            self.model.reset_states()
-        except Exception:
-            pass
+        self.model.reset_states()
 
     def jump_to(self, sample: int) -> None:
         """Перескочить вперёд, не разбирая звук: перерыв в записи залит тишиной.
@@ -275,31 +267,23 @@ def speech_timestamps(
     threshold: float = 0.5,
     progress=None,
 ) -> list[dict[str, float]]:
-    """Участки речи в отсчётах: [{"start": n, "end": n}, ...]."""
-    import torch
+    """Участки речи в отсчётах: [{"start": n, "end": n}, ...].
 
-    from silero_vad import get_speech_timestamps
-
-    model = get_model(onnx=False)   # офлайн точнее на torch-версии
-    audio = torch.from_numpy(np.asarray(pcm, dtype=np.float32).reshape(-1))
+    progress(процент) — ход подсчёта, если задан.
+    """
+    audio = np.asarray(pcm, dtype=np.float32).reshape(-1)
+    model = get_model()
     # общий экземпляр: одновременный вызов из двух потоков недопустим
-    kwargs: dict[str, Any] = dict(
-        threshold=threshold,
-        sampling_rate=SR,
-        min_speech_duration_ms=200,
-        max_speech_duration_s=float(max_speech_s),
-        min_silence_duration_ms=int(min_silence_ms),
-        speech_pad_ms=int(speech_pad_ms),
-        return_seconds=False,
-    )
-    if progress is not None:
-        kwargs["progress_tracking_callback"] = progress
     with _model_lock:
-        try:
-            res = get_speech_timestamps(audio, model, **kwargs)
-        except TypeError:
-            kwargs.pop("progress_tracking_callback", None)
-            res = get_speech_timestamps(audio, model, **kwargs)
+        res = vad_onnx.speech_timestamps(
+            audio, model,
+            threshold=threshold,
+            min_speech_duration_ms=200,
+            max_speech_duration_s=float(max_speech_s),
+            min_silence_duration_ms=int(min_silence_ms),
+            speech_pad_ms=int(speech_pad_ms),
+            progress_tracking_callback=progress,
+        )
     return [{"start": int(r["start"]), "end": int(r["end"])} for r in res]
 
 

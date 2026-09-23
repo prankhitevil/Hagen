@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """Распознавание речи моделями GigaAM.
 
-Две модели:
-  v3_e2e_ctc   — быстрая, через onnxruntime (быстрый старт, мало памяти), без
-                 отметок времени по словам;
-  v3_e2e_rnnt  — точная, через torch или через onnx-asr (полные или сжатые
-                 веса), с отметками времени по словам: по ним текст точно
-                 сшивается с разметкой говорящих.
+Две модели, обе — GigaAM v3 в готовом ONNX (репозиторий istupakov/gigaam-v3-onnx),
+считает их пакет onnx-asr на onnxruntime; torch программе не нужен:
+  v3_e2e_ctc   — быстрая (движок «fast»): быстрый старт, без отметок времени
+                 по словам;
+  v3_e2e_rnnt  — точная («ox_fp32» — полные веса, «ox_int8» — сжатые), с
+                 отметками времени по словам: по ним текст точно сшивается с
+                 разметкой говорящих.
 
 Какая модель чем занимается — звонки, голосовой ввод, файлы — выбирает человек
 в «Настройки → Модели» (решение 21.09): одна модель на всё или две. Кто зовёт
@@ -20,7 +21,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -32,13 +32,11 @@ log = logging.getLogger("hagen.asr")
 SR = 16000
 MAX_CHUNK_S = 24.0          # предел GigaAM: у неё жёсткие 25 с
 MAX_CHUNK_EN_S = 120.0      # у Parakeet такого предела нет, но память не бесконечна
-CKPT_DIR = config.MODELS_DIR / "gigaam"
-ONNX_DIR = config.MODELS_DIR / "onnx"
 
 #: Английская модель. GigaAM знает только русский (это написано в её карточке),
 #: а многоязычная модель Сбера сама называет своё качество на английском
 #: «умеренным»: 21-26 % ошибок против 6 % у Parakeet. Поэтому английский путь —
-#: отдельная модель NVIDIA Parakeet TDT 0.6B v2 на том же onnxruntime, без torch.
+#: отдельная модель NVIDIA Parakeet TDT 0.6B v2 на том же onnxruntime.
 EN_DIR = config.MODELS_DIR / "onnx-asr"
 EN_REPO = "istupakov/parakeet-tdt-0.6b-v2-onnx"
 EN_MODEL = "nemo-parakeet-tdt-0.6b-v2"
@@ -46,18 +44,17 @@ EN_MODEL = "nemo-parakeet-tdt-0.6b-v2"
 EN_FRAME_S = 0.08
 
 _lock = threading.RLock()
-# Замок на само распознавание. Модель и препроцессор общие для всех дорожек,
-# а torch-препроцессор и sentencepiece не рассчитаны на одновременный вызов из
-# нескольких потоков: это валит процесс в нативном коде без трассировки.
-# Скорость позволяет: распознавание в 20 раз быстрее речи, две дорожки по очереди
-# занимают около 10 % процессорного времени.
+# Замок на само распознавание: две дорожки эфира, диктовка и файл считают по
+# очереди, а не делят ядра между собой, — иначе все они тормозили бы разом.
+# Скорость позволяет: распознавание в 10-20 раз быстрее речи, две дорожки по
+# очереди занимают около 10 % процессорного времени.
 _infer_lock = threading.Lock()
-_onnx_cache: dict[str, Any] = {}
-_torch_cache: dict[str, Any] = {}
 _en_cache: dict[str, Any] = {}
-#: Когда точную модель трогали в последний раз, по имени. Сторож ниже выгружает
-#: её после простоя: вместе с torch она занимает около 1,3 ГБ, а нужна не всегда.
-_torch_used: dict[str, float] = {}
+#: Модели GigaAM в памяти, по движку, и когда каждую трогали в последний раз.
+#: Сторож ниже выгружает после простоя ту, что не служит эфиру: точная с
+#: полными весами занимает около 0,9 ГБ, а нужна не всегда.
+_ox_cache: dict[str, Any] = {}
+_ox_used: dict[str, float] = {}
 _janitor: threading.Thread | None = None
 #: Как часто сторож просыпается. Реже минуты незачем: выгрузка мгновенная.
 _JANITOR_STEP_S = 60.0
@@ -98,9 +95,6 @@ def _threads() -> int:
         return 7
 
 
-# ---------------------------------------------------------------- ONNX
-
-
 def _onnx_session_options():
     import onnxruntime as rt
 
@@ -111,309 +105,6 @@ def _onnx_session_options():
     opts.execution_mode = rt.ExecutionMode.ORT_SEQUENTIAL
     opts.log_severity_level = 3
     return opts
-
-
-def onnx_ready(name: str) -> bool:
-    if not (ONNX_DIR / (name + ".yaml")).exists():
-        return False
-    if "rnnt" in name:
-        need = ["_encoder.onnx", "_decoder.onnx", "_joint.onnx"]
-        return all((ONNX_DIR / (name + s)).exists() for s in need)
-    return (ONNX_DIR / (name + ".onnx")).exists()
-
-
-_gigaam_clean = False
-
-
-def _import_gigaam_clean() -> None:
-    """Подключить gigaam.encoder заранее, в отдельном потоке с пустым стеком.
-
-    Зачем. gigaam.encoder при подключении пробует flash_attn, не находит и
-    сохраняет ошибку в глобальную IMPORT_FLASH_ERR — вместе со следом вызовов.
-    Подключается модуль лениво, прямо внутри конструктора модели, поэтому в
-    след попадал сам конструктор, а с ним и модель (self) и все вызвавшие кадры.
-    Первая загруженная модель оставалась в памяти навсегда: выгрузка по простою
-    ничего не освобождала, а повторная загрузка добавляла ещё 0,9 ГБ сверху
-    (найдено 14.09 замером на настоящей модели). Из пустого потока в след
-    попадают только служебные кадры самого потока.
-    """
-    global _gigaam_clean
-    if _gigaam_clean:
-        return
-
-    def run() -> None:
-        try:
-            import gigaam.encoder  # noqa: F401
-        except Exception as err:
-            # Настоящую ошибку покажет сама загрузка модели — здесь только след.
-            log.debug("gigaam.encoder заранее не подключился: %s", err)
-
-    t = threading.Thread(target=run, name="asr-import", daemon=True)
-    t.start()
-    t.join()
-    _gigaam_clean = True
-
-
-def export_onnx(name: str, force: bool = False) -> bool:
-    """Разовый экспорт модели в ONNX. Требует torch и скачанный чекпойнт."""
-    if onnx_ready(name) and not force:
-        return True
-    import torch
-
-    _import_gigaam_clean()
-    import gigaam
-
-    ONNX_DIR.mkdir(parents=True, exist_ok=True)
-    CKPT_DIR.mkdir(parents=True, exist_ok=True)
-    log.info("экспорт %s в ONNX, это разовая операция на несколько минут", name)
-    torch.set_num_threads(_threads())
-    model = gigaam.load_model(
-        name, device="cpu", fp16_encoder=False, download_root=str(CKPT_DIR)
-    )
-    try:
-        model.to_onnx(dir_path=str(ONNX_DIR))
-    finally:
-        del model
-    return onnx_ready(name)
-
-
-def _load_onnx(name: str):
-    """Сессии onnxruntime + конфиг + препроцессор + токенизатор."""
-    with _lock:
-        got = _onnx_cache.get(name)
-        if got is not None:
-            return got
-        if not onnx_ready(name):
-            if not export_onnx(name):
-                raise RuntimeError("не удалось подготовить ONNX для %s" % name)
-
-        import hydra
-        import omegaconf
-        import onnxruntime as rt
-
-        cfg = omegaconf.OmegaConf.load(str(ONNX_DIR / (name + ".yaml")))
-        # GigaAM записывает в этот файл АБСОЛЮТНЫЙ путь к словарю — тот, что был
-        # при экспорте. После переноса папки на другой компьютер путь перестаёт
-        # существовать, ONNX молча не грузится, и эфир сваливается на torch —
-        # втрое медленнее и незаметно. Поэтому путь всегда пересобираем от
-        # текущего расположения проекта.
-        try:
-            tok = CKPT_DIR / (name + "_tokenizer.model")
-            if tok.exists():
-                cfg.decoding.model_path = str(tok)
-        except Exception:
-            log.warning("не удалось подставить путь к словарю для %s", name)
-        opts = _onnx_session_options()
-        providers = ["CPUExecutionProvider"]
-
-        def sess(p: Path):
-            return rt.InferenceSession(str(p), providers=providers, sess_options=opts)
-
-        if "rnnt" in name:
-            sessions = [
-                sess(ONNX_DIR / (name + "_encoder.onnx")),
-                sess(ONNX_DIR / (name + "_decoder.onnx")),
-                sess(ONNX_DIR / (name + "_joint.onnx")),
-            ]
-        else:
-            sessions = [sess(ONNX_DIR / (name + ".onnx"))]
-
-        preprocessor = hydra.utils.instantiate(cfg.preprocessor)
-        tokenizer = hydra.utils.instantiate(cfg.decoding).tokenizer
-        got = {
-            "sessions": sessions,
-            "cfg": cfg,
-            "preprocessor": preprocessor,
-            "tokenizer": tokenizer,
-        }
-        _onnx_cache[name] = got
-        log.info("ONNX %s загружен, потоков %d", name, _threads())
-        return got
-
-
-def _transcribe_onnx(pcm: np.ndarray, name: str) -> Result:
-    from gigaam.onnx_utils import infer_onnx
-
-    bundle = _load_onnx(name)
-    arr = np.ascontiguousarray(np.asarray(pcm, dtype=np.float32).reshape(-1))
-    with _infer_lock:
-        texts = infer_onnx(
-            [arr],
-            bundle["cfg"],
-            bundle["sessions"],
-            preprocessor=bundle["preprocessor"],
-            tokenizer=bundle["tokenizer"],
-            batch_size=1,
-            progress=False,
-        )
-    txt = texts[0] if texts else ""
-    return Result(str(txt))
-
-
-# ---------------------------------------------------------------- torch
-
-
-def _load_torch(name: str):
-    with _lock:
-        got = _torch_cache.get(name)
-        if got is not None:
-            _torch_used[name] = time.time()
-            return got
-        import torch
-
-        _import_gigaam_clean()
-        import gigaam
-
-        torch.set_num_threads(_threads())
-        CKPT_DIR.mkdir(parents=True, exist_ok=True)
-        t0 = time.time()
-        model = gigaam.load_model(
-            name, device="cpu", fp16_encoder=False, download_root=str(CKPT_DIR)
-        )
-        _torch_cache[name] = model
-        _torch_used[name] = time.time()
-        log.info("torch-модель %s загружена за %.1f c", name, time.time() - t0)
-    _ensure_janitor()
-    return model
-
-
-def preload_precise() -> None:
-    """Начать загрузку точной модели в фоне, если её ещё нет в памяти.
-
-    Диктовка зовёт это в момент, когда человек начал говорить: пока он говорит
-    свои несколько секунд, модель успевает загрузиться, и распознавание после
-    «стоп» не ждёт. Загрузка берёт только _lock, не замок распознавания, так что
-    ничему не мешает; повторный вызов во время загрузки просто подождёт её.
-    Грузится модель, выбранная для голосового ввода (live_route).
-    """
-    engine = live_route()["voice"]
-    if engine == "fast":
-        name = str(config.get("live_model") or "v3_e2e_ctc")
-        with _lock:
-            if name in _onnx_cache:
-                return
-
-        def load() -> Any:
-            return _load_onnx(name)
-    elif engine in OX_ENGINES:
-        quant = OX_ENGINES[engine]
-        with _lock:
-            if quant in _ox_cache:
-                return
-
-        def load() -> Any:
-            return _load_ox(quant)
-    else:
-        name = _precise_name()
-        with _lock:
-            if name in _torch_cache:
-                _torch_used[name] = time.time()
-                return
-
-        def load() -> Any:
-            return _load_torch(name)
-
-    def run() -> None:
-        try:
-            load()
-        except Exception as err:
-            log.warning("фоновая загрузка точной модели не удалась: %s", err)
-
-    threading.Thread(target=run, name="asr-preload", daemon=True).start()
-
-
-def idle_minutes() -> float:
-    """Через сколько минут простоя выгружать точную модель. 0 = не выгружать."""
-    try:
-        got = float(config.get("precise_idle_min") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    return got if got > 0 else 0.0
-
-
-def release_idle(minutes: float | None = None) -> list[str]:
-    """Выгрузить точные модели, к которым давно не обращались.
-
-    Возвращает имена выгруженного. Модель, на которой прямо сейчас идёт
-    распознавание, не трогает: замок распознавания берётся без ожидания, и
-    занятая модель просто доживёт до следующего круга. Ссылку, уже взятую
-    чужим потоком, выгрузка не ломает — память освободится, когда тот поток
-    закончит.
-
-    Модель, которая служит эфиру (режим одной модели), не выгружается никогда:
-    окно показывало бы «готова», а первая фраза записи ждала бы загрузку.
-    """
-    limit = idle_minutes() if minutes is None else float(minutes)
-    if limit <= 0:
-        return []
-    keep = _live_keeps()
-    dropped: list[str] = []
-    with _lock:
-        now = time.time()
-        for name, used in list(_torch_used.items()):
-            if name == keep or now - used < limit * 60.0:
-                continue
-            if not _infer_lock.acquire(blocking=False):
-                continue
-            try:
-                if _torch_cache.pop(name, None) is not None:
-                    dropped.append(name)
-                _torch_used.pop(name, None)
-            finally:
-                _infer_lock.release()
-    if dropped:
-        import gc
-
-        gc.collect()
-        log.info("точная модель выгружена из памяти после %g мин простоя: %s",
-                 limit, ", ".join(dropped))
-    return dropped
-
-
-def _ensure_janitor() -> None:
-    """Поднять сторож простоя. Поток, а не процесс: Kaspersky не даёт порождать
-    фоновые процессы (см. грабли в отчёте)."""
-    global _janitor
-    with _lock:
-        if _janitor is not None and _janitor.is_alive():
-            return
-
-        def loop() -> None:
-            while True:
-                time.sleep(_JANITOR_STEP_S)
-                try:
-                    release_idle()
-                except Exception as err:      # сторож не должен ронять службу
-                    log.warning("сторож простоя моделей: %s", err)
-
-        _janitor = threading.Thread(target=loop, name="asr-idle", daemon=True)
-        _janitor.start()
-
-
-def _transcribe_torch(pcm: np.ndarray, name: str, word_timestamps: bool = True,
-                      threads: int = 0) -> Result:
-    """threads — перед распознаванием поставить torch столько потоков; 0 — не трогать.
-
-    Число потоков у torch одно на процесс, и его переставляют другие: silero-vad
-    при подключении ставит один поток (silero_vad/model.py), разметка говорящих —
-    свои. Без закрепления точная модель считала бы в один поток или в девять —
-    смотря что случилось раньше (замер 18.09).
-    """
-    import torch
-
-    model = _load_torch(name)
-    arr = np.ascontiguousarray(np.asarray(pcm, dtype=np.float32).reshape(-1))
-    wav = torch.from_numpy(arr).unsqueeze(0)
-    length = torch.full([1], wav.shape[-1], dtype=torch.long)
-    with _infer_lock, torch.inference_mode():
-        if threads > 0 and torch.get_num_threads() != threads:
-            torch.set_num_threads(threads)
-        enc, enc_len = model.forward(wav, length)
-        text, words = model._decode(enc, enc_len, length, bool(word_timestamps))[0]
-    out_words = []
-    for w in words or []:
-        out_words.append(Word(getattr(w, "text", ""), getattr(w, "start", 0.0), getattr(w, "end", 0.0)))
-    return Result(str(text), out_words)
 
 
 # ---------------------------------------------------------------- английский
@@ -519,75 +210,185 @@ def _transcribe_english(pcm: np.ndarray) -> Result:
     return Result(text, words)
 
 
-# ------------------------------------------------ точная модель через onnx-asr
+# ------------------------------------------------------- модели GigaAM в onnx-asr
 
-#: Та же точная модель v3_e2e_rnnt, но в движке onnx-asr, а не torch. Замер на
-#: записях владельца (18.09): fp32 даёт текст слово в слово как torch, int8 —
-#: 98,1 % слов при трети памяти, а в эфире фраза в 24 с выходит за 0,8 с против
-#: 4,9 с у torch (20.09). Файлы лежат рядом с английской моделью; в сборку
-#: кладётся только рекомендованный вариант (recommended_part).
+#: Обе русские модели — из одного репозитория, в папке рядом с английской. Замер
+#: на записях владельца (18.09): точная с полными весами даёт текст слово в слово
+#: как исходная модель на torch, сжатые — 98,1 % слов при трети памяти; быстрая
+#: в этом же экспорте — 98,6-98,8 % слов против прежнего экспорта из пакета
+#: gigaam (23.09) и на 20 % быстрее. В сборку кладётся только рекомендованный
+#: вариант (recommended_part), остальное качается кнопкой.
 OX_DIR = EN_DIR / "gigaam-v3"
-OX_MODEL = "gigaam-v3-e2e-rnnt"
 OX_REPO = "istupakov/gigaam-v3-onnx"
-#: Движок → сжатие весов. None — полные веса (fp32).
-OX_ENGINES: dict[str, str | None] = {"ox_fp32": None, "ox_int8": "int8"}
+#: Движок → (имя модели в onnx-asr, сжатие весов; None — полные).
+OX_MODELS: dict[str, tuple[str, str | None]] = {
+    "fast": ("gigaam-v3-e2e-ctc", None),
+    "ox_fp32": ("gigaam-v3-e2e-rnnt", None),
+    "ox_int8": ("gigaam-v3-e2e-rnnt", "int8"),
+}
+#: Движки точной модели: с отметками времени по словам.
+OX_ENGINES = ("ox_fp32", "ox_int8")
 #: Шаг сетки отметок времени GigaAM: окно 10 мс × прореживание 4.
 GIGAAM_FRAME_S = 0.04
-_ox_cache: dict[Any, Any] = {}
 
 
-def ox_files(quant: str | None) -> list[str]:
-    """Файлы, без которых точная модель в onnx-asr не поедет. Имена — как в репозитории."""
+def ox_files(engine: str) -> list[str]:
+    """Файлы, без которых движок не поедет. Имена — как в репозитории."""
+    model, quant = OX_MODELS[engine]
+    stem = "v3_e2e_ctc" if model.endswith("ctc") else "v3_e2e_rnnt"
     suffix = (".%s" % quant) if quant else ""
-    return ["config.json", "v3_e2e_rnnt_vocab.txt"] + [
-        "v3_e2e_rnnt_%s%s.onnx" % (part, suffix) for part in ("encoder", "decoder", "joint")]
+    parts = [""] if stem.endswith("ctc") else ["_encoder", "_decoder", "_joint"]
+    return ["config.json", stem + "_vocab.txt"] + [stem + p + suffix + ".onnx" for p in parts]
 
 
-def ox_available(quant: str | None) -> tuple[bool, str]:
-    """Готова ли точная модель в onnx-asr. Вторым значением — почему нет."""
+def ox_available(engine: str) -> tuple[bool, str]:
+    """На месте ли файлы движка. Вторым значением — почему нет."""
     try:
         import onnx_asr  # noqa: F401
     except Exception:
         return False, "Нет пакета onnx-asr."
-    missing = [n for n in ox_files(quant) if not (OX_DIR / n).exists()]
+    missing = [n for n in ox_files(engine) if not (OX_DIR / n).exists()]
     if missing:
-        return False, ("Файлы точной модели для onnx-asr не скачаны (%d из %d). Папка: %s"
-                       % (len(missing), len(ox_files(quant)), OX_DIR))
+        return False, ("Файлы модели «%s» не скачаны (%d из %d). Папка: %s"
+                       % (ENGINE_TITLES.get(engine, engine), len(missing), len(ox_files(engine)), OX_DIR))
     return True, "Готова."
 
 
-def _load_ox(quant: str | None):
+def _load_ox(engine: str):
+    """Модель движка из памяти или с диска; отметка «трогали» обновляется."""
     with _lock:
-        got = _ox_cache.get(quant)
+        got = _ox_cache.get(engine)
         if got is not None:
+            _ox_used[engine] = time.time()
             return got
-        ok, why = ox_available(quant)
+        ok, why = ox_available(engine)
         if not ok:
             raise RuntimeError(why)
         import onnx_asr
 
+        name, quant = OX_MODELS[engine]
         t0 = time.time()
         model = onnx_asr.load_model(
-            OX_MODEL,
+            name,
             path=str(OX_DIR),
             quantization=quant,
             sess_options=_onnx_session_options(),
             providers=["CPUExecutionProvider"],
-        ).with_timestamps()
-        _ox_cache[quant] = model
-        log.info("точная модель через onnx-asr (%s) загружена за %.1f c, потоков %d",
-                 quant or "fp32", time.time() - t0, _threads())
-        return model
+        )
+        if engine in OX_ENGINES:
+            model = model.with_timestamps()
+        _ox_cache[engine] = model
+        _ox_used[engine] = time.time()
+        log.info("модель «%s» загружена за %.1f c, потоков %d",
+                 ENGINE_TITLES.get(engine, engine), time.time() - t0, _threads())
+    _ensure_janitor()
+    return model
 
 
-def _transcribe_ox(pcm: np.ndarray, quant: str | None) -> Result:
-    model = _load_ox(quant)
+def _transcribe_ox(pcm: np.ndarray, engine: str) -> Result:
+    """Распознать кусок движком. Слова со временем — только у точной."""
+    model = _load_ox(engine)
     arr = np.ascontiguousarray(np.asarray(pcm, dtype=np.float32).reshape(-1))
     with _infer_lock:
         res = model.recognize(arr, sample_rate=SR)
+    text = str(getattr(res, "text", res) or "")
+    if engine not in OX_ENGINES:
+        return Result(text)
     words = _words_from_tokens(getattr(res, "tokens", None), getattr(res, "timestamps", None),
                                arr.shape[0] / float(SR), frame_s=GIGAAM_FRAME_S, tight=True)
-    return Result(str(getattr(res, "text", "") or ""), words)
+    return Result(text, words)
+
+
+def preload_precise() -> None:
+    """Начать загрузку модели голосового ввода в фоне, если её ещё нет в памяти.
+
+    Диктовка зовёт это в момент, когда человек начал говорить: пока он говорит
+    свои несколько секунд, модель успевает загрузиться, и распознавание после
+    «стоп» не ждёт. Загрузка берёт только _lock, не замок распознавания, так что
+    ничему не мешает; повторный вызов во время загрузки просто подождёт её.
+    Грузится модель, выбранная для голосового ввода (live_route).
+    """
+    engine = live_route()["voice"]
+    with _lock:
+        if engine in _ox_cache:
+            _ox_used[engine] = time.time()
+            return
+
+    def run() -> None:
+        try:
+            _load_ox(engine)
+        except Exception as err:
+            log.warning("фоновая загрузка модели голосового ввода не удалась: %s", err)
+
+    threading.Thread(target=run, name="asr-preload", daemon=True).start()
+
+
+def idle_minutes() -> float:
+    """Через сколько минут простоя выгружать модель. 0 = не выгружать."""
+    try:
+        got = float(config.get("precise_idle_min") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return got if got > 0 else 0.0
+
+
+def release_idle(minutes: float | None = None) -> list[str]:
+    """Выгрузить модели, к которым давно не обращались.
+
+    Возвращает движки выгруженного. Модель, на которой прямо сейчас идёт
+    распознавание, не трогает: замок распознавания берётся без ожидания, и
+    занятая модель просто доживёт до следующего круга. Ссылку, уже взятую
+    чужим потоком, выгрузка не ломает — память освободится, когда тот поток
+    закончит.
+
+    Модель, которая служит эфиру, не выгружается никогда: окно показывало бы
+    «готова», а первая фраза записи ждала бы загрузку.
+    """
+    limit = idle_minutes() if minutes is None else float(minutes)
+    if limit <= 0:
+        return []
+    keep = _live_keeps()
+    dropped: list[str] = []
+    with _lock:
+        now = time.time()
+        for engine, used in list(_ox_used.items()):
+            if engine == keep or now - used < limit * 60.0:
+                continue
+            if not _infer_lock.acquire(blocking=False):
+                continue
+            try:
+                if _ox_cache.pop(engine, None) is not None:
+                    dropped.append(engine)
+                _ox_used.pop(engine, None)
+            finally:
+                _infer_lock.release()
+    if dropped:
+        import gc
+
+        gc.collect()
+        log.info("модель выгружена из памяти после %g мин простоя: %s",
+                 limit, ", ".join(ENGINE_TITLES.get(e, e) for e in dropped))
+    return dropped
+
+
+def _ensure_janitor() -> None:
+    """Поднять сторож простоя. Поток, а не процесс: Kaspersky не даёт порождать
+    фоновые процессы."""
+    global _janitor
+    with _lock:
+        if _janitor is not None and _janitor.is_alive():
+            return
+
+        def loop() -> None:
+            while True:
+                time.sleep(_JANITOR_STEP_S)
+                try:
+                    release_idle()
+                except Exception as err:      # сторож не должен ронять службу
+                    log.warning("сторож простоя моделей: %s", err)
+
+        _janitor = threading.Thread(target=loop, name="asr-idle", daemon=True)
+        _janitor.start()
 
 
 def max_chunk_seconds(lang: str = "ru") -> float:
@@ -599,26 +400,22 @@ def max_chunk_seconds(lang: str = "ru") -> float:
 
 #: Движки распознавания и скачиваемая часть (needs.PARTS), без которой движок
 #: не поедет:
-#:   fast    — быстрая модель v3_e2e_ctc через ONNX из пакета gigaam;
-#:   torch   — точная v3_e2e_rnnt через torch;
-#:   ox_fp32 / ox_int8 — точная через onnx-asr, полные или сжатые веса.
-ENGINE_PARTS = {"fast": "fast", "torch": "precise",
-                "ox_fp32": "precise_ox_fp32", "ox_int8": "precise_ox_int8"}
-ENGINE_TITLES = {"fast": "быстрая", "torch": "точная (torch)",
-                 "ox_fp32": "точная (onnx-asr, полные веса)",
-                 "ox_int8": "точная (onnx-asr, сжатые веса)"}
+#:   fast    — быстрая модель v3_e2e_ctc;
+#:   ox_fp32 / ox_int8 — точная v3_e2e_rnnt, полные или сжатые веса.
+ENGINE_PARTS = {"fast": "fast", "ox_fp32": "precise_ox_fp32", "ox_int8": "precise_ox_int8"}
+ENGINE_TITLES = {"fast": "быстрая", "ox_fp32": "точная (полные веса)",
+                 "ox_int8": "точная (сжатые веса)"}
 #: Роли: звонки и разговоры (эфир), голосовой ввод (диктовка, голосовые
 #: заметки) и файлы (видео, файлы с диска, «Перечитать точнее»).
 ROLES = ("live", "voice", "files")
 ROLE_TITLES = {"live": "звонки", "voice": "голосовой ввод", "files": "файлы и видео"}
 
 #: Что ставит «Сбросить всё», кладёт сборка для другого человека и советует
-#: подсказка (решение 21.09): одна точная модель на onnx-asr с полными весами —
-#: текст слово в слово как у torch (замер 18.09), а в памяти одна модель
-#: вместо двух.
+#: подсказка: одна точная модель — в памяти одна модель вместо двух. Веса
+#: сжатые (решение 23.09): в 3,5 раза меньше памяти и на 19 % быстрее, слова
+#: совпадают с полными на 98 %; полные — слово в слово как исходная модель.
 RECOMMENDED: dict[str, Any] = {"asr_count": 1, "asr_single": "precise",
-                               "asr_engine": "onnx_asr", "asr_weights": "fp32",
-                               "live_draft": False}
+                               "asr_weights": "int8", "live_draft": False}
 
 #: Как распознавание устроено в этом запуске программы. Решается один раз — при
 #: прогреве или на первой фразе — и до перезапуска не меняется: иначе посреди
@@ -629,17 +426,11 @@ _live_route: dict[str, Any] | None = None
 _route_lock = threading.Lock()
 
 
-def _precise_name() -> str:
-    return str(config.get("offline_model") or "v3_e2e_rnnt")
-
-
 def _precise_engine(choice: dict[str, Any] | None = None) -> str:
-    """Движок точной модели: torch или onnx-asr с нужными весами. choice — свой
-    набор параметров вместо настроек."""
+    """Движок точной модели: по весам из настроек. choice — свой набор
+    параметров вместо настроек."""
     get = choice.get if choice is not None else config.get
-    if str(get("asr_engine") or "onnx_asr") == "torch":
-        return "torch"
-    return "ox_int8" if str(get("asr_weights") or "fp32") == "int8" else "ox_fp32"
+    return "ox_fp32" if str(get("asr_weights") or "int8") == "fp32" else "ox_int8"
 
 
 def recommended_part() -> str:
@@ -672,23 +463,14 @@ def chosen() -> dict[str, Any]:
     return out
 
 
-def _fast_ready() -> bool:
-    name = str(config.get("live_model") or "v3_e2e_ctc")
-    return onnx_ready(name) and (CKPT_DIR / (name + "_tokenizer.model")).exists()
-
-
 def engine_ready(engine: str) -> tuple[bool, str]:
     """На месте ли файлы движка. Вторым значением — почему нет."""
-    if engine in OX_ENGINES:
-        return ox_available(OX_ENGINES[engine])
-    if engine == "torch":
-        from . import needs
-
-        if not needs.precise_ready():
-            return False, "точная модель не скачана"
-    if engine == "fast" and not _fast_ready():
-        return False, "быстрая модель не скачана"
-    return True, ""
+    if engine not in OX_MODELS:
+        return False, "неизвестный движок %s" % engine
+    ok, why = ox_available(engine)
+    if not ok and "не скачаны" in why:
+        why = "%s модель не скачана" % ("быстрая" if engine == "fast" else "точная")
+    return ok, why
 
 
 def needed_parts(want: dict[str, Any] | None = None) -> list[str]:
@@ -720,8 +502,8 @@ def choice_key(route: dict[str, Any]) -> str:
 
 def _fallback(engine: str) -> str:
     """Чем заменить движок, у которого нет файлов: первым готовым из очереди."""
-    order = (["fast", "torch", "ox_int8", "ox_fp32"] if engine != "fast"
-             else [_precise_engine(), "torch", "ox_int8", "ox_fp32"])
+    order = (["fast", "ox_int8", "ox_fp32"] if engine != "fast"
+             else [_precise_engine(), "ox_int8", "ox_fp32"])
     for alt in order:
         if alt != engine and engine_ready(alt)[0]:
             return alt
@@ -733,9 +515,7 @@ def _pick_live_route() -> dict[str, Any]:
 
     Нет файлов нужного движка — роль берёт первый готовый, а причина видна в
     окне (live_state) и в журнале: запись не должна ломаться ни при каких
-    условиях. Точная модель в torch считает в заданное число потоков: без этого
-    число потоков — какое оставили другие (silero-vad ставит один, разметка —
-    свои), и одна и та же фраза считалась бы то секунду, то пять (замер 18.09).
+    условиях.
     """
     want = chosen()
     route = dict(want)
@@ -769,7 +549,7 @@ def live_route() -> dict[str, Any]:
 
     live, voice, files — движки звонков, голосового ввода и файлов; drafts —
     черновик в эфире; reread — есть ли «Перечитать точнее»; threads — потоки
-    torch; why — почему работает не то, что выбрано.
+    onnxruntime; why — почему работает не то, что выбрано.
     """
     global _live_route
     with _route_lock:
@@ -794,11 +574,9 @@ def _live_fallback(err: Exception) -> None:
 
 
 def _live_keeps() -> str | None:
-    """Имя torch-модели, которая служит эфиру: её сторож простоя не трогает."""
+    """Движок, который служит эфиру: его сторож простоя не трогает."""
     route = _live_route
-    if route and route.get("live") == "torch":
-        return _precise_name()
-    return None
+    return route.get("live") if route else None
 
 
 def part_for(role: str) -> str:
@@ -814,8 +592,7 @@ def precise_part() -> str:
 def prepare_all() -> list[tuple[str, bool]]:
     """Подготовить заранее всё, что нужно выбору в настройках (run.py --prepare).
 
-    Каждая часть качается тем же путём, что и кнопка «Скачать нужное»: быстрая
-    — скачивается и переводится в ONNX, точная — только скачивается.
+    Каждая часть качается тем же путём, что и кнопка «Скачать нужное».
     """
     from . import needs
 
@@ -832,21 +609,9 @@ def prepare_all() -> list[tuple[str, bool]]:
 
 def _run(engine: str, arr: np.ndarray, words: bool = True) -> Result:
     """Распознать кусок выбранным движком. Время слов дают все, кроме быстрой."""
-    if engine in OX_ENGINES:
-        return _transcribe_ox(arr, OX_ENGINES[engine])
-    if engine == "torch":
-        return _transcribe_torch(arr, _precise_name(), word_timestamps=words,
-                                 threads=_threads())
-    name = config.get("live_model") or "v3_e2e_ctc"
-    try:
-        return _transcribe_onnx(arr, name)
-    except Exception as err:
-        # Запасной путь через torch — только если веса быстрой модели лежат на
-        # диске: иначе gigaam молча качал бы 420 МБ посреди звонка.
-        if not (CKPT_DIR / (name + ".ckpt")).exists():
-            raise
-        log.warning("ONNX путь не сработал (%s), переключаюсь на torch", err)
-        return _transcribe_torch(arr, name, word_timestamps=False)
+    if engine not in OX_MODELS:
+        raise ValueError("неизвестный движок распознавания: %s" % engine)
+    return _transcribe_ox(arr, engine)
 
 
 # ---------------------------------------------------------------- публичный API
@@ -1028,7 +793,7 @@ def live_state() -> dict[str, Any]:
         out["models"] = route.get("title")
         out["key"] = route.get("key")
         out["reread"] = bool(route.get("reread"))
-        out["precise_part"] = ENGINE_PARTS.get(route.get("files")) or "precise"
+        out["precise_part"] = ENGINE_PARTS.get(route.get("files")) or recommended_part()
         if route.get("why"):
             out["note"] = route["why"]
     return out
@@ -1055,10 +820,6 @@ def warmup(live: bool = True, precise: bool = False) -> dict[str, Any]:
     if precise:
         t0 = time.time()
         try:
-            # words=True — тот же путь, которым точную модель зовут на деле
-            # (файлы, «перечитать точнее», диктовка): torch. При words=False
-            # прогрев ушёл бы в ONNX, которого для точной модели в папке нет, и
-            # запуск программы встал бы на несколько минут разового экспорта.
             transcribe_precise(silence, words=True)
             info["precise"] = round(time.time() - t0, 2)
         except Exception as err:

@@ -13,7 +13,7 @@
   4. точки службы: список, постановка задачи, 404 на неизвестную часть,
      отказ ставить вторую такую же задачу;
   5. диктовка не качает модель молча, а говорит, где её взять;
-  6. torch остаётся в сборке: без него не работает поиск речи при записи;
+  6. torch в сборке не нужен: поиск речи и все модели идут на onnxruntime;
   7. на странице: окно с «Скачать»/«Отмена», список в «Моделях», проверка
      перед «Перечитать точнее», обновление после задачи.
 
@@ -34,8 +34,8 @@ import isolate  # noqa: E402
 from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-# Две модели, точная на torch: здесь проверяются отказы без части «precise».
-isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_engine="torch")
+# Две модели: здесь проверяются отказы без части точной модели («precise_ox_fp32»).
+isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_weights="fp32")
 
 
 from hagen import config, needs  # noqa: E402
@@ -52,15 +52,17 @@ config.set_feature("video_sharepoint", True)
 parts = {p["key"]: p for p in needs.state()}
 # Быстрая модель и два варианта весов onnx-asr — части моделей распознавания,
 # их выбирают в «Настройки → Модели» (решение 21.09).
-check("в списке шесть частей", set(parts) == {"fast", "precise", "english", "browser",
-                                             "precise_ox_int8", "precise_ox_fp32"}, list(parts))
+check("в списке пять частей", set(parts) == {"fast", "english", "browser",
+                                            "precise_ox_int8", "precise_ox_fp32"}, list(parts))
 check("у каждой есть вес", all(p["size_mb"] > 0 for p in parts.values()),
       {k: p["size_mb"] for k, p in parts.items()})
 check("у каждой сказано, для чего она", all(len(p["why"]) > 20 for p in parts.values()))
-check("быстрая модель весит около 440 МБ", 300 < parts["fast"]["size_mb"] < 600,
+check("быстрая модель весит около 850 МБ", 700 < parts["fast"]["size_mb"] < 1000,
       parts["fast"]["size_mb"])
-check("точная модель весит около 430 МБ", 300 < parts["precise"]["size_mb"] < 600,
-      parts["precise"]["size_mb"])
+check("точная с полными весами — около 890 МБ", 700 < parts["precise_ox_fp32"]["size_mb"] < 1000,
+      parts["precise_ox_fp32"]["size_mb"])
+check("точная со сжатыми — около 230 МБ", 150 < parts["precise_ox_int8"]["size_mb"] < 300,
+      parts["precise_ox_int8"]["size_mb"])
 check("английская — около 630 МБ", 500 < parts["english"]["size_mb"] < 800,
       parts["english"]["size_mb"])
 check("сказано, что английская нужна только для английского",
@@ -72,7 +74,7 @@ say("")
 say("=== 2. Скачивание ===")
 calls = []
 real = {k: needs.PARTS[k]["install"] for k in needs.PARTS}
-ready_flags = {"fast": True, "precise": True, "english": False, "browser": False,
+ready_flags = {"fast": True, "english": False, "browser": False,
                "precise_ox_int8": True, "precise_ox_fp32": True}
 real_ready = {k: needs.PARTS[k]["ready"] for k in needs.PARTS}
 
@@ -92,7 +94,7 @@ try:
         needs.PARTS[key]["install"] = fake_install(key)
         needs.PARTS[key]["ready"] = (lambda k=key: ready_flags[k])
 
-    res = needs.install("precise")
+    res = needs.install("precise_ox_fp32")
     check("скачанная часть второй раз не качается",
           res.get("skipped") is True and not calls, (res, calls))
     notes = []
@@ -136,7 +138,7 @@ try:
     with TestClient(server.app, base_url="http://127.0.0.1:8787") as cli:
         r = cli.get("/api/needs")
         check("служба отдаёт список частей",
-              r.status_code == 200 and len(r.json().get("parts", [])) == 6, r.text[:200])
+              r.status_code == 200 and len(r.json().get("parts", [])) == 5, r.text[:200])
         r = cli.post("/api/needs/нет-такой", headers=ORIGIN)
         check("неизвестная часть — 404", r.status_code == 404, r.status_code)
         r = cli.post("/api/needs/english", headers=ORIGIN)
@@ -158,7 +160,7 @@ try:
     say("=== 4б. Задача не начинается без нужной части ===")
     from hagen import store  # noqa: E402
 
-    ready_flags["precise"] = False
+    ready_flags["precise_ox_fp32"] = False
     rid = store.create(title="Проверка 69", mode="online", source="live",
                        category="Встречи")["id"]
     store.replace_segments(rid, [store.make_segment("far", 0, 3, "Раз два три")])
@@ -174,40 +176,39 @@ try:
                          headers=ORIGIN)
             check("вход по паролю без браузера — понятный отказ",
                   r.status_code == 409 and "браузер" in r.text.lower(), r.text[:200])
-            ready_flags["precise"] = True
+            ready_flags["precise_ox_fp32"] = True
             r = cli.post("/api/recordings/%s/retranscribe" % rid, json={}, headers=ORIGIN)
             check("со скачанной моделью заслон пропускает",
                   r.status_code != 409, r.status_code)
     finally:
         store.delete(rid)
-        ready_flags["precise"] = True
+        ready_flags["precise_ox_fp32"] = True
 
     say("")
     say("=== 5. Диктовка не качает молча ===")
     from hagen import dictate  # noqa: E402
 
-    ready_flags["precise"] = False
-    real_precise = needs.precise_ready
-    needs.precise_ready = lambda: False
+    ready_flags["precise_ox_fp32"] = False
     try:
         dictate.recognise(np.zeros(16000 * 2, dtype=np.float32))
         check("диктовка отказалась и объяснила", False, "распознавание пошло")
     except dictate.DictateNeedsModel as err:
         check("диктовка отказалась и объяснила",
-              "430" in str(err) and "Настройки" in str(err), str(err)[:160])
+              "890" in str(err) and "Настройки" in str(err), str(err)[:160])
     except Exception as err:
         check("диктовка отказалась и объяснила", False, "другая ошибка: %r" % err)
     finally:
-        needs.precise_ready = real_precise
-        ready_flags["precise"] = True
+        ready_flags["precise_ox_fp32"] = True
 
     say("")
-    say("=== 6. torch остаётся в сборке ===")
+    say("=== 6. torch в сборке не нужен ===")
     vad_src = io.open(PROJECT / "hagen" / "vad.py", encoding="utf-8").read()
-    check("поиск речи работает на torch, значит torch нужен всегда",
-          "import torch" in vad_src)
+    vad_onnx_src = io.open(PROJECT / "hagen" / "vad_onnx.py", encoding="utf-8").read()
+    asr_src = io.open(PROJECT / "hagen" / "asr.py", encoding="utf-8").read()
+    check("поиск речи и распознавание обходятся без torch",
+          all("import torch" not in s for s in (vad_src, vad_onnx_src, asr_src, src)))
     check("в списке частей torch нет", "torch" not in [p["key"] for p in needs.state()])
-    check("почему — написано в модуле", "silero-vad" in src and "остаётся в сборке" in src)
+    check("почему — написано в модуле", "torch" in src and "onnxruntime" in src)
 finally:
     for key in needs.PARTS:
         needs.PARTS[key]["install"] = real[key]
@@ -227,7 +228,7 @@ check("список частей в «Моделях»", 'id="needs-list"' in ht
 check("страница спрашивает список у службы", "'/api/needs'" in js)
 check("кнопка в списке ставит скачивание", "/api/needs/${key}" in js)
 check("перед «Перечитать точнее» проверяется точная модель",
-      "if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise')) return;" in js)
+      "if (!await ensurePart((S.asr && S.asr.precise_part) || 'precise_ox_int8')) return;" in js)
 check("английский предлагается скачать в разделе «Видео»",
       "ensurePart('english')" in video)
 check("браузер предлагается скачать до ввода пароля",

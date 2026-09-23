@@ -159,19 +159,21 @@ def register_aumid() -> None:
         winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, str(icon_paths()["idle"]))
 
 
-def _preload_torch() -> None:
-    """Загрузить torch РАНЬШЕ WinRT.
+def _preload_onnxruntime() -> None:
+    """Загрузить onnxruntime РАНЬШЕ WinRT.
 
-    Проверено на этой машине: стоит в процессе хотя бы импортировать
-    windows_toasts (WinRT) до torch — и torch больше не загружается вовсе:
-    «WinError 1114 … c10.dll». Вместе с ним отказали бы распознавание и
-    разметка говорящих, то есть главная работа программы. В обратном порядке
-    работает всё: torch, onnxruntime, pyannote, GigaAM и уведомления.
+    Проверено на этой машине (23.09, t45): стоит в процессе импортировать
+    windows_toasts (WinRT) до onnxruntime — и onnxruntime больше не загружается
+    вовсе: «DLL load failed while importing onnxruntime_pybind11_state». Вместе
+    с ним отказали бы поиск речи, распознавание и разметка голосов, то есть
+    главная работа программы. Раньше от этого спасал torch, который трей
+    подключал первым: он поднимал те же системные библиотеки. torch ушёл —
+    подключаем то, что программе нужно на деле.
     """
     try:
-        import torch  # noqa: F401
+        import onnxruntime  # noqa: F401
     except Exception as err:
-        log.warning("torch не загрузился до уведомлений: %s", err)
+        log.warning("onnxruntime не загрузился до уведомлений: %s", err)
 
 
 class _ToastThread:
@@ -235,7 +237,7 @@ class Notifier:
 
     def __init__(self, on_answer: Callable[[str, str], Any],
                  on_open: Callable[[], Any] | None = None) -> None:
-        _preload_torch()
+        _preload_onnxruntime()
         register_aumid()
         self.on_answer = on_answer
         self.on_open = on_open

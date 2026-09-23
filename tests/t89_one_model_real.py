@@ -2,24 +2,25 @@
 """Проверка 89: одна точная модель на настоящих моделях (стенд 18.09, параметры 21.09).
 
 Соседка t88 проверяет логику на подставных распознавателях. Здесь — то, что
-видно только на настоящей модели:
-  1. Прогрев эфира при выборе «одна модель: точная (torch)» грузит точную модель, а
-     быструю — нет: сессий ONNX в памяти ни одной, torch-модель одна.
-  2. Эфир, диктовка и файлы работают на одном и том же экземпляре модели;
-     число потоков torch возвращается, даже если его сбросили в один.
+видно только на настоящей модели, и всё это без torch (он закрыт до импорта):
+  1. Прогрев эфира при рекомендованном выборе грузит точную модель с полными
+     весами, а быструю — нет: в памяти одна модель.
+  2. Эфир, диктовка и файлы работают на одном и том же экземпляре модели.
   3. Дорожка эфира на tests\\meeting.wav: реплики с текстом и временем слов,
      слова лежат внутри своей реплики, черновиков нет.
   4. Сторож простоя модель эфира не выгружает, даже если её давно не трогали.
-  5. Рекомендованное — одна точная модель на onnx-asr с полными весами: torch-модель не
-     загружается, у эфира время слов, текст близок к torch.
+  5. Быстрая модель (если скачана): текст без времени слов, близок к точной;
+     после выбора «одна быстрая» точная не загружается.
 
 Настоящие settings.json и база голосов не трогаются (tests\\isolate.py).
 Запуск из корня проекта:  .venv\\Scripts\\python.exe tests\\t89_one_model_real.py
 """
-import io
 import sys
 import time
 from pathlib import Path
+
+# torch закрыт ДО импорта программы: распознавание должно обойтись без него.
+sys.modules["torch"] = None
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
@@ -28,7 +29,7 @@ import isolate  # noqa: E402
 from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-isolate.settings(asr_count=1, asr_single="precise", asr_engine="torch")
+isolate.settings(asr_count=1, asr_single="precise", asr_weights="fp32")
 
 import numpy as np  # noqa: E402
 import psutil  # noqa: E402
@@ -36,8 +37,8 @@ import psutil  # noqa: E402
 from hagen import asr, audio_io, live, needs, store  # noqa: E402
 
 SR = asr.SR
-ONE_TORCH = "live=torch,voice=torch,files=torch"
 ONE_OX_FP32 = "live=ox_fp32,voice=ox_fp32,files=ox_fp32"
+ONE_FAST = "live=fast,voice=fast,files=fast"
 
 
 def memory_mb():
@@ -49,15 +50,11 @@ def memory_mb():
     return info.rss / 2**20, info.private / 2**20
 
 
-if not needs.precise_ready():
+if not needs.ready("precise_ox_fp32"):
     say("   (пропуск: точной модели в папке нет — скачать в «Настройки → Модели»)")
     sys.exit(0)
 
-say("=== 1. Прогрев: точная вместо быстрой ===")
-# torch в памяти и так: его поднимает поиск речи. Подключаем заранее, чтобы
-# прибавка памяти была про модель, а не про библиотеку.
-import torch  # noqa: E402,F401
-
+say("=== 1. Прогрев: точная, и только она ===")
 live.vad.new_model()
 before = memory_mb()
 t0 = time.time()
@@ -67,40 +64,36 @@ warm = memory_mb()
 st = asr.live_state()
 say("   прогрев %.1f с; сразу после него рабочий набор %+.0f МБ, выделено %+.0f МБ"
     % (took, warm[0] - before[0], warm[1] - before[1]))
-check("модель эфира готова, работает «одна модель: точная (torch)»",
-      st.get("state") == "ready" and st.get("key") == ONE_TORCH and "note" not in st, st)
-check("быстрая модель не загружена: сессий ONNX нет", not asr._onnx_cache, list(asr._onnx_cache))
-check("в памяти одна torch-модель — точная", list(asr._torch_cache) == ["v3_e2e_rnnt"],
-      list(asr._torch_cache))
+check("модель эфира готова, работает «одна модель: точная (полные веса)»",
+      st.get("state") == "ready" and st.get("key") == ONE_OX_FP32 and "note" not in st, st)
+check("в памяти одна модель — точная с полными весами", list(asr._ox_cache) == ["ox_fp32"],
+      list(asr._ox_cache))
+check("torch так и не подключился", sys.modules.get("torch") is None)
 
 say("")
 say("=== 2. Эфир, диктовка и файлы — одна модель ===")
-model = asr._torch_cache["v3_e2e_rnnt"]
+model = asr._ox_cache["ox_fp32"]
 pcm, _sr = audio_io.read_wav(PROJECT / "tests" / "meeting.wav")
 pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
 piece = pcm[: 6 * SR]
 res_live = asr.transcribe_live(piece)
-res_dict = asr.transcribe_precise(piece, words=True)
-check("эфир и диктовка дали одно и то же", res_live.text == res_dict.text and res_live.text,
-      (res_live.text, res_dict.text))
+res_dict = asr.transcribe_precise(piece, words=True, role="voice")
+res_file = asr.transcribe_precise(piece, words=True, role="files")
+check("эфир, диктовка и файлы дали одно и то же",
+      res_live.text == res_dict.text == res_file.text and res_live.text, (res_live.text, res_dict.text))
 check("у эфира есть время слов", len(res_live.words) > 0, len(res_live.words))
 check("модель та же самая, второй не появилось",
-      asr._torch_cache.get("v3_e2e_rnnt") is model and len(asr._torch_cache) == 1,
-      list(asr._torch_cache))
-check("быстрая так и не загрузилась", not asr._onnx_cache, list(asr._onnx_cache))
-# silero-vad при подключении сбрасывает torch в один поток на весь процесс —
-# так бывает, когда первая запись начинается после прогрева.
-torch.set_num_threads(1)
-asr.transcribe_live(piece)
-check("потоки torch вернулись к заданным, хотя их сбросили в один",
-      torch.get_num_threads() == asr._threads(), (torch.get_num_threads(), asr._threads()))
-# Сразу после загрузки torch держит лишние ~300 МБ, после первых фраз память
-# оседает. Замер 18.09 на этой машине: одна модель — около +1,0…1,3 ГБ рабочего
-# набора, быстрая с точной вместе (эфир плюс диктовка или файл) — +2,2 ГБ.
+      asr._ox_cache.get("ox_fp32") is model and len(asr._ox_cache) == 1, list(asr._ox_cache))
+check("слова лежат внутри куска и складываются в текст",
+      all(0.0 <= w.start <= w.end <= 6.05 for w in res_live.words)
+      and " ".join(w.text for w in res_live.words).split() == res_live.text.split(),
+      [(w.text, w.start, w.end) for w in res_live.words][:4])
+# Замер 23.09 на этой машине: точная с полными весами — около +0,9 ГБ рабочего
+# набора сверх numpy и onnxruntime; две модели (быстрая и точная) — около +1,8.
 used = memory_mb()
 say("   после распознавания: рабочий набор %+.0f МБ, выделено %+.0f МБ"
     % (used[0] - before[0], used[1] - before[1]))
-check("в памяти одна модель, не две (рабочий набор меньше +1,7 ГБ)", used[0] - before[0] < 1700,
+check("в памяти одна модель, не две (рабочий набор меньше +1,5 ГБ)", used[0] - before[0] < 1500,
       "%+.0f МБ" % (used[0] - before[0]))
 
 say("")
@@ -141,45 +134,38 @@ check("слова складываются в текст реплики", all(a.
 
 say("")
 say("=== 4. Сторож простоя ===")
-asr._torch_used["v3_e2e_rnnt"] = time.time() - 10 * 3600
+asr._ox_used["ox_fp32"] = time.time() - 10 * 3600
 got = asr.release_idle(minutes=1)
 check("модель эфира не выгружена, хотя её «не трогали 10 часов»",
-      got == [] and "v3_e2e_rnnt" in asr._torch_cache, got)
+      got == [] and "ox_fp32" in asr._ox_cache, got)
 
 say("")
-say("=== 5. Рекомендованное: одна точная модель через onnx-asr, полные веса ===")
-if asr.ox_available(None)[0]:
+say("=== 5. Быстрая модель ===")
+if needs.ready("fast"):
     import difflib  # noqa: E402
 
     from hagen import config, echo  # noqa: E402
 
-    torch_text = res_live.text
-    asr._torch_cache.clear()
-    asr._torch_used.clear()
-    config.save(dict(asr.RECOMMENDED))
+    precise_text = res_live.text
+    asr._ox_cache.clear()
+    asr._ox_used.clear()
+    config.save({"asr_count": 1, "asr_single": "fast"})
     asr._live_route = None
     t0 = time.time()
     asr.warmup(live=True, precise=False)
     say("   прогрев %.1f с" % (time.time() - t0))
     st = asr.live_state()
-    check("работает «одна модель: точная (onnx-asr, полные веса)»",
-          st.get("state") == "ready" and st.get("key") == ONE_OX_FP32 and "note" not in st, st)
-    ox_live = asr.transcribe_live(piece)
-    ox_dict = asr.transcribe_precise(piece, words=True)
-    check("эфир и диктовка — одно и то же, со временем слов",
-          ox_live.text == ox_dict.text and len(ox_live.words) > 0, (ox_live.text, len(ox_live.words)))
-    a, b = echo._words(torch_text), echo._words(ox_live.text)
+    check("работает «одна модель: быстрая»",
+          st.get("state") == "ready" and st.get("key") == ONE_FAST and "note" not in st, st)
+    fast_live = asr.transcribe_live(piece)
+    check("быстрая: текст есть, времени слов нет", fast_live.text and fast_live.words == [],
+          (fast_live.text, len(fast_live.words)))
+    a, b = echo._words(precise_text), echo._words(fast_live.text)
     same = sum(bl.size for bl in difflib.SequenceMatcher(a=a, b=b).get_matching_blocks())
-    check("текст близок к torch (не меньше 80 % слов)", same >= 0.8 * max(len(a), len(b)),
-          (torch_text, ox_live.text))
-    check("torch-модель не загружалась, быстрая тоже",
-          not asr._torch_cache and not asr._onnx_cache and list(asr._ox_cache) == [None],
-          (list(asr._torch_cache), list(asr._onnx_cache), list(asr._ox_cache)))
-    check("слова лежат внутри куска и складываются в текст",
-          all(0.0 <= w.start <= w.end <= 6.05 for w in ox_live.words)
-          and " ".join(w.text for w in ox_live.words).split() == ox_live.text.split(),
-          [(w.text, w.start, w.end) for w in ox_live.words][:4])
+    check("текст близок к точной (не меньше 80 % слов)", same >= 0.8 * max(len(a), len(b)),
+          (precise_text, fast_live.text))
+    check("точная не загружалась", list(asr._ox_cache) == ["fast"], list(asr._ox_cache))
 else:
-    say("   (пропуск: файлов onnx-asr в папке нет)")
+    say("   (пропуск: быстрой модели в папке нет)")
 
 sys.exit(finish("t89"))

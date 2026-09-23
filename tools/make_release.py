@@ -16,7 +16,8 @@ r"""Собрать архив выпуска для релиза на GitHub.
 докачивает их из открытых источников ровно тех версий, что в описи lock.json.
 Этот же архив программа берёт при обновлении — из него нужен только код.
 
-Полный — «Hagen-v<версия>-windows-full.zip», около 1,6 ГБ, для компьютеров без
+Полный — «Hagen-v<версия>-windows-full.zip» (с --weights — «…-full-int8.zip»
+или «…-full-fp32.zip»), 0,7–1,3 ГБ, для компьютеров без
 доступа к PyPI, Hugging Face и GitHub. Собирается только по запросу и НЕ из
 рабочей папки: лёгкий архив распаковывается в отдельную папку, и в ней
 запускается установщик — полный архив равен «лёгкий плюс то, что он поставил
@@ -114,10 +115,21 @@ def build_light(ref: str, stage: Path) -> Path:
     return stage
 
 
-def build_full(light: Path, stage: Path) -> Path:
-    """Лёгкая сборка плюс то, что по описи поставил бы установщик."""
+def build_full(light: Path, stage: Path, weights: str = "int8") -> Path:
+    """Лёгкая сборка плюс то, что по описи поставил бы установщик.
+
+    weights — веса точной модели в архиве. Не те, что по умолчанию, —
+    записываются в settings.json сборки: до установщика, чтобы он скачал их,
+    и после чистки, чтобы программа у человека выбрала их, а не просила
+    скачать другие. Больше ничего в этом файле нет.
+    """
     say("копия лёгкой сборки для полной…")
     shutil.copytree(light, stage)
+    from hagen import asr
+
+    choice = {} if weights == asr.RECOMMENDED["asr_weights"] else {"asr_weights": weights}
+    if choice:
+        (stage / "settings.json").write_text(json.dumps(choice) + "\n", encoding="utf-8")
     say("запускаю установщик в ней (библиотеки, ffmpeg, модель — по описи)…")
     # --prune — без тестов внутри библиотек, заголовков C++ и кэша: минус две
     # трети файлов, как в переносимой сборке.
@@ -133,6 +145,8 @@ def build_full(light: Path, stage: Path) -> Path:
             path.unlink()
     for cache in list(stage.rglob("__pycache__")):
         shutil.rmtree(cache, ignore_errors=True)
+    if choice:
+        (stage / "settings.json").write_text(json.dumps(choice) + "\n", encoding="utf-8")
     paths = sorted({str(stage), str(stage.resolve())}, key=len, reverse=True)
     make_portable.neutral_venv(stage, paths)
     neutral_direct_urls(stage, paths)
@@ -163,6 +177,9 @@ def main() -> int:
     ap.add_argument("--out", default=str(PROJECT.parent / "hagen-release"))
     ap.add_argument("--full", action="store_true",
                     help="собрать ещё и полный архив (всё уже поставлено, без интернета)")
+    ap.add_argument("--weights", choices=("int8", "fp32"), default="",
+                    help="веса точной модели в полном архиве; с ключом имя архива "
+                         "получает их в конце: …-windows-full-int8.zip")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -182,8 +199,12 @@ def main() -> int:
     make_portable.make_zip(light, target)
     say("готово: %s — %.0f МБ" % (target, target.stat().st_size / 1048576.0))
     if args.full:
-        full = build_full(light, work / "full" / TOP)
-        target = out / ("Hagen-v%s-windows-full.zip" % ver)
+        from hagen import asr
+
+        full = build_full(light, work / "full" / TOP,
+                          args.weights or asr.RECOMMENDED["asr_weights"])
+        target = out / ("Hagen-v%s-windows-full%s.zip"
+                        % (ver, ("-" + args.weights) if args.weights else ""))
         say("упаковываю %s…" % target.name)
         make_portable.make_zip(full, target)
         say("готово: %s — %.1f ГБ" % (target, target.stat().st_size / 1073741824.0))

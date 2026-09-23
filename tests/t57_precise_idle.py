@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """Проверка 57: точная модель грузится по требованию и выгружается после простоя.
 
-Решение 14.09: точная модель (GigaAM rnnt + torch, около 1,3 ГБ) на
+Решение 14.09: точная модель (GigaAM rnnt, с полными весами около 0,9 ГБ) на
 старте программы не греется; грузится при первом обращении; выгружается после
 простоя — срок в настройках «precise_idle_min», по умолчанию 30 мин, 0 = держать.
-Видео, файлы и «Перечитать точнее» от галочки диктовки не зависят.
+Видео, файлы и «Перечитать точнее» от галочки диктовки не зависят. Выгружается
+любая модель, не служащая эфиру (с 23.09 все они — в одном кеше onnx-asr).
 
 Что проверяем — без настоящей модели, на подставных объектах в кеше:
   1. Срок простоя: умолчание 30, ноль и мусор значат «не выгружать».
@@ -18,7 +19,7 @@
      английской диктовке она не нужна.
   9. Интерфейс: поле срока, примечание, ноль не превращается в 30.
  10. Настоящая модель: после выгрузки объект освобождён, память не растёт от
-     цикла к циклу (утечка через gigaam.encoder.IMPORT_FLASH_ERR, 14.09).
+     цикла к циклу (раньше её держал след ошибки в gigaam.encoder, 14.09).
 
 Настоящие settings.json и база голосов не трогаются (tests\\isolate.py).
 Запуск из корня проекта:  .venv\\Scripts\\python.exe tests\\t57_precise_idle.py
@@ -36,8 +37,8 @@ import isolate  # noqa: E402
 from harness import LINES, FAIL, say, check, finish  # noqa: E402
 
 isolate.voices()
-# Две модели, точная на torch: выгружается после простоя именно она.
-isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_engine="torch")
+# Две модели, звонки на быстрой: выгружается после простоя точная.
+isolate.settings(asr_count=2, asr_calls="fast", asr_voice="precise", asr_weights="fp32")
 
 import numpy as np  # noqa: E402
 
@@ -45,18 +46,18 @@ from hagen import asr, config  # noqa: E402
 
 
 class FakeModel:
-    """Стоит в кеше вместо настоящей модели: грузить 1,3 ГБ ради проверки незачем."""
+    """Стоит в кеше вместо настоящей модели: грузить 0,9 ГБ ради проверки незачем."""
 
 
 def put(name, idle_s):
     """Положить подставную модель, «последний раз трогали idle_s секунд назад»."""
-    asr._torch_cache[name] = FakeModel()
-    asr._torch_used[name] = time.time() - idle_s
+    asr._ox_cache[name] = FakeModel()
+    asr._ox_used[name] = time.time() - idle_s
 
 
 def clear():
-    asr._torch_cache.clear()
-    asr._torch_used.clear()
+    asr._ox_cache.clear()
+    asr._ox_used.clear()
 
 
 say("=== 1. Срок простоя ===")
@@ -78,17 +79,17 @@ clear()
 put("old", idle_s=31 * 60)
 put("fresh", idle_s=5 * 60)
 got = asr.release_idle(minutes=30)
-check("давно не трогали — выгружена", got == ["old"] and "old" not in asr._torch_cache, got)
-check("недавно трогали — осталась", "fresh" in asr._torch_cache, list(asr._torch_cache))
-check("отметка времени выгруженной убрана", "old" not in asr._torch_used, list(asr._torch_used))
+check("давно не трогали — выгружена", got == ["old"] and "old" not in asr._ox_cache, got)
+check("недавно трогали — осталась", "fresh" in asr._ox_cache, list(asr._ox_cache))
+check("отметка времени выгруженной убрана", "old" not in asr._ox_used, list(asr._ox_used))
 check("второй круг ничего не трогает", asr.release_idle(minutes=30) == [])
 
 clear()
 put("old", idle_s=10 * 3600)
 check("срок 0 — ничего не выгружает", asr.release_idle(minutes=0) == []
-      and "old" in asr._torch_cache)
+      and "old" in asr._ox_cache)
 config.save({"precise_idle_min": 0})
-check("срок из настроек 0 — тоже ничего", asr.release_idle() == [] and "old" in asr._torch_cache)
+check("срок из настроек 0 — тоже ничего", asr.release_idle() == [] and "old" in asr._ox_cache)
 config.save({"precise_idle_min": 30})
 check("срок из настроек 30 — выгружает", asr.release_idle() == ["old"])
 
@@ -99,7 +100,7 @@ put("busy", idle_s=60 * 60)
 asr._infer_lock.acquire()
 try:
     got = asr.release_idle(minutes=30)
-    check("идёт распознавание — модель на месте", got == [] and "busy" in asr._torch_cache, got)
+    check("идёт распознавание — модель на месте", got == [] and "busy" in asr._ox_cache, got)
 finally:
     asr._infer_lock.release()
 got = asr.release_idle(minutes=30)
@@ -108,12 +109,12 @@ check("распознавание закончилось — выгружена 
 say("")
 say("=== 4. Обращение продлевает жизнь ===")
 clear()
-put("v3_e2e_rnnt", idle_s=29 * 60)
-model = asr._torch_cache["v3_e2e_rnnt"]
-same = asr._load_torch("v3_e2e_rnnt")      # из кеша: настоящая загрузка не идёт
+put("ox_fp32", idle_s=29 * 60)
+model = asr._ox_cache["ox_fp32"]
+same = asr._load_ox("ox_fp32")      # из кеша: настоящая загрузка не идёт
 check("из кеша отдаётся та же модель", same is model)
-check("отметка обновлена", time.time() - asr._torch_used["v3_e2e_rnnt"] < 5,
-      round(time.time() - asr._torch_used["v3_e2e_rnnt"], 1))
+check("отметка обновлена", time.time() - asr._ox_used["ox_fp32"] < 5,
+      round(time.time() - asr._ox_used["ox_fp32"], 1))
 check("после обращения не выгружается", asr.release_idle(minutes=30) == [])
 
 say("")
@@ -121,33 +122,32 @@ say("=== 5. Фоновая загрузка для диктовки ===")
 clear()
 loaded = []
 done = threading.Event()
-REAL_LOAD = asr._load_torch
+REAL_LOAD = asr._load_ox
 
 
-def fake_load(name):
-    loaded.append((name, threading.current_thread().name))
-    asr._torch_cache[name] = FakeModel()
-    asr._torch_used[name] = time.time()
+def fake_load(engine):
+    loaded.append((engine, threading.current_thread().name))
+    asr._ox_cache[engine] = FakeModel()
+    asr._ox_used[engine] = time.time()
     done.set()
-    return asr._torch_cache[name]
+    return asr._ox_cache[engine]
 
 
-asr._load_torch = fake_load
+asr._load_ox = fake_load
 try:
-    config.save({"offline_model": "v3_e2e_rnnt"})
     asr.preload_precise()
     check("модели нет — загрузка пошла", done.wait(5.0), loaded)
     check("грузит в отдельном потоке, не в зовущем",
           bool(loaded) and loaded[0][1] == "asr-preload", loaded)
-    check("грузит именно точную модель", bool(loaded) and loaded[0][0] == "v3_e2e_rnnt", loaded)
+    check("грузит именно точную модель", bool(loaded) and loaded[0][0] == "ox_fp32", loaded)
     loaded.clear()
-    asr._torch_used["v3_e2e_rnnt"] = time.time() - 20 * 60
+    asr._ox_used["ox_fp32"] = time.time() - 20 * 60
     asr.preload_precise()
     time.sleep(0.3)
     check("модель уже есть — повторно не грузит", loaded == [], loaded)
-    check("…но отметку продлевает", time.time() - asr._torch_used["v3_e2e_rnnt"] < 5)
+    check("…но отметку продлевает", time.time() - asr._ox_used["ox_fp32"] < 5)
 finally:
-    asr._load_torch = REAL_LOAD
+    asr._load_ox = REAL_LOAD
 
 say("")
 say("=== 6. Сторож простоя один ===")
@@ -244,28 +244,30 @@ js = io.open(PROJECT / "hagen" / "static" / "app.js", encoding="utf-8").read()
 pane = html[html.find('id="t-dictate"'):]
 pane = pane[:pane.find('class="tabpane', 20)]
 check("поле срока — во вкладке «Набор текста»", 'id="set-precise-idle"' in pane)
-check("примечание про память рядом", "1,3 ГБ" in pane and "выгружается" in pane)
-check("примечание: видео и «Перечитать точнее» от галочки не зависят",
-      "от галочки выше они не зависят" in pane)
-check("примечание: 0 — держать всё время", "0 — держать в памяти всё время" in pane)
+check("примечание про память рядом", "0,9 ГБ" in pane and "выгружается" in pane)
+check("примечание: срок общий для видео и «Перечитать точнее»",
+      "видео, файлам и «Перечитать точнее» — срок действует для всех" in pane)
+check("примечание: 0 — держать всё время", "0 — держать всё время" in pane)
 check("страница читает срок", "set-precise-idle').value" in js and "s.precise_idle_min" in js)
 check("страница сохраняет срок", "precise_idle_min:" in js)
 check("ноль не превращается в 30 при чтении", "s.precise_idle_min || 30" not in js)
 
 say("")
 say("=== 10. Настоящая модель: выгрузка действительно освобождает ===")
-# Найдено 14.09: gigaam.encoder при ленивом подключении сохранял ошибку flash_attn
-# вместе со следом вызовов, и в этом следе навсегда оставалась первая модель.
-# Выгрузка ничего не освобождала, повторная загрузка добавляла 0,9 ГБ сверху.
-# Проверяем по слабой ссылке и по памяти процесса: если после обновления gigaam
-# или правки загрузки модель снова где-то пришпилится — здесь станет красно.
+# Найдено 14.09 на прежнем движке: след ошибки в gigaam.encoder навсегда держал
+# первую модель, выгрузка ничего не освобождала, повторная загрузка добавляла
+# 0,9 ГБ сверху. Проверяем по слабой ссылке и по памяти процесса: если после
+# обновления onnx-asr или правки загрузки модель снова где-то пришпилится —
+# здесь станет красно.
 import gc  # noqa: E402
 import weakref  # noqa: E402
 
 import psutil  # noqa: E402
 
+from hagen import needs  # noqa: E402
+
 clear()
-if asr.onnx_ready("v3_e2e_ctc") and (asr.CKPT_DIR / "v3_e2e_rnnt.ckpt").exists():
+if needs.ready("fast") and needs.ready("precise_ox_fp32"):
     proc = psutil.Process()
 
     def private_mb():
@@ -275,11 +277,11 @@ if asr.onnx_ready("v3_e2e_ctc") and (asr.CKPT_DIR / "v3_e2e_rnnt.ckpt").exists()
     after = []
     for cycle in (1, 2, 3):
         asr.transcribe_precise(speech, words=True)
-        ref = weakref.ref(asr._torch_cache["v3_e2e_rnnt"])
-        asr._torch_used["v3_e2e_rnnt"] = time.time() - 3600
+        ref = weakref.ref(asr._ox_cache["ox_fp32"])
+        asr._ox_used["ox_fp32"] = time.time() - 3600
         got = asr.release_idle(minutes=30)
         gc.collect()
-        check("цикл %d: выгружена" % cycle, got == ["v3_e2e_rnnt"], got)
+        check("цикл %d: выгружена" % cycle, got == ["ox_fp32"], got)
         check("цикл %d: объект модели освобождён, никто не держит" % cycle, ref() is None)
         after.append(private_mb())
     grow = after[-1] - after[0]

@@ -48,25 +48,28 @@ check("английский больше русского", asr.MAX_CHUNK_EN_S >
 
 say("")
 say("=== 3. Русский путь не тронут ===")
-# Точная модель на torch — чтобы подделка ниже перехватила вызов.
-isolate.settings(asr_count=1, asr_single="precise", asr_engine="torch")
+# Одна точная модель — чтобы подделка ниже перехватила вызов.
+isolate.settings(asr_count=1, asr_single="precise", asr_weights="fp32")
 asr._live_route = None
+real_ready = asr.engine_ready
+asr.engine_ready = lambda engine: (True, "")
 calls = []
-real_torch = asr._transcribe_torch
-asr._transcribe_torch = lambda pcm, name, word_timestamps=True, threads=0: (
-    calls.append((name, word_timestamps)) or asr.Result("русский текст"))
+real_ox = asr._transcribe_ox
+asr._transcribe_ox = lambda pcm, engine: (
+    calls.append(engine) or asr.Result("русский текст"))
 try:
     silence = np.zeros(int(0.5 * asr.SR), dtype=np.float32)
     res = asr.transcribe_precise(silence, words=True)
-    check("русский идёт в GigaAM через torch", len(calls), 1)
-    check("модель та же", calls[0][0], "v3_e2e_rnnt")
-    check("слова запрошены", calls[0][1], True)
+    check("русский идёт в GigaAM", len(calls), 1)
+    check("модель — точная с полными весами", calls[0], "ox_fp32")
     check("текст вернулся", res.text, "русский текст")
     calls.clear()
     res = asr.transcribe_precise(silence, words=True, lang="ru")
-    check("явный русский — тоже torch", len(calls), 1)
+    check("явный русский — тоже GigaAM", len(calls), 1)
 finally:
-    asr._transcribe_torch = real_torch
+    asr._transcribe_ox = real_ox
+    asr.engine_ready = real_ready
+    asr._live_route = None
 
 say("")
 say("=== 4. Английская модель на месте ===")
